@@ -150,6 +150,12 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
             assert.match(songEntry.lyrics, /Forever ever never fade/);
             assert.match(songEntry.lyrics, /Por siempre jamás se desvanecerá/);
             assert.strictEqual(songEntry.trackNumber, 7);
+
+            const typoLookup = langStudio.findNotebookSongEntry(parsed, {
+                songTitle: 'Forevr!',
+                artistName: 'BABYMONSTER'
+            });
+            assert.ok(typoLookup && typoLookup.hit && typoLookup.songTitle === 'FOREVER');
         } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
@@ -362,6 +368,68 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
             assert.strictEqual(resRetry.needsRetry, true);
             assert.strictEqual(cachedParsed?.counts?.grammar, 1);
             assert.strictEqual(cachedParsed?.counts?.phrasal_verb, 1);
+
+            // Debe persistir marcador .english_drive_pending.json compartido entre réplicas
+            const pendingMarkerPath = serverNotes.resolveEnglishDrivePendingMarkerPath({ rootDir: tmpRoot });
+            assert.strictEqual(fs.existsSync(pendingMarkerPath), true);
+
+            // Al volver internet, un nuevo guardado NO debe sobrescribir la nota offline pendiente con la versión vieja de Drive
+            failUpload = false;
+            const resRecovered = await serverNotes.saveEnglishEntryToCloudAndLocal({
+                entry: {
+                    category: 'notes',
+                    language: 'English',
+                    title: 'Offline Recovery Note',
+                    notes: 'Both offline and online notes survive.'
+                },
+                resolveRcloneFn: () => ({ confPath: fakeConf, cleanup: false, usingStudyConfig: true }),
+                resolveStudyTargetFn: () => ({ remoteTarget: 'gdrive_study:NotasIdiomas/English_Learning_Notebook.docx' }),
+                updateCacheFn: (buf) => {
+                    cachedParsed = langStudio.parseStudyNotebookDocxBuffer(buf, { includeAllEntries: true });
+                },
+                rootDir: tmpRoot,
+                execFileFn: fakeExecFile
+            });
+            assert.strictEqual(resRecovered.ok, true);
+            assert.strictEqual(resRecovered.mode, 'cloud_drive');
+            assert.strictEqual(resRecovered.hadPendingRecovery, true);
+            assert.strictEqual(resRecovered.seededFrom, 'local-pending-word');
+            assert.strictEqual(fs.existsSync(pendingMarkerPath), false);
+            assert.strictEqual(cachedParsed?.counts?.grammar, 1);
+            assert.strictEqual(cachedParsed?.counts?.phrasal_verb, 1);
+            assert.strictEqual(cachedParsed?.counts?.notes, 1);
+            const parsedRemote = langStudio.parseStudyNotebookDocxBuffer(uploadedBuf, { includeAllEntries: true });
+            assert.strictEqual(parsedRemote.counts.phrasal_verb, 1);
+            assert.strictEqual(parsedRemote.counts.notes, 1);
+
+            // Flush explícito tras nueva caída temporal de Drive
+            failUpload = true;
+            await serverNotes.saveEnglishEntryToCloudAndLocal({
+                entry: {
+                    category: 'vocabulary',
+                    language: 'English',
+                    word: 'steadfast',
+                    spanish: 'firme / constante'
+                },
+                resolveRcloneFn: () => ({ confPath: fakeConf, cleanup: false, usingStudyConfig: true }),
+                resolveStudyTargetFn: () => ({ remoteTarget: 'gdrive_study:NotasIdiomas/English_Learning_Notebook.docx' }),
+                rootDir: tmpRoot,
+                execFileFn: fakeExecFile
+            });
+            assert.strictEqual(fs.existsSync(pendingMarkerPath), true);
+            failUpload = false;
+            const flushRes = await serverNotes.flushPendingEnglishDriveUpload({
+                resolveRcloneFn: () => ({ confPath: fakeConf, cleanup: false, usingStudyConfig: true }),
+                resolveStudyTargetFn: () => ({ remoteTarget: 'gdrive_study:NotasIdiomas/English_Learning_Notebook.docx' }),
+                rootDir: tmpRoot,
+                execFileFn: fakeExecFile
+            });
+            assert.strictEqual(flushRes.ok, true);
+            assert.strictEqual(flushRes.flushed, true);
+            assert.strictEqual(fs.existsSync(pendingMarkerPath), false);
+            const finalRemote = langStudio.parseStudyNotebookDocxBuffer(uploadedBuf, { includeAllEntries: true });
+            assert.strictEqual(finalRemote.counts.vocabulary, 1);
+            assert.strictEqual(finalRemote.counts.phrasal_verb, 1);
         } finally {
             fs.rmSync(tmpRoot, { recursive: true, force: true });
         }

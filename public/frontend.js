@@ -780,6 +780,9 @@ async function submitMutationRequest({
     }
 
     const executeAttempt = async (attempt) => {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            throw new Error(formatHumanNetworkError(0, '', new TypeError('Failed to fetch')));
+        }
         const headers = { 'X-Idempotency-Key': idempotencyKey };
         const fetchOpts = { method, headers };
 
@@ -1114,11 +1117,13 @@ async function autoQueueAiLearningToWord({ entry, hintEl, songToMarkSynced = nul
         btn.type = 'button';
         btn.className = 'btn-secondary btn-small';
         btn.textContent = 'Desbloquear y guardar en Word';
-        btn.addEventListener('click', async () => {
-            const key = await solicitarLlaveE2EEAsync();
-            if (key) {
-                await autoQueueAiLearningToWord({ entry, hintEl, songToMarkSynced });
-            }
+        btn.addEventListener('click', () => {
+            runWithButtonLock(btn, async () => {
+                const key = await solicitarLlaveE2EEAsync();
+                if (key) {
+                    await autoQueueAiLearningToWord({ entry, hintEl, songToMarkSynced });
+                }
+            }, { loadingText: tUi('Saving...', 'Guardando...') });
         });
         hintEl.replaceChildren(msg, btn);
     };
@@ -3519,7 +3524,7 @@ if (journalForm) {
                                 url: '/api/send-to-pc',
                                 method: 'POST',
                                 scopeKey: 'journal-ntr',
-                                signature: `Nothing to report.:${Date.now()}`,
+                                signature: `Nothing to report.:${new Date().toISOString().slice(0, 10)}`,
                                 buildBody: () => ({ texto: encriptarTextoE2EE('Nothing to report.', llaveTexto) })
                             });
                             const msg = String(queueResp || '').includes('was skipped.')
@@ -4066,97 +4071,110 @@ if (englishForm) {
         });
     }
 
+    let englishFormSubmitting = false;
     englishForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const btn = document.getElementById('btnSendEnglish');
-        if (!btn || busyActionElements.has(btn) || btn.disabled) return;
+        if (!btn || englishFormSubmitting || busyActionElements.has(btn) || btn.disabled) return;
+        englishFormSubmitting = true;
+        try {
+            const category = categoryInput ? categoryInput.value : 'vocabulary';
+            const entry = buildEnglishEntryPayload(category);
 
-        const category = categoryInput ? categoryInput.value : 'vocabulary';
-        const entry = buildEnglishEntryPayload(category);
-
-        if (category === 'vocabulary' && (!entry.word || !entry.spanish)) {
-            mostrarEstadoEnglish('err', 'Please enter both the English word and its Spanish meaning.');
-            return;
-        }
-        if (category === 'grammar' && (!entry.title || !entry.notes)) {
-            mostrarEstadoEnglish('err', 'Please enter a topic title and your grammar/usage notes.');
-            return;
-        }
-        if (category === 'notes' && (!entry.title || !entry.notes)) {
-            mostrarEstadoEnglish('err', 'Please enter a note title and your personal learning notes.');
-            return;
-        }
-        if (category === 'phrasal_verb' && (!entry.verb || !entry.meaning_es)) {
-            mostrarEstadoEnglish('err', 'Please enter the phrasal verb and its Spanish meaning.');
-            return;
-        }
-
-        const signature = getEnglishEntrySignature(entry);
-        if (sentEnglishSignatures.has(signature)) {
-            mostrarEstadoEnglish('err', 'This exact entry was already queued for your English Word notebook in this session.');
-            return;
-        }
-
-        const llaveTexto = await solicitarLlaveE2EEAsync();
-        if (!llaveTexto) return;
-
-        if (statusBanner) statusBanner.hidden = true;
-
-        runWithButtonLock(btn, async () => {
-            try {
-                const saveRespText = String(await submitMutationRequest({
-                    url: '/api/send-english',
-                    method: 'POST',
-                    scopeKey: `english:${category}`,
-                    signature,
-                    buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(entry), llaveTexto) })
-                }) || '');
-                sentEnglishSignatures.add(signature);
-                appendRecentEnglishItem(entry);
-                limpiarCamposEnglish(category);
-                clearStudyNoteDrafts('english');
-
-                // Also sync this studied item into the persistent AI Learning Memory bank (non-blocking)
-                const memPayload = category === 'vocabulary'
-                    ? { terms: [{ term: entry.word, romanization: entry.romanization || '', meaning: entry.spanish, category: 'vocabulary', language: studyLanguageInput?.value || 'en_ko' }] }
-                    : category === 'phrasal_verb'
-                        ? { terms: [{ term: entry.verb, meaning: entry.meaning_es, category: 'phrasal_verb', language: 'en' }] }
-                        : { grammarNotes: [`${entry.title}: ${entry.notes}`], language: studyLanguageInput?.value || 'en_ko' };
-                fetch('/api/language/memory', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(memPayload)
-                })
-                    .then(r => (r.ok ? r.json() : null))
-                    .then(d => {
-                        if (d && d.languageMemory && typeof updateAiMemoryBadgeUI === 'function') {
-                            updateAiMemoryBadgeUI(d.languageMemory);
-                        }
-                    })
-                    .catch(() => { });
-
-                const isLocalVolumeSave = /local english notebook volume/i.test(saveRespText);
-                const msg = isLocalVolumeSave
-                    ? tUi(
-                        'Saved! Your local Word English Notebook has been updated automatically.',
-                        '¡Guardado! Tu Cuaderno de Idiomas Word local se actualizó automáticamente.'
-                    )
-                    : tUi(
-                        'Saved! Your English Notebook on Google Drive has been updated automatically.',
-                        '¡Guardado! Tu Cuaderno de Idiomas en Google Drive se actualizó automáticamente.'
-                    );
-                mostrarEstadoEnglish('ok', msg);
-                showToast(
-                    'ok',
-                    isLocalVolumeSave
-                        ? tUi('English note saved to Local Word & AI Memory!', '¡Nota guardada en Word local y Memoria IA!')
-                        : tUi('English note saved to Cloud Drive & AI Memory!', '¡Nota guardada en Google Drive y Memoria IA!')
-                );
-            } catch (err) {
-                mostrarEstadoEnglish('err', tUi('Failed to send entry: ', 'No se pudo enviar la entrada: ') + tServer(err.message));
-                showToast('err', err.message);
+            if (category === 'vocabulary' && (!entry.word || !entry.spanish)) {
+                mostrarEstadoEnglish('err', 'Please enter both the English word and its Spanish meaning.');
+                return;
             }
-        }, { loadingText: 'Sending...' });
+            if (category === 'grammar' && (!entry.title || !entry.notes)) {
+                mostrarEstadoEnglish('err', 'Please enter a topic title and your grammar/usage notes.');
+                return;
+            }
+            if (category === 'notes' && (!entry.title || !entry.notes)) {
+                mostrarEstadoEnglish('err', 'Please enter a note title and your personal learning notes.');
+                return;
+            }
+            if (category === 'phrasal_verb' && (!entry.verb || !entry.meaning_es)) {
+                mostrarEstadoEnglish('err', 'Please enter the phrasal verb and its Spanish meaning.');
+                return;
+            }
+
+            const signature = getEnglishEntrySignature(entry);
+            if (sentEnglishSignatures.has(signature)) {
+                mostrarEstadoEnglish('err', 'This exact entry was already queued for your English Word notebook in this session.');
+                return;
+            }
+
+            const llaveTexto = await solicitarLlaveE2EEAsync();
+            if (!llaveTexto) return;
+
+            if (statusBanner) statusBanner.hidden = true;
+
+            await runWithButtonLock(btn, async () => {
+                try {
+                    const saveRespText = String(await submitMutationRequest({
+                        url: '/api/send-english',
+                        method: 'POST',
+                        scopeKey: `english:${category}`,
+                        signature,
+                        buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(entry), llaveTexto) })
+                    }) || '');
+                    sentEnglishSignatures.add(signature);
+                    appendRecentEnglishItem(entry);
+                    limpiarCamposEnglish(category);
+                    clearStudyNoteDrafts('english');
+
+                    // Also sync this studied item into the persistent AI Learning Memory bank (non-blocking)
+                    const memPayload = category === 'vocabulary'
+                        ? { terms: [{ term: entry.word, romanization: entry.romanization || '', meaning: entry.spanish, category: 'vocabulary', language: studyLanguageInput?.value || 'en_ko' }] }
+                        : category === 'phrasal_verb'
+                            ? { terms: [{ term: entry.verb, meaning: entry.meaning_es, category: 'phrasal_verb', language: 'en' }] }
+                            : { grammarNotes: [`${entry.title}: ${entry.notes}`], language: studyLanguageInput?.value || 'en_ko' };
+                    fetch('/api/language/memory', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(memPayload)
+                    })
+                        .then(r => (r.ok ? r.json() : null))
+                        .then(d => {
+                            if (d && d.languageMemory && typeof updateAiMemoryBadgeUI === 'function') {
+                                updateAiMemoryBadgeUI(d.languageMemory);
+                            }
+                        })
+                        .catch(() => { });
+
+                    const isPendingDriveRetry = /scheduled for retry/i.test(saveRespText);
+                    const isLocalVolumeSave = /local english notebook volume/i.test(saveRespText);
+                    const msg = isPendingDriveRetry
+                        ? tUi(
+                            'Saved locally on the server; Google Drive upload will retry automatically when the connection recovers.',
+                            '¡Guardado en respaldo local! La subida a Google Drive se reintentará automáticamente al volver la conexión.'
+                        )
+                        : (isLocalVolumeSave
+                            ? tUi(
+                                'Saved! Your local Word English Notebook has been updated automatically.',
+                                '¡Guardado! Tu Cuaderno de Idiomas Word local se actualizó automáticamente.'
+                            )
+                            : tUi(
+                                'Saved! Your English Notebook on Google Drive has been updated automatically.',
+                                '¡Guardado! Tu Cuaderno de Idiomas en Google Drive se actualizó automáticamente.'
+                            ));
+                    mostrarEstadoEnglish(isPendingDriveRetry ? 'info' : 'ok', msg);
+                    showToast(
+                        isPendingDriveRetry ? 'info' : 'ok',
+                        isPendingDriveRetry
+                            ? tUi('Saved locally (Drive retry scheduled).', 'Guardado en respaldo local (subida a Drive programada).')
+                            : (isLocalVolumeSave
+                                ? tUi('English note saved to Local Word & AI Memory!', '¡Nota guardada en Word local y Memoria IA!')
+                                : tUi('English note saved to Cloud Drive & AI Memory!', '¡Nota guardada en Google Drive y Memoria IA!'))
+                    );
+                } catch (err) {
+                    mostrarEstadoEnglish('err', tUi('Failed to send entry: ', 'No se pudo enviar la entrada: ') + tServer(err.message));
+                    showToast('err', err.message);
+                }
+            }, { loadingText: 'Sending...' });
+        } finally {
+            englishFormSubmitting = false;
+        }
     });
 
     const languageAiPanel = document.getElementById('languageAiPanel');
@@ -4524,14 +4542,14 @@ function initHangulPracticeStudio() {
                     url: '/api/send-english',
                     method: 'POST',
                     scopeKey: 'english:hangul:alphabet',
-                    signature: `alphabet-ko:${Date.now()}`,
+                    signature: `alphabet-ko:${alphabetEntry.title}:${String(alphabetEntry.symbols_table || '').length}`,
                     buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(alphabetEntry), llaveTexto) })
                 });
                 await submitMutationRequest({
                     url: '/api/send-english',
                     method: 'POST',
                     scopeKey: 'english:hangul:notes',
-                    signature: `notes-ko:${Date.now()}`,
+                    signature: `notes-ko:${notesEntry.title}:${String(notesEntry.notes || '').length}`,
                     buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(notesEntry), llaveTexto) })
                 });
 
@@ -9017,15 +9035,23 @@ function initMusicEntityEditModal() {
             });
             if (!ok) return;
 
+            if (busyActionElements.has(btnDelete) || btnDelete.disabled) return;
             runWithButtonLock(btnDelete, async () => {
-                const res = await fetch(`/api/english/music/albums/${entityId}`, { method: 'DELETE' });
-                if (res.ok) {
+                try {
+                    await submitMutationRequest({
+                        url: `/api/english/music/albums/${entityId}`,
+                        method: 'DELETE',
+                        scopeKey: `english-music-album:delete:${entityId}`,
+                        signature: String(entityId),
+                        parseJson: true
+                    });
                     closeModal();
                     showToast('ok', tUi(`Deleted album "${rawName}" (songs preserved).`, `Álbum "${rawName}" eliminado (canciones conservadas).`));
                     await cargarCatalogoMusical();
-                } else {
-                    const errText = await res.text();
-                    mostrarBannerMusica('musicEntityEditBanner', 'err', tServer(errText) || tUi('Could not delete album.', 'No se pudo eliminar el álbum.'));
+                } catch (err) {
+                    const errMsg = err.message || tUi('Could not delete album.', 'No se pudo eliminar el álbum.');
+                    mostrarBannerMusica('musicEntityEditBanner', 'err', errMsg);
+                    showToast('err', errMsg);
                 }
             }, { loadingText: tUi('Deleting...', 'Eliminando...') });
         });
@@ -9034,6 +9060,7 @@ function initMusicEntityEditModal() {
     form.addEventListener('submit', (e) => {
         e.preventDefault();
         const btnSave = document.getElementById('btnSaveMusicEntityModal');
+        if (!btnSave || busyActionElements.has(btnSave) || btnSave.disabled) return;
         const kind = document.getElementById('musicEntityKind')?.value === 'album' ? 'album' : 'artist';
         const entityId = Number(document.getElementById('musicEntityId')?.value || 0);
         const rawName = (document.getElementById('musicEntityName')?.value || '').trim();
@@ -9155,6 +9182,8 @@ function initMusicAlbumCreateModal() {
         }
 
         const lockTarget = andAddSong ? btnSaveAndAdd : btnSaveOnly;
+        const extraBtns = [btnSaveOnly, btnSaveAndAdd].filter(Boolean);
+        if (extraBtns.some(btn => busyActionElements.has(btn) || btn.disabled)) return;
         mostrarBannerMusica('musicAlbumCreateBanner', '', '');
         runWithButtonLock(lockTarget, async () => {
             try {
@@ -9203,7 +9232,7 @@ function initMusicAlbumCreateModal() {
             } catch (err) {
                 mostrarBannerMusica('musicAlbumCreateBanner', 'err', err.message || 'Could not create album.');
             }
-        }, { loadingText: 'Saving...' });
+        }, { loadingText: 'Saving...', extraDisable: extraBtns });
     };
 
     if (btnSaveOnly) {
@@ -9720,13 +9749,22 @@ function renderMusicCatalog() {
                     ? window.DailyHubI18n.musicStatusLabel(song.estado_estudio)
                     : stMeta.label;
                 statusBtn.addEventListener('click', () => {
+                    if (busyActionElements.has(statusBtn) || statusBtn.disabled) return;
                     runWithButtonLock(statusBtn, async () => {
-                        const res = await fetch(`/api/english/music/songs/${song.id}/status`, {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ estadoEstudio: stMeta.next })
-                        });
-                        if (res.ok) await cargarCatalogoMusical();
+                        try {
+                            await submitMutationRequest({
+                                url: `/api/english/music/songs/${song.id}/status`,
+                                method: 'PATCH',
+                                scopeKey: `english-music-status:${song.id}`,
+                                signature: stMeta.next,
+                                buildBody: () => ({ estadoEstudio: stMeta.next }),
+                                parseJson: true,
+                                timeoutMs: 12000
+                            });
+                            await cargarCatalogoMusical();
+                        } catch (err) {
+                            showToast('err', err.message || tUi('Could not update song status.', 'No se pudo actualizar el estado de la canción.'));
+                        }
                     });
                 });
                 badgeRow.appendChild(statusBtn);
@@ -9782,6 +9820,7 @@ function renderMusicCatalog() {
                 delBtn.className = 'btn-secondary btn-small';
                 delBtn.textContent = tUi('Delete', 'Eliminar');
                 delBtn.addEventListener('click', async () => {
+                    if (busyActionElements.has(delBtn) || delBtn.disabled) return;
                     const ok = await openConfirmDialog({
                         title: tUi('Remove Song?', '¿Quitar canción?'),
                         message: tUi(
@@ -9792,9 +9831,22 @@ function renderMusicCatalog() {
                         danger: true
                     });
                     if (!ok) return;
+                    if (busyActionElements.has(delBtn) || delBtn.disabled) return;
                     runWithButtonLock(delBtn, async () => {
-                        const res = await fetch(`/api/english/music/songs/${song.id}`, { method: 'DELETE' });
-                        if (res.ok) await cargarCatalogoMusical();
+                        try {
+                            await submitMutationRequest({
+                                url: `/api/english/music/songs/${song.id}`,
+                                method: 'DELETE',
+                                scopeKey: `english-music-song:delete:${song.id}`,
+                                signature: String(song.id),
+                                parseJson: true,
+                                timeoutMs: 12000
+                            });
+                            showToast('ok', tUi(`Removed "${song.titulo}".`, `"${song.titulo}" quitada del catálogo.`));
+                            await cargarCatalogoMusical();
+                        } catch (err) {
+                            showToast('err', err.message || tUi('Could not remove song.', 'No se pudo quitar la canción.'));
+                        }
                     });
                 });
 
@@ -10377,6 +10429,7 @@ if (englishMusicStudioRoot) {
         songForm.addEventListener('submit', e => {
             e.preventDefault();
             const btnSave = document.getElementById('btnMusicSaveSong');
+            if (!btnSave || busyActionElements.has(btnSave) || btnSave.disabled) return;
             const val = id => (document.getElementById(id)?.value || '').trim();
 
             const editId = val('musicSongEditId');
@@ -10416,7 +10469,10 @@ if (englishMusicStudioRoot) {
                     });
 
                     closeMusicSongModal({ reset: true });
-                    showToast('ok', data.message || 'Song metadata saved.');
+                    showToast(
+                        data && data.deduplicated ? 'info' : 'ok',
+                        data.message || 'Song metadata saved.'
+                    );
                     if (data && data.songId) {
                         musicState.selectedSongId = Number(data.songId);
                     }
@@ -10429,117 +10485,124 @@ if (englishMusicStudioRoot) {
     }
 
     if (wordForm) {
+        let wordFormSubmitting = false;
         wordForm.addEventListener('submit', async e => {
             e.preventDefault();
             const btnSend = document.getElementById('btnSendMusicWord');
-            const val = id => (document.getElementById(id)?.value || '').trim();
-            const selected = getCancionSeleccionada();
-            const lyricsStudy = (
-                (selected ? String(musicState.sessionLyricsBySongId[selected.id]?.lyrics || '').trim() : '') ||
-                val('musicSongLyricsViewer')
-            );
-            const vocabVal = val('musicStudyVocab');
-            const pronVal = val('musicStudyPronunciation');
-            const notesVal = val('musicStudyExtraNotes');
-            if (!lyricsStudy && !vocabVal && !pronVal && !notesVal) {
-                mostrarBannerMusica('musicWordStatusBanner', 'err', 'Extract lyrics or write vocabulary, pronunciation, or notes first.');
-                return;
-            }
-
-            const fallbackTitle = val('musicSongTitle');
-            const fallbackArtist = val('musicMainArtist');
-
-            if (!selected && (!fallbackTitle || !fallbackArtist)) {
-                mostrarBannerMusica(
-                    'musicWordStatusBanner',
-                    'err',
-                    'Select a song from the catalog (click "Study → Word") or fill Song Title + Main Artist above.'
+            if (!btnSend || wordFormSubmitting || busyActionElements.has(btnSend) || btnSend.disabled) return;
+            wordFormSubmitting = true;
+            try {
+                const val = id => (document.getElementById(id)?.value || '').trim();
+                const selected = getCancionSeleccionada();
+                const lyricsStudy = (
+                    (selected ? String(musicState.sessionLyricsBySongId[selected.id]?.lyrics || '').trim() : '') ||
+                    val('musicSongLyricsViewer')
                 );
-                return;
-            }
-
-            const llaveTexto = await solicitarLlaveE2EEAsync();
-            if (!llaveTexto) return;
-
-            const entry = selected
-                ? {
-                    category: 'music',
-                    language: selected.idioma || 'English',
-                    song_title: selected.titulo,
-                    artists_display: formatSongArtistsSummary(selected),
-                    album_title: selected.album_titulo || '',
-                    album_type: RELEASE_TYPE_LABELS[selected.album_tipo] || selected.album_tipo || '',
-                    release_year: selected.album_anio ? String(selected.album_anio) : '',
-                    track_number: selected.numero_pista || null,
-                    yt_music_url: selected.yt_music_url || '',
-                    focus_summary: selected.enfoque_corto || '',
-                    lyrics_study: lyricsStudy,
-                    vocabulary_list: vocabVal,
-                    pronunciation_notes: pronVal,
-                    notes: notesVal
+                const vocabVal = val('musicStudyVocab');
+                const pronVal = val('musicStudyPronunciation');
+                const notesVal = val('musicStudyExtraNotes');
+                if (!lyricsStudy && !vocabVal && !pronVal && !notesVal) {
+                    mostrarBannerMusica('musicWordStatusBanner', 'err', 'Extract lyrics or write vocabulary, pronunciation, or notes first.');
+                    return;
                 }
-                : {
-                    category: 'music',
-                    language: val('musicSongLanguage') || 'English',
-                    song_title: fallbackTitle,
-                    artists_display: val('musicCollaborators')
-                        ? `${fallbackArtist} (${val('musicCollaborators')})`
-                        : fallbackArtist,
-                    album_title: val('musicAlbumTitle'),
-                    album_type: RELEASE_TYPE_LABELS[val('musicAlbumType')] || val('musicAlbumType'),
-                    release_year: val('musicAlbumYear'),
-                    yt_music_url: val('musicSongYtUrl'),
-                    focus_summary: val('musicFocusSummary'),
-                    lyrics_study: lyricsStudy,
-                    vocabulary_list: vocabVal,
-                    pronunciation_notes: pronVal,
-                    notes: notesVal
-                };
 
-            mostrarBannerMusica('musicWordStatusBanner', '', '');
+                const fallbackTitle = val('musicSongTitle');
+                const fallbackArtist = val('musicMainArtist');
 
-            runWithButtonLock(btnSend, async () => {
-                try {
-                    const signature = `${entry.song_title}|${entry.artists_display}|${entry.lyrics_study}|${entry.vocabulary_list}|${entry.pronunciation_notes}|${entry.notes}`;
-                    await submitMutationRequest({
-                        url: '/api/send-english',
-                        method: 'POST',
-                        scopeKey: 'english:music-word',
-                        signature,
-                        buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(entry), llaveTexto) })
-                    });
-
-                    clearStudyNoteDrafts('music');
-                    ['musicStudyVocab', 'musicStudyPronunciation', 'musicStudyExtraNotes'].forEach(id => {
-                        const el = document.getElementById(id);
-                        if (el) el.value = '';
-                    });
-
-                    if (selected) {
-                        const nextStatus = selected.estado_estudio === 'to_study' ? 'in_progress' : selected.estado_estudio;
-                        try {
-                            await resilientFetchJson(`/api/english/music/songs/${selected.id}/status`, {
-                                method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ estadoEstudio: nextStatus, wordSynced: true })
-                            }, { timeoutMs: 12000 });
-                            await cargarCatalogoMusical();
-                        } catch (_) {
-                            // E2EE note already queued safely; status refresh can recover on next catalog load
-                        }
-                    }
-
+                if (!selected && (!fallbackTitle || !fallbackArtist)) {
                     mostrarBannerMusica(
                         'musicWordStatusBanner',
-                        'ok',
-                        'Encrypted E2EE & queued! Your PC sync will add this song study breakdown under Section 4 in English_Learning_Notebook.docx.'
+                        'err',
+                        'Select a song from the catalog (click "Study → Word") or fill Song Title + Main Artist above.'
                     );
-                    showToast('ok', 'Song study notes encrypted & queued for Word!');
-                } catch (err) {
-                    mostrarBannerMusica('musicWordStatusBanner', 'err', tUi('Failed to send encrypted notes: ', 'No se pudieron enviar las notas cifradas: ') + tServer(err.message));
-                    showToast('err', err.message);
+                    return;
                 }
-            }, { loadingText: 'Encrypting...' });
+
+                const llaveTexto = await solicitarLlaveE2EEAsync();
+                if (!llaveTexto) return;
+
+                const entry = selected
+                    ? {
+                        category: 'music',
+                        language: selected.idioma || 'English',
+                        song_title: selected.titulo,
+                        artists_display: formatSongArtistsSummary(selected),
+                        album_title: selected.album_titulo || '',
+                        album_type: RELEASE_TYPE_LABELS[selected.album_tipo] || selected.album_tipo || '',
+                        release_year: selected.album_anio ? String(selected.album_anio) : '',
+                        track_number: selected.numero_pista || null,
+                        yt_music_url: selected.yt_music_url || '',
+                        focus_summary: selected.enfoque_corto || '',
+                        lyrics_study: lyricsStudy,
+                        vocabulary_list: vocabVal,
+                        pronunciation_notes: pronVal,
+                        notes: notesVal
+                    }
+                    : {
+                        category: 'music',
+                        language: val('musicSongLanguage') || 'English',
+                        song_title: fallbackTitle,
+                        artists_display: val('musicCollaborators')
+                            ? `${fallbackArtist} (${val('musicCollaborators')})`
+                            : fallbackArtist,
+                        album_title: val('musicAlbumTitle'),
+                        album_type: RELEASE_TYPE_LABELS[val('musicAlbumType')] || val('musicAlbumType'),
+                        release_year: val('musicAlbumYear'),
+                        yt_music_url: val('musicSongYtUrl'),
+                        focus_summary: val('musicFocusSummary'),
+                        lyrics_study: lyricsStudy,
+                        vocabulary_list: vocabVal,
+                        pronunciation_notes: pronVal,
+                        notes: notesVal
+                    };
+
+                mostrarBannerMusica('musicWordStatusBanner', '', '');
+
+                await runWithButtonLock(btnSend, async () => {
+                    try {
+                        const signature = `${entry.song_title}|${entry.artists_display}|${entry.lyrics_study}|${entry.vocabulary_list}|${entry.pronunciation_notes}|${entry.notes}`;
+                        await submitMutationRequest({
+                            url: '/api/send-english',
+                            method: 'POST',
+                            scopeKey: 'english:music-word',
+                            signature,
+                            buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(entry), llaveTexto) })
+                        });
+
+                        clearStudyNoteDrafts('music');
+                        ['musicStudyVocab', 'musicStudyPronunciation', 'musicStudyExtraNotes'].forEach(id => {
+                            const el = document.getElementById(id);
+                            if (el) el.value = '';
+                        });
+
+                        if (selected) {
+                            const nextStatus = selected.estado_estudio === 'to_study' ? 'in_progress' : selected.estado_estudio;
+                            try {
+                                await resilientFetchJson(`/api/english/music/songs/${selected.id}/status`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ estadoEstudio: nextStatus, wordSynced: true })
+                                }, { timeoutMs: 12000 });
+                                await cargarCatalogoMusical();
+                            } catch (_) {
+                                // E2EE note already queued safely; status refresh can recover on next catalog load
+                            }
+                        }
+
+                        mostrarBannerMusica(
+                            'musicWordStatusBanner',
+                            'ok',
+                            'Encrypted E2EE & queued! Your PC sync will add this song study breakdown under Section 4 in English_Learning_Notebook.docx.'
+                        );
+                        showToast('ok', 'Song study notes encrypted & queued for Word!');
+                    } catch (err) {
+                        mostrarBannerMusica('musicWordStatusBanner', 'err', tUi('Failed to send encrypted notes: ', 'No se pudieron enviar las notas cifradas: ') + tServer(err.message));
+                        showToast('err', err.message);
+                    }
+                }, { loadingText: 'Encrypting...' });
+            } finally {
+                wordFormSubmitting = false;
+            }
         });
     }
 }
@@ -16280,6 +16343,7 @@ function initCrisisHandlers() {
     form.addEventListener('submit', e => {
         e.preventDefault();
         const btnSave = document.getElementById('btnSaveCrisis');
+        if (!btnSave || busyActionElements.has(btnSave) || btnSave.disabled) return;
         const fecha = (document.getElementById('crisisFecha')?.value || '').trim();
         const hora = (document.getElementById('crisisHora')?.value || '').trim();
         const tipoCrisis = (document.getElementById('crisisTipo')?.value || 'Estrés').trim();
@@ -16304,10 +16368,12 @@ function initCrisisHandlers() {
 
         runWithButtonLock(btnSave, async () => {
             try {
-                const res = await fetch('/api/insert-crisis', {
+                await submitMutationRequest({
+                    url: '/api/insert-crisis',
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                    scopeKey: 'crisis:insert',
+                    signature: `${fecha}|${hora}|${tipoCrisis}|${intensidad}|${detalleOtro}|${motivo}`,
+                    buildBody: () => ({
                         fecha,
                         hora,
                         tipoCrisis,
@@ -16315,9 +16381,9 @@ function initCrisisHandlers() {
                         detalleOtro,
                         motivo,
                         allowOptionalMotivo: true
-                    })
+                    }),
+                    parseJson: true
                 });
-                if (!res.ok) throw new Error(await res.text() || 'Error saving crisis log.');
                 if (motivoEl) motivoEl.value = '';
                 if (otroInput) otroInput.value = '';
                 updateCharCount();
@@ -16327,6 +16393,7 @@ function initCrisisHandlers() {
                 cargarCrisisRecientes();
             } catch (err) {
                 setInlineBanner('crisisStatusBanner', 'err', err.message || 'Could not save crisis record.');
+                showToast('err', err.message || 'Could not save crisis record.');
             }
         }, { loadingText: 'Saving...' });
     });
