@@ -198,7 +198,7 @@ fi
 # 5. Python 3 + msoffcrypto + docx_writer.py dentro de mood_app
 echo ""
 echo "--- [5/10] Python 3 + msoffcrypto-tool + docx_writer.py en mood_app ---"
-PY_CHECK="$($DOCKER_CMD exec mood_app python3 -c "import ast, io, msoffcrypto, platform, time, zipfile; from msoffcrypto.format.ooxml import OOXMLFile; ast.parse(open('/app/lib/docx_writer.py', encoding='utf-8').read()); buf = io.BytesIO(); z = zipfile.ZipFile(buf, 'w'); z.writestr('[Content_Types].xml', '<Types/>'); z.close(); buf.seek(0); enc = io.BytesIO(); f = OOXMLFile(buf); f.encrypt('TestPass123!', enc); enc.seek(0); dec = io.BytesIO(); f2 = OOXMLFile(enc); f2.load_key(password='TestPass123!'); f2.decrypt(dec); print(platform.python_version(), '|', time.tzname)" 2>/dev/null || true)"
+PY_CHECK="$($DOCKER_CMD exec mood_app python3 -c "import ast, io, msoffcrypto, platform, time, zipfile; from msoffcrypto.format.ooxml import OOXMLFile; ast.parse(open('/app/lib/docx_writer.py', encoding='utf-8').read()); buf = io.BytesIO(); z = zipfile.ZipFile(buf, 'w'); z.writestr('[Content_Types].xml', '<Types xmlns=\x22http://schemas.openxmlformats.org/package/2006/content-types\x22/>'); z.close(); buf.seek(0); enc = io.BytesIO(); f = OOXMLFile(buf); f.encrypt('TestPass123!', enc); enc.seek(0); dec = io.BytesIO(); f2 = OOXMLFile(enc); f2.load_key(password='TestPass123!'); f2.decrypt(dec); print(platform.python_version(), '|', time.tzname)" 2>/dev/null || true)"
 if [ -n "$PY_CHECK" ]; then
     pass "Python + AST(docx_writer.py) + OOXMLFile cifrado/descifrado en RAM OK ($PY_CHECK)."
 else
