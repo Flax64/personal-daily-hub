@@ -3423,6 +3423,46 @@ def _read_encrypted_journal_bytes(target: str, password: str) -> dict:
     }
 
 
+def _ensure_ooxml_min_size_for_encryption(plain_bytes: bytes, min_bytes: int = 4200) -> bytes:
+    """
+    Evita el bug de msoffcrypto-tool <= 6.1.0 (Issue #105) donde un EncryptedPackage <= 4096 bytes
+    se escribe en el mini-stream OLE y produce contenedores corruptos al descifrar.
+    """
+    if len(plain_bytes) >= min_bytes:
+        return plain_bytes
+
+    def _repack_stored(src_bytes: bytes, extra_pad_chars: int = 0) -> bytes:
+        entries = []
+        with zipfile.ZipFile(io.BytesIO(src_bytes), "r") as zin:
+            for item in zin.infolist():
+                entries.append((item, zin.read(item.filename)))
+
+        padded_applied = False
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as zout:
+            for item, raw_data in entries:
+                content = raw_data
+                if extra_pad_chars > 0 and not padded_applied and item.filename in ("word/settings.xml", "[Content_Types].xml"):
+                    text = raw_data.decode("utf-8")
+                    pad_comment = f"<!-- ooxml-sector-pad:{'0' * extra_pad_chars} -->"
+                    if "</w:settings>" in text:
+                        content = text.replace("</w:settings>", f"{pad_comment}</w:settings>", 1).encode("utf-8")
+                        padded_applied = True
+                    elif "</Types>" in text:
+                        content = text.replace("</Types>", f"{pad_comment}</Types>", 1).encode("utf-8")
+                        padded_applied = True
+                zinfo = zipfile.ZipInfo(item.filename, date_time=item.date_time)
+                zinfo.compress_type = zipfile.ZIP_STORED
+                zout.writestr(zinfo, content, compress_type=zipfile.ZIP_STORED)
+        return out.getvalue()
+
+    repacked = _repack_stored(plain_bytes, 0)
+    if len(repacked) >= min_bytes:
+        return repacked
+    deficit = (min_bytes - len(repacked)) + 64
+    return _repack_stored(plain_bytes, deficit)
+
+
 def _encrypt_and_atomic_write_journal(
     target: str,
     password: str,
@@ -3449,7 +3489,8 @@ def _encrypt_and_atomic_write_journal(
             pass
 
     enc_io = io.BytesIO()
-    OOXMLFile(io.BytesIO(updated_plain_bytes)).encrypt(password, enc_io)
+    encrypt_input_bytes = _ensure_ooxml_min_size_for_encryption(updated_plain_bytes)
+    OOXMLFile(io.BytesIO(encrypt_input_bytes)).encrypt(password, enc_io)
     encrypted_bytes = enc_io.getvalue()
 
     # Mandatory round-trip decrypt + ZIP XML verification before overwriting disk

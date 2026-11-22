@@ -61,14 +61,24 @@ else
 fi
 
 df -h "$PROJECT_DIR" 2>/dev/null | sed 's/^/  /' || true
-DISK_STATS_GB="$(df -BG --output=size,avail "$PROJECT_DIR" 2>/dev/null | awk 'NR==2{gsub(/G/,""); print $1 "|" $2}' || true)"
+DISK_STATS_GB="$(df -BG --output=size,avail,pcent "$PROJECT_DIR" 2>/dev/null | awk 'NR==2{gsub(/[G%]/,""); print $1 "|" $2 "|" $3}' || true)"
 if [ -n "$DISK_STATS_GB" ]; then
-    DISK_TOTAL_GB="${DISK_STATS_GB%%|*}"
-    DISK_AVAIL_GB="${DISK_STATS_GB##*|}"
-    if [[ "$DISK_TOTAL_GB" =~ ^[0-9]+$ ]] && [ "$DISK_TOTAL_GB" -ge 250 ] && [ "${DISK_AVAIL_GB:-0}" -ge 100 ]; then
-        pass "Capacidad de disco adecuada para retención local ilimitada (${DISK_AVAIL_GB} GB libres de ${DISK_TOTAL_GB} GB totales)."
-    elif [[ "$DISK_AVAIL_GB" =~ ^[0-9]+$ ]]; then
-        warn "Espacio en disco reducido para backups históricos extendidos (${DISK_AVAIL_GB} GB libres de ${DISK_TOTAL_GB} GB; recomendado >= 300 GB / >= 100 GB libres)."
+    IFS='|' read -r DISK_TOTAL_GB DISK_AVAIL_GB DISK_USE_PCT <<<"$DISK_STATS_GB"
+    if [[ "$DISK_AVAIL_GB" =~ ^[0-9]+$ ]] && [[ "$DISK_TOTAL_GB" =~ ^[0-9]+$ ]]; then
+        [[ "${DISK_USE_PCT:-}" =~ ^[0-9]+$ ]] || DISK_USE_PCT=0
+        if [ "$DISK_AVAIL_GB" -lt 5 ]; then
+            fail "Espacio crítico en disco (${DISK_AVAIL_GB} GB libres de ${DISK_TOTAL_GB} GB, ${DISK_USE_PCT}% usado)."
+        elif [ "$DISK_AVAIL_GB" -ge 40 ] && [ "$DISK_USE_PCT" -lt 85 ]; then
+            pass "Espacio en disco adecuado para respaldos locales (${DISK_AVAIL_GB} GB libres de ${DISK_TOTAL_GB} GB totales, ${DISK_USE_PCT}% usado)."
+            if [ "$DISK_TOTAL_GB" -lt 150 ] && command -v lsblk >/dev/null 2>&1; then
+                MAX_DISK_BYTES="$(lsblk -b -d -n -o SIZE 2>/dev/null | sort -nr | head -n 1 || echo 0)"
+                if [[ "$MAX_DISK_BYTES" =~ ^[0-9]+$ ]] && [ "$MAX_DISK_BYTES" -ge 214748364800 ]; then
+                    echo "Info: El LV raíz mide ${DISK_TOTAL_GB} GB sobre un disco físico >= 200 GB (opcional: sudo lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv)."
+                fi
+            fi
+        else
+            warn "Espacio en disco reducido para backups históricos (${DISK_AVAIL_GB} GB libres de ${DISK_TOTAL_GB} GB, ${DISK_USE_PCT}% usado; recomendado >= 40 GB libres y < 85%)."
+        fi
     fi
 fi
 if command -v lsblk >/dev/null 2>&1; then
@@ -158,6 +168,8 @@ if command -v ufw >/dev/null 2>&1; then
     UFW_STATUS="$(ufw status 2>/dev/null || sudo -n ufw status 2>/dev/null || true)"
     if printf '%s\n' "$UFW_STATUS" | grep -qi 'Status: active'; then
         pass "Firewall UFW activo."
+    elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet ufw 2>/dev/null && [ -r /etc/ufw/ufw.conf ] && grep -qE '^\s*ENABLED=yes\b' /etc/ufw/ufw.conf 2>/dev/null; then
+        pass "Firewall UFW activo (verificado vía ufw.service y /etc/ufw/ufw.conf)."
     else
         warn "UFW inactivo o requiere sudo para inspeccionarse (verifica 'sudo ufw status')."
     fi
@@ -198,11 +210,33 @@ fi
 # 5. Python 3 + msoffcrypto + docx_writer.py dentro de mood_app
 echo ""
 echo "--- [5/10] Python 3 + msoffcrypto-tool + docx_writer.py en mood_app ---"
-PY_CHECK="$($DOCKER_CMD exec mood_app python3 -c "import ast, io, msoffcrypto, platform, time, zipfile; from msoffcrypto.format.ooxml import OOXMLFile; ast.parse(open('/app/lib/docx_writer.py', encoding='utf-8').read()); buf = io.BytesIO(); z = zipfile.ZipFile(buf, 'w'); z.writestr('[Content_Types].xml', '<Types xmlns=\x22http://schemas.openxmlformats.org/package/2006/content-types\x22/>'); z.close(); buf.seek(0); enc = io.BytesIO(); f = OOXMLFile(buf); f.encrypt('TestPass123!', enc); enc.seek(0); dec = io.BytesIO(); f2 = OOXMLFile(enc); f2.load_key(password='TestPass123!'); f2.decrypt(dec); print(platform.python_version(), '|', time.tzname)" 2>/dev/null || true)"
-if [ -n "$PY_CHECK" ]; then
-    pass "Python + AST(docx_writer.py) + OOXMLFile cifrado/descifrado en RAM OK ($PY_CHECK)."
+PY_RC=0
+PY_CHECK="$($DOCKER_CMD exec mood_app python3 -c 'import ast, io, msoffcrypto, platform, time, zipfile
+from msoffcrypto.format.ooxml import OOXMLFile
+with open("/app/lib/docx_writer.py", encoding="utf-8") as fh:
+    ast.parse(fh.read())
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+    z.writestr("[Content_Types].xml", "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>")
+    z.writestr("word/document.xml", "<!-- " + ("x" * 4300) + " --><doc/>")
+buf.seek(0)
+enc = io.BytesIO()
+OOXMLFile(buf).encrypt("TestPass123", enc)
+enc.seek(0)
+f2 = msoffcrypto.OfficeFile(enc)
+assert f2.is_encrypted(), "encrypted container expected"
+f2.load_key(password="TestPass123", verify_password=True)
+dec = io.BytesIO()
+f2.decrypt(dec)
+dec.seek(0)
+with zipfile.ZipFile(dec, "r") as zr:
+    assert "[Content_Types].xml" in zr.namelist()
+    assert "word/document.xml" in zr.namelist()
+print(platform.python_version(), "|", time.tzname)' 2>&1)" || PY_RC=$?
+if [ "$PY_RC" -eq 0 ] && [ -n "$PY_CHECK" ]; then
+    pass "Python + AST(docx_writer.py) + OOXMLFile/OfficeFile cifrado/descifrado en RAM OK ($PY_CHECK)."
 else
-    fail "Falló la verificación Python / msoffcrypto OOXMLFile / docx_writer.py dentro de mood_app."
+    fail "Falló la verificación Python / msoffcrypto OOXMLFile / docx_writer.py dentro de mood_app (rc=${PY_RC}): ${PY_CHECK:-sin salida}"
 fi
 
 # 6. yt-dlp + ffmpeg + runtime JS dentro de mood_app
