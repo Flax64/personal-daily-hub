@@ -46,8 +46,8 @@
         <div class="auth-card">
             <div class="auth-top-bar">
                 <span class="tunnel-pill" id="authTunnelPill" title="Tu conexión viaja protegida y cifrada de extremo a extremo">🔐 Privacidad: Conectando...</span>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <a href="guia-visual.html" target="_blank" rel="noopener noreferrer" class="lang-toggle-pill" title="Abrir guía visual rápida en una pestaña nueva" style="text-decoration:none;">📖 Visual Guide</a>
+                <div class="auth-top-actions">
+                    <a href="guia-visual.html" target="_blank" rel="noopener noreferrer" class="lang-toggle-pill auth-guide-link" title="Abrir guía visual rápida en una pestaña nueva">📖 Visual Guide</a>
                     <button type="button" class="lang-toggle-pill" id="btnLangToggleAuth"
                         title="Cambiar el idioma de toda la aplicación (Inglés / Español)"
                         aria-label="Switch UI language (English / Español)">🌐 EN · English</button>
@@ -986,6 +986,10 @@
                             aria-selected="false">📝 My Notes &amp; Learnings</button>
                         <button type="button" class="english-tab-btn" data-english-cat="hangul_practice" role="tab"
                             aria-selected="false" title="Practica vocales, consonantes, batchim y armado de bloques en coreano">🇰🇷 Korean Symbols Practice</button>
+                        <button type="button" class="english-tab-btn" data-english-cat="korean_readonly_notes" role="tab"
+                            aria-selected="false" title="Ver el alfabeto coreano y sus reglas en modo solo lectura como tus notas de Korean Practice en Google Drive">📜 Korean Alphabet (Read-Only · Drive)</button>
+                        <button type="button" class="english-tab-btn" data-english-cat="korean_comparator" role="tab"
+                            aria-selected="false" title="Comparar símbolos coreanos que escribas para saber cuál es y cómo suena sin guardar nada">🔍 Symbol Comparator (No Save)</button>
                         <button type="button" class="english-tab-btn" data-english-cat="alphabet" role="tab"
                             aria-selected="false" title="Genera con IA el alfabeto, sonidos y reglas de composición de cada idioma y guárdalo en tu cuaderno">🔤 Alphabets &amp; Rules + AI</button>
                         <button type="button" class="english-tab-btn" data-english-cat="music" role="tab"
@@ -1551,6 +1555,78 @@
 
                         <div id="alphabetStudioStatus" class="english-status-banner" hidden></div>
                         <div id="alphabetGuideResultBox" class="alphabet-guide-result"></div>
+                    </div>
+
+                    <!-- Read-Only Korean Alphabet Notes (Linked to Google Drive "Korean Practice") -->
+                    <div id="englishKoreanReadonlyNotesStudio" class="english-practice-studio korean-readonly-studio" hidden>
+                        <div class="lang-ai-head">
+                            <div>
+                                <h3>📜 Guía del Alfabeto Coreano (Solo Vista · Drive Korean Practice)</h3>
+                                <p class="muted-text">Vista de solo lectura idéntica a tu documento de Google Drive (Vocales Básicas, Compuestas, Consonantes, Dobles/Tensas, Batchim, Enlace Sonoro 연음 y Ejemplos). No modifica ni guarda nada.</p>
+                            </div>
+                            <div class="practice-head-actions">
+                                <span class="badge-pill is-readonly-pill" id="koreanReadonlyDriveBadge">👁️ Solo Vista · Sin Guardar</span>
+                                <a class="btn-secondary btn-small" id="btnOpenKoreanPracticeDrive" href="https://drive.google.com/drive/folders/1ehP4g7brBR7dnGNiN7zfiUQLEdZdTeuE" target="_blank" rel="noopener noreferrer" title="Abrir carpeta Korean Practice en Google Drive (cuenta de respaldos)">📂 Abrir Korean Practice (Drive)</a>
+                                <button type="button" class="btn-secondary btn-small" id="btnSyncKoreanPracticeDrive" title="Consultar cambios en modo solo lectura desde tu carpeta Korean Practice de Google Drive">🔄 Sincronizar Drive</button>
+                                <button type="button" class="btn-primary btn-small" id="btnGoToKoreanComparator" title="Abrir comparador interactivo de símbolos sin guardar nada">🔍 Comparar Símbolos</button>
+                            </div>
+                        </div>
+
+                        <div class="korean-readonly-toolbar">
+                            <input type="search" id="koreanReadonlySearchInput" maxlength="80"
+                                title="Buscar símbolo coreano, romanización, sonido o regla"
+                                placeholder="Buscar símbolo, sonido o regla (ej. ㅓ, Batchim, 연음, 사랑)...">
+                            <span id="koreanReadonlyDriveStatus" class="muted-text small-note">📁 Vinculado a Google Drive: Alfabeto Coreano (Hangul) y Lógica de Formación de Palabras.docx</span>
+                        </div>
+
+                        <div id="koreanReadonlyNotesContainer" class="korean-readonly-notes-container" aria-live="polite"></div>
+                    </div>
+
+                    <!-- Zero-Save Korean Symbol Comparator & Sound Identifier (Linked to Drive "Korean Practice") -->
+                    <div id="englishKoreanComparatorStudio" class="english-practice-studio korean-comparator-studio" hidden>
+                        <div class="lang-ai-head">
+                            <div>
+                                <h3>🔍 Comparador de Símbolos Coreanos (Sin Guardar · Vinculado a Drive)</h3>
+                                <p class="muted-text">Escribe o pega cualquier símbolo, sílaba o palabra en coreano para identificar cuál es, cómo suena según tus notas de Korean Practice en Drive y compararlo lado a lado. No guarda nada en Word ni en la base de datos.</p>
+                            </div>
+                            <div class="practice-head-actions">
+                                <span class="badge-pill is-nosave-pill">🔒 Sin Guardar (0 escrituras)</span>
+                                <a class="btn-secondary btn-small" id="btnOpenKoreanPracticeDriveFromCmp" href="https://drive.google.com/drive/folders/1ehP4g7brBR7dnGNiN7zfiUQLEdZdTeuE" target="_blank" rel="noopener noreferrer" title="Abrir notas de Korean Practice en Google Drive">📂 Abrir Korean Practice (Drive)</a>
+                                <button type="button" class="btn-secondary btn-small" id="btnBackToKoreanReadonlyNotes" title="Volver a la vista completa del alfabeto coreano">📜 Ver Alfabeto (Solo Vista)</button>
+                            </div>
+                        </div>
+
+                        <div class="korean-comparator-inputs-grid">
+                            <div class="form-group">
+                                <label for="koreanComparatorInput">Símbolo, sílaba o palabra a identificar *</label>
+                                <div class="korean-cmp-input-row">
+                                    <input type="text" id="koreanComparatorInput" maxlength="100"
+                                        placeholder="Ej. ㅓ, ㅋ, 한국어, 사랑해..." autocomplete="off" spellcheck="false">
+                                    <button type="button" class="btn-secondary btn-small" id="btnCmpSpeakPrimary" title="Escuchar pronunciación coreana (ko-KR)">🔊</button>
+                                    <button type="button" class="btn-secondary btn-small" id="btnCmpClearInputs" title="Limpiar campos del comparador">🧹 Limpiar</button>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="koreanComparatorTargetInput">Comparar contra otro símbolo (opcional)</label>
+                                <div class="korean-cmp-input-row">
+                                    <input type="text" id="koreanComparatorTargetInput" maxlength="100"
+                                        placeholder="Ej. ㅗ, ㄱ, ㄲ, ㅔ..." autocomplete="off" spellcheck="false">
+                                    <button type="button" class="btn-secondary btn-small" id="btnCmpSpeakTarget" title="Escuchar pronunciación del segundo símbolo (ko-KR)">🔊</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="korean-cmp-presets-wrap">
+                            <span class="small-note muted-text">Pares frecuentes para comparar:</span>
+                            <div id="koreanComparatorPresets" class="korean-cmp-presets"></div>
+                        </div>
+
+                        <details class="korean-keypad-details">
+                            <summary>⌨️ Teclado Virtual Hangul (toca símbolos si estás en PC sin teclado coreano)</summary>
+                            <div id="koreanComparatorKeypad" class="korean-comparator-keypad"></div>
+                        </details>
+
+                        <div id="koreanComparatorResults" class="korean-comparator-results" aria-live="polite"></div>
                     </div>
                     </div>
                 </div>

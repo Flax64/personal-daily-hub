@@ -346,11 +346,19 @@
             handshakePromise = (async () => {
                 const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
                 const kp = generateX25519KeyPair();
-                const res = await rawFetchFn('/api/transport/handshake', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ clientPub: bytesToBase64(kp.publicKey) })
-                });
+                const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+                const timer = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch (_) {} }, 6500) : null;
+                let res;
+                try {
+                    res = await rawFetchFn('/api/transport/handshake', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ clientPub: bytesToBase64(kp.publicKey) }),
+                        ...(ctrl ? { signal: ctrl.signal } : {})
+                    });
+                } finally {
+                    if (timer) clearTimeout(timer);
+                }
                 if (!res.ok) {
                     kp.privateKey.fill(0);
                     throw new Error(`Transport handshake failed (HTTP ${res.status})`);
