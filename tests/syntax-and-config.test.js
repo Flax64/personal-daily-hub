@@ -498,10 +498,16 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         const dockerfile = readText('Dockerfile');
         assert.match(dockerfile, /FROM node:20-alpine/);
         assert.match(dockerfile, /npm ci --omit=dev/);
+        assert.equal(dockerfile.includes('npm cache clean --force'), false, 'Dockerfile no debe usar npm cache clean --force');
+        assert.match(dockerfile, /rm -rf \/root\/\.npm/);
+        assert.match(dockerfile, /--root-user-action=ignore/);
         assert.match(dockerfile, /--max-old-space-size=768/);
         assert.match(dockerfile, /\btzdata\b/);
         assert.match(dockerfile, /XDG_CACHE_HOME=\/tmp\/\.cache/);
         assert.match(dockerfile, /OOXMLFile/);
+        assert.match(dockerfile, /OfficeFile/);
+        assert.match(dockerfile, /\.encrypt\(/);
+        assert.match(dockerfile, /\.decrypt\(/);
         assert.match(dockerfile, /\/app\/lib\/docx_writer\.py/);
         assert.match(dockerfile, /chown -R 1000:1000/);
         assert.match(dockerfile, /msoffcrypto-tool/);
@@ -608,6 +614,13 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         assert.match(verifyUbuntuSh, /426/);
         assert.match(verifyUbuntuSh, /evil\.example/);
         assert.match(verifyUbuntuSh, /respaldo_mood_tracker\.sql\.gz/);
+        assert.match(verifyUbuntuSh, /\/etc\/ufw\/ufw\.conf/);
+        assert.match(verifyUbuntuSh, /systemctl is-active --quiet ufw/);
+        assert.match(verifyUbuntuSh, /msoffcrypto\.OfficeFile/);
+        assert.match(verifyUbuntuSh, /PY_CHECK=.*\b2>&1\)/s);
+        assert.match(verifyUbuntuSh, /-ge 40/);
+        assert.match(verifyUbuntuSh, /-lt 85/);
+        assert.match(verifyUbuntuSh, /-lt 5/);
         assert.match(readText('.gitignore'), /^node_modules\/$/m);
 
         const ubuntuGuide = readText('guides/GUIA_INSTALACION_UBUNTU_SERVER_26.md');

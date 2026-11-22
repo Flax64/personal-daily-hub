@@ -193,6 +193,13 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
                     'with zipfile.ZipFile(io.BytesIO(p3), "r") as zf: xml_txt = zf.read("word/document.xml").decode("utf-8")',
                     'assert xml_txt.count("November 18th D-420") == 1',
                     'assert "Primer pensamiento del día" in xml_txt and "Segunda nota del mismo día" in xml_txt',
+                    'assert len(p1) < 4096',
+                    'padded = dw._ensure_ooxml_min_size_for_encryption(p1)',
+                    'assert len(padded) >= 4200',
+                    'with zipfile.ZipFile(io.BytesIO(padded), "r") as zp: doc_p = ET.fromstring(zp.read("word/document.xml")); set_p = ET.fromstring(zp.read("word/settings.xml"))',
+                    'assert doc_p is not None and set_p is not None',
+                    'already_large = dw._ensure_ooxml_min_size_for_encryption(padded)',
+                    'assert already_large == padded',
                     'no_pwd = dw.write_encrypted_journal_docx("/tmp/ignored.docx", "", "Hola")',
                     'assert no_pwd["ok"] is False and no_pwd["reason"] == "PASSWORD_MISSING"',
                     'print("JOURNAL_OOXML_OK")'

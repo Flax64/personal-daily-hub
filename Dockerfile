@@ -9,12 +9,12 @@ WORKDIR /app
 
 # Instalar solo dependencias de producción y limpiar caché para reducir imagen/almacenamiento
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && rm -rf /root/.npm
 
 # Instalar tzdata, rclone (respaldo y Drive Estudio opcional), Python 3, msoffcrypto-tool (cifrado local Diario.docx), ffmpeg, unzip, CA y yt-dlp autónomo
 RUN apk add --no-cache tzdata python3 py3-cryptography py3-olefile py3-pip ca-certificates curl rclone unzip ffmpeg \
-    && pip3 install --no-cache-dir --break-system-packages --no-deps msoffcrypto-tool \
-    && python3 -c "import msoffcrypto; from msoffcrypto.format.ooxml import OOXMLFile; print('msoffcrypto OOXML OK')" \
+    && pip3 install --no-cache-dir --root-user-action=ignore --break-system-packages --no-deps msoffcrypto-tool \
+    && python3 -c "import io, zipfile, msoffcrypto; from msoffcrypto.format.ooxml import OOXMLFile; buf = io.BytesIO(); z = zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED); z.writestr('[Content_Types].xml', '<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>'); z.writestr('word/document.xml', '<!-- ' + ('x' * 4300) + ' --><doc/>'); z.close(); buf.seek(0); enc = io.BytesIO(); OOXMLFile(buf).encrypt('BuildCheck123', enc); enc.seek(0); f2 = msoffcrypto.OfficeFile(enc); assert f2.is_encrypted(); f2.load_key(password='BuildCheck123', verify_password=True); dec = io.BytesIO(); f2.decrypt(dec); dec.seek(0); zr = zipfile.ZipFile(dec, 'r'); assert '[Content_Types].xml' in zr.namelist() and 'word/document.xml' in zr.namelist(); print('msoffcrypto OOXML round-trip OK')" \
     && node -v \
     && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp \
