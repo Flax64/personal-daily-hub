@@ -353,8 +353,8 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'id="floatingTranslatorModal"',
             'id="floatingTranslatorDragHandle"',
             'floating-translator-drag-grip',
-            'id="btnResetFloatTranslatorPos"',
-            'id="btnFloatPopoutTranslator"',
+            'class="floating-translator-body"',
+            'id="btnCloseFloatingTranslator"',
             'id="btnSidebarOpenTranslator"',
             'id="btnMobileTranslator"',
             'id="floatTranslatorInput"',
@@ -365,7 +365,6 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'id="btnMusicExtractLyrics"',
             'id="btnMusicCopyLyricsToStudy"',
             'id="btnMusicTranslateLyricsSel"',
-            'id="btnMinimizeFloatingTranslator"',
             'floating-translate-sel-btn',
             'id="musicSongLyricsViewer"',
             'id="musicLyricsStatusHint"',
@@ -386,7 +385,10 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'id="musicStudyLyrics"',
             'id="btnMusicAiExplainLyrics"',
             'id="btnMusicCleanTimestamps"',
-            'id="musicPcBridgeBadge"'
+            'id="musicPcBridgeBadge"',
+            'id="btnResetFloatTranslatorPos"',
+            'id="btnFloatPopoutTranslator"',
+            'id="btnMinimizeFloatingTranslator"'
         ]) {
             assert.equal(indexHtml.includes(removedId), false, `public/index.html debe retirar el elemento obsoleto ${removedId}`);
         }
@@ -1103,15 +1105,18 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
         assert.equal(jpEnAnalysis.language, 'en_ja');
         assert.ok(jpEnAnalysis.lines.some((l) => l.script === 'japanese' && /yume/i.test(l.romanization)));
 
-        // Regresión UX Modo Estudio: Traductor flotante movible/minimizable, botón Traducir Selección contextual, OPPO A79 y filtro por idioma
+        // Regresión UX Modo Estudio: Traductor flotante con header fijo + cuerpo con scroll, limpieza automática de selección, móvil amplio e íconos SVG semánticos
         assert.ok(styleCss.includes('.floating-translate-sel-btn'), 'style.css debe definir .floating-translate-sel-btn');
-        assert.ok(styleCss.includes('.floating-translator-drawer.is-minimized'), 'style.css debe definir .floating-translator-drawer.is-minimized');
-        assert.match(styleCss, /min\(92vw,\s*360px\)/, 'style.css debe definir ancho responsivo OPPO A79 vertical min(92vw, 360px)');
-        assert.match(styleCss, /70dvh/, 'style.css debe limitar altura en móvil vertical a 70dvh');
-        assert.match(styleCss, /calc\(100dvh\s*-\s*24px\)/, 'style.css debe limitar altura en paisaje a calc(100dvh - 24px)');
+        assert.ok(styleCss.includes('.floating-translator-body'), 'style.css debe definir .floating-translator-body');
+        assert.match(styleCss, /\.floating-translator-header[\s\S]*?flex-shrink:\s*0/, 'style.css debe mantener fija .floating-translator-header');
+        assert.match(styleCss, /min\(96vw,\s*440px\)/, 'style.css debe definir ancho móvil ampliado min(96vw, 440px)');
+        assert.match(styleCss, /86dvh/, 'style.css debe definir altura máxima móvil vertical en 86dvh');
+        assert.match(styleCss, /calc\(100dvh\s*-\s*16px\)/, 'style.css debe limitar altura en paisaje a calc(100dvh - 16px)');
         assert.match(styleCss, /touch-action:\s*none/, 'style.css debe incluir touch-action: none para arrastre táctil fluido');
         assert.ok(frontendJs.includes('orientationchange'), 'frontend.js debe recalcular coordenadas flotantes en orientationchange');
         assert.ok(frontendJs.includes('selectionchange'), 'frontend.js debe escuchar selectionchange para mostrar Traducir Selección');
+        assert.ok(frontendJs.includes('clearActiveTextSelection') && frontendJs.includes('removeAllRanges'), 'frontend.js debe deseleccionar automáticamente el texto al traducir selección');
+        assert.ok((indexHtml.match(/<svg class="ui-icon"/g) || []).length >= 20, 'public/index.html debe usar íconos SVG inline uniformes en navegación, vistas y tarjetas');
         assert.ok(frontendJs.includes('extractLyricsForActiveLanguage'), 'frontend.js debe filtrar estrofas por el idioma seleccionado');
 
         // Verificación funcional en VM de parseAndDivideLyricsByLanguage + extractLyricsForActiveLanguage

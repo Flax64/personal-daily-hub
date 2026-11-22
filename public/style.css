@@ -679,10 +679,35 @@ body {
 }
 
 .nav-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-size: 1.2rem;
     width: 24px;
+    height: 24px;
     text-align: center;
     flex-shrink: 0;
+}
+
+.ui-icon {
+    display: block;
+    flex-shrink: 0;
+}
+
+.nav-inline-icon,
+.sidebar-footer-icon,
+.floating-translator-icon,
+.floating-translate-sel-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.auth-guide-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .nav-label {
@@ -942,7 +967,16 @@ body {
 }
 
 .summary-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: var(--accent-soft, rgba(79, 125, 243, 0.14));
+    color: var(--accent-primary, #60a5fa);
     font-size: 1.4rem;
+    flex-shrink: 0;
 }
 
 .summary-card-header h3 {
@@ -1050,8 +1084,17 @@ body {
 }
 
 .shortcut-emoji {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    background: var(--accent-soft, rgba(79, 125, 243, 0.14));
+    color: var(--accent-primary, #60a5fa);
     font-size: 1.7rem;
     line-height: 1;
+    flex-shrink: 0;
 }
 
 .shortcut-card strong {
@@ -4954,6 +4997,7 @@ select,
     height: 48px;
     border-radius: 13px;
     background: var(--accent-soft);
+    color: var(--accent-primary, #60a5fa);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -7620,8 +7664,8 @@ body {
     z-index: 980;
     width: clamp(380px, 34vw, 440px);
     max-width: calc(100vw - 16px);
-    max-height: 80vh;
-    overflow-y: auto;
+    max-height: 82vh;
+    overflow: hidden;
     box-sizing: border-box;
     padding: 15px 17px;
     border-radius: 16px;
@@ -7642,25 +7686,33 @@ body {
     box-shadow: 0 28px 64px rgba(15, 23, 42, 0.5);
 }
 
-.floating-translator-drawer.is-minimized {
-    max-height: none;
-    overflow: hidden;
-    padding-top: 10px;
-    padding-bottom: 10px;
-    gap: 0;
+.floating-translator-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+    flex-shrink: 0;
 }
 
-.floating-translator-drawer.is-minimized > :not(.floating-translator-header) {
-    display: none !important;
+.floating-translator-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 2px;
 }
 
-.floating-translator-drawer.is-minimized .floating-translator-header {
-    padding-bottom: 0;
-    border-bottom: none;
-}
-
-/* Evita que el flex-column comprima resultado/textarea/controles (el resultado quedaba como una franja diminuta con scroll interno) */
-.floating-translator-drawer > * {
+.floating-translator-body > * {
     flex-shrink: 0;
     min-width: 0;
 }
@@ -7685,16 +7737,13 @@ body {
     width: 100%;
 }
 
-.floating-translator-header {
-    display: flex;
+.floating-translator-close-btn {
+    min-width: 36px;
+    min-height: 36px;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
-    cursor: grab;
-    user-select: none;
-    touch-action: none;
+    justify-content: center;
+    flex-shrink: 0;
 }
 
 .floating-translator-drawer.is-dragging .floating-translator-header {
@@ -7713,12 +7762,22 @@ body {
     align-items: center;
     gap: 8px;
     font-size: 0.98rem;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.floating-translator-title strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .floating-translator-win-actions {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-shrink: 0;
 }
 
 .floating-translator-input-row {
@@ -7812,18 +7871,14 @@ body {
 
 @media (max-width: 640px) {
     .floating-translator-drawer {
-        left: 4vw;
-        right: auto;
-        bottom: 12px;
-        width: min(92vw, 360px);
-        max-height: 70dvh;
-        padding: 10px 11px;
-        gap: 6px;
-        overflow-x: hidden;
-    }
-
-    .floating-translator-drawer.is-minimized {
-        max-height: none;
+        left: 2vw;
+        right: 2vw;
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+        width: min(96vw, 440px);
+        max-height: 86dvh;
+        padding: 12px 13px;
+        gap: 8px;
+        overflow: hidden;
     }
 
     .floating-translator-header {
@@ -7838,15 +7893,14 @@ body {
     }
 
     .floating-translator-title-wrap strong {
-        font-size: 0.88rem;
+        font-size: 0.92rem;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
     }
 
     .floating-translator-header .lang-ai-badge,
-    .translator-popup-toolbar .lang-ai-badge,
-    #btnFloatPopoutTranslator {
+    .translator-popup-toolbar .lang-ai-badge {
         display: none;
     }
 
@@ -7880,13 +7934,13 @@ body {
 
     .floating-translator-drawer .gt-lang-tab {
         padding: 5px 4px;
-        font-size: 0.7rem;
+        font-size: 0.72rem;
         text-align: center;
     }
 
     .floating-translator-drawer .lang-dir-pill {
         padding: 4px 5px;
-        font-size: 0.68rem;
+        font-size: 0.7rem;
         text-align: center;
         white-space: nowrap;
         overflow: hidden;
@@ -7904,9 +7958,9 @@ body {
     }
 
     .floating-translator-drawer .translator-extension-textarea {
-        min-height: 52px;
-        font-size: 0.86rem;
-        padding: 7px 9px;
+        min-height: 60px;
+        font-size: 0.9rem;
+        padding: 8px 10px;
     }
 
     .floating-translator-drawer .lang-translator-selects {
@@ -7915,15 +7969,15 @@ body {
     }
 
     .floating-translator-drawer .lang-translator-selects .select-input {
-        font-size: 0.76rem;
+        font-size: 0.78rem;
         padding: 5px 6px;
         min-width: 0;
     }
 
     .floating-translator-drawer .lang-translator-result {
-        max-height: 26dvh;
-        overflow-y: auto;
-        padding: 9px;
+        max-height: none;
+        overflow: visible;
+        padding: 10px 11px;
     }
 
     .floating-translator-input-row {
@@ -7954,10 +8008,11 @@ body {
 /* OPPO A79 Portrait (~360px-480px) - sin scroll horizontal */
 @media (max-width: 480px) and (orientation: portrait) {
     .floating-translator-drawer {
-        width: min(92vw, 360px);
-        max-height: 70dvh;
-        left: 4vw;
-        bottom: 10px;
+        width: min(96vw, 440px);
+        max-height: 86dvh;
+        left: 2vw;
+        right: 2vw;
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     }
 
     .floating-translator-drawer .lang-translator-dirs {
@@ -7980,19 +8035,15 @@ body {
     .floating-translator-drawer {
         right: 12px;
         bottom: 12px;
-        width: min(56vw, 380px);
-        max-height: calc(100dvh - 24px);
-        overflow-y: auto;
-        padding: 8px 12px;
+        width: min(56vw, 400px);
+        max-height: calc(100dvh - 16px);
+        overflow: hidden;
+        padding: 10px 12px;
         gap: 6px;
     }
 
-    .floating-translator-drawer.is-minimized {
-        max-height: none;
-    }
-
     .floating-translator-drawer .floating-translator-header {
-        padding-bottom: 4px;
+        padding-bottom: 6px;
     }
 
     .floating-translator-drawer .lang-translator-dirs {
@@ -8032,9 +8083,9 @@ body {
     }
 
     .floating-translator-drawer .lang-translator-result {
-        max-height: calc(100dvh - 185px);
-        overflow-y: auto;
-        padding: 8px 10px;
+        max-height: none;
+        overflow: visible;
+        padding: 9px 10px;
     }
 }
 
@@ -8611,6 +8662,9 @@ textarea:focus,
 }
 
 .sidebar-footer .sidebar-tunnel-row .tunnel-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
     line-height: 1;
 }
