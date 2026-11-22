@@ -14675,11 +14675,338 @@ function setPlannerBanner(type, message) {
     setInlineBanner('plannerStatusBanner', type, message);
 }
 
+const campusPlaceDraftState = {
+    editId: '',
+    lat: null,
+    lng: null,
+    address: '',
+    rooms: []
+};
+
+function normalizeCampusRoomTagClient(rawRoom = '') {
+    return String(rawRoom || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 24);
+}
+
+function renderCourseCampusSelectOptions(preferredValue = '') {
+    const select = document.getElementById('courseCampus');
+    if (!select) return;
+    const entries = Object.entries(academicPlannerDirectory || {});
+    const targetVal = preferredValue || select.value || '';
+    select.replaceChildren();
+    if (entries.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = 'principal';
+        opt.textContent = 'ITS Campus Principal';
+        select.appendChild(opt);
+        return;
+    }
+    entries.forEach(([key, camp]) => {
+        const campId = camp.id || key;
+        const opt = document.createElement('option');
+        opt.value = campId;
+        const codeTxt = camp.plano ? ` (${camp.plano})` : '';
+        const addrShort = camp.address ? ` — ${camp.address.slice(0, 48)}` : '';
+        opt.textContent = `${camp.name || campId}${codeTxt}${addrShort}`;
+        select.appendChild(opt);
+    });
+    if (targetVal && Array.from(select.options).some(o => o.value === targetVal)) {
+        select.value = targetVal;
+    } else if (select.options.length > 0) {
+        select.value = select.options[0].value;
+    }
+}
+
+async function persistAcademicPlannerCampuses(nextCampuses, { triggerBtn = null, successMsg = '' } = {}) {
+    const baseState = academicPlannerState && typeof academicPlannerState === 'object' ? academicPlannerState : {};
+    const prevLocs = baseState.locations && typeof baseState.locations === 'object' ? baseState.locations : {};
+    const nextLocations = {
+        ...prevLocs,
+        campuses: nextCampuses
+    };
+    if (Object.prototype.hasOwnProperty.call(nextCampuses, 'principal')) {
+        const prin = nextCampuses.principal;
+        nextLocations.university = {
+            ...(prevLocs.university || {}),
+            label: prin.name || prin.label || prevLocs.university?.label || 'ITS Campus Principal',
+            address: prin.address || prevLocs.university?.address || '',
+            mapsUrl: prin.mapsUrl || `https://www.google.com/maps?q=${prin.lat},${prin.lng}`,
+            lat: prin.lat,
+            lng: prin.lng
+        };
+    }
+
+    const nextPayload = {
+        ...baseState,
+        locations: nextLocations
+    };
+    const runPersist = async () => {
+        const resData = await submitMutationRequest({
+            url: '/api/planner',
+            method: 'PUT',
+            scopeKey: 'planner-save-campuses',
+            signature: `${Object.keys(nextCampuses).join(',')}:${Date.now()}`,
+            buildBody: () => ({ planner: nextPayload }),
+            parseJson: true
+        });
+        if (resData?.planner) academicPlannerState = resData.planner;
+        if (resData?.campusDirectory) academicPlannerDirectory = resData.campusDirectory;
+        renderItsCroquisDirectory(academicPlannerDirectory);
+        renderPlannerSemesterUI();
+        renderPlannerResidenciasAndWorkUI();
+        if (resData?.commutePreview) renderLiveCommuteCards(resData.commutePreview);
+        if (typeof populateMapPickerQuickPresets === 'function') populateMapPickerQuickPresets();
+        showToast('ok', successMsg || tUi('Location saved & routes recalculated!', '¡Lugar guardado y rutas recalculadas!'));
+        return resData;
+    };
+
+    if (triggerBtn) {
+        return new Promise((resolve, reject) => {
+            runWithButtonLock(triggerBtn, async () => {
+                try {
+                    const out = await runPersist();
+                    resolve(out);
+                } catch (err) {
+                    reject(err);
+                }
+            }, { loadingText: tUi('Saving...', 'Guardando...') });
+        });
+    }
+    return runPersist();
+}
+
+function updateCampusPlaceLocationSummary() {
+    const summaryEl = document.getElementById('campusPlaceLocationSummary');
+    if (!summaryEl) return;
+    if (isValidNonZeroCoordPair(Number(campusPlaceDraftState.lat), Number(campusPlaceDraftState.lng))) {
+        const coordText = `${Number(campusPlaceDraftState.lat).toFixed(5)}, ${Number(campusPlaceDraftState.lng).toFixed(5)}`;
+        summaryEl.textContent = campusPlaceDraftState.address
+            ? `📍 ${campusPlaceDraftState.address} (${coordText})`
+            : `📍 ${coordText}`;
+    } else {
+        summaryEl.textContent = tUi('No location selected yet.', 'Aún no hay ubicación seleccionada.');
+    }
+}
+
+function renderCampusPlaceRoomsChips() {
+    const listEl = document.getElementById('campusPlaceRoomsList');
+    if (!listEl) return;
+    listEl.replaceChildren();
+    if (!campusPlaceDraftState.rooms.length) {
+        const hint = document.createElement('span');
+        hint.className = 'muted-text';
+        hint.style.fontSize = '0.8rem';
+        hint.textContent = tUi('No custom rooms added yet.', 'Aún no has agregado salones personalizados.');
+        listEl.appendChild(hint);
+        return;
+    }
+    campusPlaceDraftState.rooms.forEach(room => {
+        const chip = document.createElement('span');
+        chip.className = 'campus-room-chip';
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = room;
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'campus-room-chip-remove';
+        removeBtn.setAttribute('aria-label', `${tUi('Remove', 'Quitar')} ${room}`);
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', () => {
+            campusPlaceDraftState.rooms = campusPlaceDraftState.rooms.filter(r => r !== room);
+            renderCampusPlaceRoomsChips();
+        });
+        chip.append(labelSpan, removeBtn);
+        listEl.appendChild(chip);
+    });
+}
+
+function openCampusPlaceModal(editCampusId = '') {
+    const modal = document.getElementById('campusPlaceModal');
+    const titleEl = document.getElementById('campusPlaceModalTitle');
+    const editIdEl = document.getElementById('campusPlaceEditId');
+    const nameEl = document.getElementById('campusPlaceNameInput');
+    const codeEl = document.getElementById('campusPlaceCodeInput');
+    const roomInput = document.getElementById('campusPlaceRoomInput');
+    const bannerEl = document.getElementById('campusPlaceBanner');
+    if (!modal) return;
+
+    const existing = editCampusId && academicPlannerDirectory && academicPlannerDirectory[editCampusId]
+        ? academicPlannerDirectory[editCampusId]
+        : (editCampusId && academicPlannerState?.locations?.campuses?.[editCampusId] || null);
+
+    campusPlaceDraftState.editId = existing ? (existing.id || editCampusId) : '';
+    campusPlaceDraftState.lat = existing && isValidNonZeroCoordPair(Number(existing.lat), Number(existing.lng)) ? Number(existing.lat) : null;
+    campusPlaceDraftState.lng = existing && isValidNonZeroCoordPair(Number(existing.lat), Number(existing.lng)) ? Number(existing.lng) : null;
+    campusPlaceDraftState.address = existing?.address || '';
+    campusPlaceDraftState.rooms = Array.isArray(existing?.rooms) ? existing.rooms.map(normalizeCampusRoomTagClient).filter(Boolean) : [];
+
+    if (editIdEl) editIdEl.value = campusPlaceDraftState.editId;
+    if (titleEl) {
+        titleEl.textContent = existing
+            ? tUi(`✏️ Edit: ${existing.name || existing.label || editCampusId}`, `✏️ Editar: ${existing.name || existing.label || editCampusId}`)
+            : tUi('🏫 Add Campus or Building', '🏫 Agregar Campus o Edificio');
+    }
+    if (nameEl) nameEl.value = existing ? (existing.name || existing.label || '') : '';
+    if (codeEl) codeEl.value = existing ? (existing.plano || '') : '';
+    if (roomInput) roomInput.value = '';
+    if (bannerEl) bannerEl.hidden = true;
+
+    updateCampusPlaceLocationSummary();
+    renderCampusPlaceRoomsChips();
+    modal.hidden = false;
+    setTimeout(() => { if (nameEl) nameEl.focus(); }, 20);
+}
+
+function closeCampusPlaceModal() {
+    const modal = document.getElementById('campusPlaceModal');
+    if (modal) modal.hidden = true;
+}
+
+function initCampusPlaceModal() {
+    const modal = document.getElementById('campusPlaceModal');
+    const form = document.getElementById('campusPlaceForm');
+    const btnClose = document.getElementById('btnCloseCampusPlaceModal');
+    const btnCancel = document.getElementById('btnCancelCampusPlaceModal');
+    const btnPickMap = document.getElementById('btnCampusPlacePickMap');
+    const roomInput = document.getElementById('campusPlaceRoomInput');
+    const btnAddRoom = document.getElementById('btnAddCampusRoom');
+    const btnSave = document.getElementById('btnSaveCampusPlace');
+    const bannerEl = document.getElementById('campusPlaceBanner');
+    if (!modal || !form || modal.dataset.wired === 'true') return;
+    modal.dataset.wired = 'true';
+
+    btnClose?.addEventListener('click', closeCampusPlaceModal);
+    btnCancel?.addEventListener('click', closeCampusPlaceModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeCampusPlaceModal();
+    });
+
+    const addRoomsFromInput = () => {
+        const raw = String(roomInput?.value || '').trim();
+        if (!raw) return;
+        const parts = raw.split(/[,;\n]+/).map(normalizeCampusRoomTagClient).filter(Boolean);
+        let added = 0;
+        parts.forEach(tag => {
+            if (!campusPlaceDraftState.rooms.includes(tag) && campusPlaceDraftState.rooms.length < 100) {
+                campusPlaceDraftState.rooms.push(tag);
+                added++;
+            }
+        });
+        if (roomInput) roomInput.value = '';
+        renderCampusPlaceRoomsChips();
+        if (added > 0 && bannerEl) bannerEl.hidden = true;
+    };
+
+    btnAddRoom?.addEventListener('click', addRoomsFromInput);
+    roomInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addRoomsFromInput();
+        }
+    });
+
+    btnPickMap?.addEventListener('click', () => {
+        const typedName = String(document.getElementById('campusPlaceNameInput')?.value || '').trim();
+        const hasCoords = isValidNonZeroCoordPair(Number(campusPlaceDraftState.lat), Number(campusPlaceDraftState.lng));
+        openLocationMapPicker('campus_draft', {
+            badge: `🏫 ${typedName || tUi('Campus / Building', 'Campus / Edificio')}`,
+            lat: hasCoords ? Number(campusPlaceDraftState.lat) : 25.4385,
+            lng: hasCoords ? Number(campusPlaceDraftState.lng) : -100.9940,
+            zoom: hasCoords ? 16 : 14,
+            address: campusPlaceDraftState.address || '',
+            label: typedName || tUi('Selected Place', 'Lugar seleccionado'),
+            onConfirm: ({ lat, lng, address, label }) => {
+                campusPlaceDraftState.lat = Number(lat);
+                campusPlaceDraftState.lng = Number(lng);
+                campusPlaceDraftState.address = String(address || label || '').trim().slice(0, 220);
+                updateCampusPlaceLocationSummary();
+                if (bannerEl) bannerEl.hidden = true;
+            }
+        });
+    });
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (String(roomInput?.value || '').trim()) {
+            addRoomsFromInput();
+        }
+        const name = String(document.getElementById('campusPlaceNameInput')?.value || '').trim().slice(0, 120);
+        const plano = String(document.getElementById('campusPlaceCodeInput')?.value || '').trim().slice(0, 30);
+        if (!name) {
+            if (bannerEl) {
+                bannerEl.className = 'inline-status-banner is-error';
+                bannerEl.textContent = tUi('Enter a campus or building name.', 'Ingresa un nombre para el campus o edificio.');
+                bannerEl.hidden = false;
+            }
+            return;
+        }
+        if (!isValidNonZeroCoordPair(Number(campusPlaceDraftState.lat), Number(campusPlaceDraftState.lng))) {
+            if (bannerEl) {
+                bannerEl.className = 'inline-status-banner is-error';
+                bannerEl.textContent = tUi('Pick a location on the map first.', 'Primero fija la ubicación en el mapa.');
+                bannerEl.hidden = false;
+            }
+            return;
+        }
+
+        const existingMap = academicPlannerState?.locations?.campuses && typeof academicPlannerState.locations.campuses === 'object'
+            ? { ...academicPlannerState.locations.campuses }
+            : { ...(academicPlannerDirectory || {}) };
+
+        let targetId = campusPlaceDraftState.editId;
+        if (!targetId) {
+            const slug = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'lugar';
+            targetId = `campus-${slug}-${Date.now().toString(36).slice(-5)}`;
+        }
+        const prevEntry = existingMap[targetId] || {};
+        existingMap[targetId] = {
+            ...prevEntry,
+            id: targetId,
+            name,
+            label: name,
+            plano,
+            address: campusPlaceDraftState.address || prevEntry.address || '',
+            lat: Number(campusPlaceDraftState.lat),
+            lng: Number(campusPlaceDraftState.lng),
+            mapsUrl: `https://www.google.com/maps?q=${Number(campusPlaceDraftState.lat)},${Number(campusPlaceDraftState.lng)}`,
+            rooms: [...campusPlaceDraftState.rooms]
+        };
+
+        try {
+            await persistAcademicPlannerCampuses(existingMap, {
+                triggerBtn: btnSave,
+                successMsg: tUi(`Saved "${name}" & recalculated routes!`, `Guardado "${name}" y rutas recalculadas.`)
+            });
+            closeCampusPlaceModal();
+        } catch (err) {
+            if (bannerEl) {
+                bannerEl.className = 'inline-status-banner is-error';
+                bannerEl.textContent = err?.message || tUi('Could not save location.', 'No se pudo guardar el lugar.');
+                bannerEl.hidden = false;
+            }
+        }
+    });
+}
+
 function renderItsCroquisDirectory(directory) {
     const grid = document.getElementById('itsCroquisDirectoryCards');
-    if (!grid || !directory) return;
+    if (!grid || !directory) {
+        renderCourseCampusSelectOptions();
+        return;
+    }
     grid.replaceChildren();
-    Object.entries(directory).forEach(([key, camp]) => {
+    const entries = Object.entries(directory);
+    if (entries.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'agenda-empty';
+        empty.textContent = tUi(
+            'No campuses or buildings registered yet. Click "+ Add Campus / Building" above to add one.',
+            'No tienes campus ni edificios registrados aún. Presiona "+ Agregar Campus / Edificio" arriba para crear uno.'
+        );
+        grid.appendChild(empty);
+        renderCourseCampusSelectOptions();
+        return;
+    }
+
+    entries.forEach(([key, camp]) => {
         const campId = camp.id || key;
         const card = document.createElement('div');
         card.className = 'its-croquis-card';
@@ -14694,27 +15021,36 @@ function renderItsCroquisDirectory(directory) {
 
         const title = document.createElement('h4');
         title.style.margin = '0';
-        title.textContent = `🏫 ${camp.name || 'Campus ITS'} (${camp.plano || ''})`;
-
-        const statusBadge = document.createElement('span');
-        statusBadge.className = `planner-loc-status-pill ${camp.isCustom ? 'is-custom' : 'is-default'}`;
-        statusBadge.textContent = camp.isCustom
-            ? tUi('📍 Custom Pin', '📍 Pin Personalizado')
-            : tUi('📐 Official Croquis', '📐 Croquis Oficial');
-
-        titleRow.append(title, statusBadge);
+        title.textContent = `🏫 ${camp.name || campId}${camp.plano ? ` (${camp.plano})` : ''}`;
+        titleRow.appendChild(title);
 
         const addr = document.createElement('p');
         addr.className = 'form-hint';
         addr.style.margin = '0';
-        addr.textContent = `📍 ${camp.address || ''}`;
-        const buildings = document.createElement('p');
-        buildings.className = 'form-hint';
-        buildings.style.margin = '2px 0 0';
-        buildings.textContent = Array.isArray(camp.buildings)
-            ? camp.buildings.map(b => `${b.code} · ${b.name}`).join(' | ')
-            : String(camp.buildings || '');
-        meta.append(titleRow, addr, buildings);
+        addr.textContent = `📍 ${camp.address || `${Number(camp.lat).toFixed(5)}, ${Number(camp.lng).toFixed(5)}`}`;
+        meta.append(titleRow, addr);
+
+        const customRooms = Array.isArray(camp.rooms) ? camp.rooms.filter(Boolean) : [];
+        if (customRooms.length > 0) {
+            const roomsRow = document.createElement('div');
+            roomsRow.className = 'its-croquis-rooms-row';
+            customRooms.forEach(roomCode => {
+                const chip = document.createElement('span');
+                chip.className = 'campus-room-chip';
+                chip.textContent = roomCode;
+                roomsRow.appendChild(chip);
+            });
+            meta.appendChild(roomsRow);
+        }
+        if (camp.buildings) {
+            const buildings = document.createElement('p');
+            buildings.className = 'form-hint';
+            buildings.style.margin = '2px 0 0';
+            buildings.textContent = Array.isArray(camp.buildings)
+                ? camp.buildings.map(b => `${b.code} · ${b.name}`).join(' | ')
+                : String(camp.buildings || '');
+            meta.appendChild(buildings);
+        }
 
         const actions = document.createElement('div');
         actions.style.display = 'flex';
@@ -14722,15 +15058,11 @@ function renderItsCroquisDirectory(directory) {
         actions.style.flexWrap = 'wrap';
         actions.style.alignItems = 'center';
 
-        const pinMapBtn = document.createElement('button');
-        pinMapBtn.type = 'button';
-        pinMapBtn.className = 'btn-primary btn-small';
-        pinMapBtn.style.width = 'auto';
-        pinMapBtn.style.margin = '0';
-        pinMapBtn.setAttribute('data-open-map-picker', `campus_${campId}`);
-        pinMapBtn.textContent = tUi('📍 Pin on Map', '📍 Fijar en Mapa');
-        pinMapBtn.addEventListener('click', () => openLocationMapPicker(`campus_${campId}`));
-        actions.appendChild(pinMapBtn);
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'btn-secondary btn-small';
+        editBtn.textContent = tUi('✏️ Edit', '✏️ Editar');
+        editBtn.addEventListener('click', () => openCampusPlaceModal(campId));
 
         const mapLink = document.createElement('a');
         mapLink.href = `https://www.google.com/maps/search/?api=1&query=${camp.lat},${camp.lng}`;
@@ -14738,47 +15070,39 @@ function renderItsCroquisDirectory(directory) {
         mapLink.rel = 'noopener noreferrer';
         mapLink.className = 'btn-secondary btn-small';
         mapLink.style.textDecoration = 'none';
-        mapLink.textContent = tUi('🗺️ Open Maps', '🗺️ Abrir Mapa');
-        actions.appendChild(mapLink);
+        mapLink.textContent = tUi('🗺️ View on Map', '🗺️ Ver en Mapa');
 
-        if (camp.isCustom) {
-            const resetBtn = document.createElement('button');
-            resetBtn.type = 'button';
-            resetBtn.className = 'btn-secondary btn-small';
-            resetBtn.textContent = tUi('↺ Restore', '↺ Restaurar');
-            resetBtn.addEventListener('click', () => {
-                runWithButtonLock(resetBtn, async () => {
-                    try {
-                        const resData = await submitMutationRequest({
-                            url: '/api/planner/location',
-                            method: 'POST',
-                            scopeKey: `planner-loc-reset-${campId}`,
-                            signature: `reset:${campId}:${Date.now()}`,
-                            buildBody: () => ({ target: `reset_campus_${campId}` }),
-                            parseJson: true
-                        });
-                        if (resData?.planner) academicPlannerState = resData.planner;
-                        if (resData?.campusDirectory) {
-                            academicPlannerDirectory = resData.campusDirectory;
-                            renderItsCroquisDirectory(academicPlannerDirectory);
-                        }
-                        if (resData?.planner) renderPlannerResidenciasAndWorkUI();
-                        if (resData?.commutePreview) renderLiveCommuteCards(resData.commutePreview);
-                        showToast('ok', tServer(resData?.message) || tUi('Official croquis restored.', 'Croquis oficial restaurado.'));
-                    } catch (err) {
-                        showToast('err', err.message || 'Could not restore campus location.');
-                    }
-                }, { loadingText: tUi('Updating...', 'Actualizando...') });
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn-secondary btn-small btn-danger-outline';
+        delBtn.textContent = tUi('🗑️ Delete', '🗑️ Borrar');
+        delBtn.addEventListener('click', () => {
+            const confirmMsg = tUi(
+                `Delete location "${camp.name || campId}"? Classes assigned to it will remain saved.`,
+                `¿Eliminar el lugar "${camp.name || campId}"? Tus materias guardadas no se perderán.`
+            );
+            if (typeof window.confirm === 'function' && !window.confirm(confirmMsg)) return;
+            const currentCampuses = academicPlannerState?.locations?.campuses && typeof academicPlannerState.locations.campuses === 'object'
+                ? { ...academicPlannerState.locations.campuses }
+                : { ...(academicPlannerDirectory || {}) };
+            delete currentCampuses[campId];
+            persistAcademicPlannerCampuses(currentCampuses, {
+                triggerBtn: delBtn,
+                successMsg: tUi(`Deleted "${camp.name || campId}".`, `Eliminado "${camp.name || campId}".`)
+            }).catch(err => {
+                showToast('err', err?.message || tUi('Could not delete location.', 'No se pudo borrar el lugar.'));
             });
-            actions.appendChild(resetBtn);
-        }
+        });
 
+        actions.append(editBtn, mapLink, delBtn);
         card.append(meta, actions);
         grid.appendChild(card);
     });
+    renderCourseCampusSelectOptions();
 }
 
 function openPlannerCourseModal() {
+    renderCourseCampusSelectOptions();
     const modal = document.getElementById('plannerCourseModal');
     if (!modal) return;
     modal.hidden = false;
@@ -14803,6 +15127,7 @@ function getActiveSemesterObj() {
 function resetPlannerCourseForm() {
     const form = document.getElementById('plannerCourseForm');
     if (form) form.reset();
+    renderCourseCampusSelectOptions();
     const editIdEl = document.getElementById('plannerCourseEditId');
     if (editIdEl) editIdEl.value = '';
     const titleEl = document.getElementById('plannerCourseFormTitle');
@@ -14823,6 +15148,7 @@ function resetPlannerCourseForm() {
 
 function loadCourseIntoEditForm(course) {
     if (!course) return;
+    renderCourseCampusSelectOptions(course.campusId || '');
     const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ''; };
     setVal('plannerCourseEditId', course.id || '');
     setVal('courseCode', course.code || '');
@@ -14830,7 +15156,7 @@ function loadCourseIntoEditForm(course) {
     setVal('courseName', course.name || '');
     setVal('courseTeacher', course.teacher || '');
     setVal('courseRoom', course.room || '');
-    setVal('courseCampus', course.campusId || 'boillot');
+    setVal('courseCampus', course.campusId || Object.keys(academicPlannerDirectory || {})[0] || 'principal');
     setVal('courseStartTime', course.startTime || '09:00');
     setVal('courseEndTime', course.endTime || '10:00');
     const daySet = new Set(Array.isArray(course.days) ? course.days.map(Number) : [1, 2, 3, 4]);
@@ -14925,7 +15251,7 @@ function renderPlannerSemesterUI() {
         sub.style.margin = '2px 0';
         const teacherText = course.teacher || course.docente || tUi('ITS Professor', 'Docente ITS');
         const campusObj = academicPlannerDirectory && academicPlannerDirectory[course.campusId || course.campusKey];
-        const campusLabel = campusObj ? `${campusObj.name} (${campusObj.plano})` : (course.campusId || 'Tec de Saltillo');
+        const campusLabel = campusObj ? `${campusObj.name}${campusObj.plano ? ` (${campusObj.plano})` : ''}` : (course.campusId || 'Tec de Saltillo');
         sub.textContent = `👩‍🏫 ${teacherText} · 🏛️ ${campusLabel}`;
 
         const daysText = (Array.isArray(course.days) ? course.days : [1, 2, 3, 4]).map(d => dayLabels[Number(d)] || d).join('/');
@@ -15350,8 +15676,23 @@ function collectPlannerStateFromDOM() {
     const prevCampuses = academicPlannerState.locations?.campuses && typeof academicPlannerState.locations.campuses === 'object'
         ? academicPlannerState.locations.campuses
         : {};
+    const hasPrincipalCampus = Object.prototype.hasOwnProperty.call(prevCampuses, 'principal');
     const nextUniLat = uniCoords.lat ?? prevCampuses.principal?.lat ?? 25.4414;
     const nextUniLng = uniCoords.lng ?? prevCampuses.principal?.lng ?? -100.9922;
+
+    const nextCampuses = { ...prevCampuses };
+    if (hasPrincipalCampus) {
+        nextCampuses.principal = {
+            ...(prevCampuses.principal || {}),
+            id: 'principal',
+            name: prevCampuses.principal?.name || prevCampuses.principal?.label || 'ITS Campus Principal',
+            label: prevCampuses.principal?.name || prevCampuses.principal?.label || 'ITS Campus Principal',
+            address: prevCampuses.principal?.address || 'Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo, Coahuila.',
+            mapsUrl: `https://www.google.com/maps?q=${nextUniLat},${nextUniLng}`,
+            lat: nextUniLat,
+            lng: nextUniLng
+        };
+    }
 
     academicPlannerState.locations = {
         ...academicPlannerState.locations,
@@ -15369,17 +15710,7 @@ function collectPlannerStateFromDOM() {
             lat: nextUniLat,
             lng: nextUniLng
         },
-        campuses: {
-            ...prevCampuses,
-            principal: {
-                ...(prevCampuses.principal || {}),
-                label: prevCampuses.principal?.label || 'ITS Campus Principal',
-                address: prevCampuses.principal?.address || 'Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo, Coahuila.',
-                mapsUrl: `https://www.google.com/maps?q=${nextUniLat},${nextUniLng}`,
-                lat: nextUniLat,
-                lng: nextUniLng
-            }
-        }
+        campuses: nextCampuses
     };
 
     return academicPlannerState;
@@ -15675,6 +16006,7 @@ function openQuickLocationModal(target = 'current', { showHttpNotice = false, er
 const mapPickerState = {
     isOpen: false,
     target: 'home',
+    draftOptions: null,
     centerLat: 25.4414,
     centerLng: -100.9922,
     pinLat: 25.4414,
@@ -15723,27 +16055,41 @@ function getEffectiveCampusEntryClient(key) {
         boillot: { id: 'boillot', name: 'ITS Campus Blvd (Glorieta)', plano: 'CTO-004', address: 'Blvd. V. Carranza esq. Av. Universidad, Saltillo', lat: 25.4385, lng: -100.9940 },
         miravalle: { id: 'miravalle', name: 'ITS Campus Miravalle', plano: 'CTO-003', address: 'Blvd. Vito Alessio Robles, Col. Miravalle, Saltillo', lat: 25.4194, lng: -101.0232 }
     };
-    return dir[key] || defaults[key] || defaults.principal;
+    return dir[key] || defaults[key] || Object.values(dir)[0] || defaults.principal;
 }
 
-function getMapTargetInitialConfig(target) {
+function getMapTargetInitialConfig(target, options = null) {
+    if (options && typeof options === 'object' && target === 'campus_draft') {
+        const lat = isValidNonZeroCoordPair(Number(options.lat), Number(options.lng)) ? Number(options.lat) : 25.4385;
+        const lng = isValidNonZeroCoordPair(Number(options.lat), Number(options.lng)) ? Number(options.lng) : -100.9940;
+        return {
+            badge: options.badge || tUi('🏫 Campus / Building', '🏫 Campus / Edificio'),
+            lat,
+            lng,
+            label: options.label || '',
+            address: options.address || '',
+            zoom: Number.isFinite(Number(options.zoom)) ? Number(options.zoom) : 15
+        };
+    }
+
     const locs = academicPlannerState?.locations || {};
     const homeLoc = locs.home || {};
     const resLoc = academicPlannerState?.residencias?.location || {};
     const workLoc = academicPlannerState?.work?.location || {};
     const currLoc = locs.current || {};
 
-    if (target === 'campus_principal' || target === 'university') {
-        const c = getEffectiveCampusEntryClient('principal');
-        return { badge: `🏫 ${c.name} (${c.plano})`, campusKey: 'principal', lat: Number(c.lat), lng: Number(c.lng), label: c.name, address: c.address, zoom: 16 };
-    }
-    if (target === 'campus_boillot') {
-        const c = getEffectiveCampusEntryClient('boillot');
-        return { badge: `🏛️ ${c.name} (${c.plano})`, campusKey: 'boillot', lat: Number(c.lat), lng: Number(c.lng), label: c.name, address: c.address, zoom: 16 };
-    }
-    if (target === 'campus_miravalle') {
-        const c = getEffectiveCampusEntryClient('miravalle');
-        return { badge: `🏢 ${c.name} (${c.plano})`, campusKey: 'miravalle', lat: Number(c.lat), lng: Number(c.lng), label: c.name, address: c.address, zoom: 16 };
+    if (target === 'university' || target.startsWith('campus_')) {
+        const key = target === 'university' ? 'principal' : target.slice('campus_'.length);
+        const c = getEffectiveCampusEntryClient(key);
+        return {
+            badge: `🏫 ${c.name || key}${c.plano ? ` (${c.plano})` : ''}`,
+            campusKey: key,
+            lat: Number(c.lat),
+            lng: Number(c.lng),
+            label: c.name || key,
+            address: c.address || '',
+            zoom: 16
+        };
     }
     if (target === 'residencias') {
         const lat = isValidNonZeroCoordPair(Number(resLoc.lat), Number(resLoc.lng)) ? Number(resLoc.lat) : 25.4414;
@@ -15940,11 +16286,15 @@ function renderMapPickerViewport() {
     // Reference Campus & Home markers
     if (refLayer) {
         refLayer.replaceChildren();
-        const refs = [
-            { tag: '🏫 Principal', lat: Number(getEffectiveCampusEntryClient('principal').lat), lng: Number(getEffectiveCampusEntryClient('principal').lng) },
-            { tag: '🏛️ Blvd/Glorieta', lat: Number(getEffectiveCampusEntryClient('boillot').lat), lng: Number(getEffectiveCampusEntryClient('boillot').lng) },
-            { tag: '🏢 Miravalle', lat: Number(getEffectiveCampusEntryClient('miravalle').lat), lng: Number(getEffectiveCampusEntryClient('miravalle').lng) }
-        ];
+        const refs = [];
+        const dirEntries = Object.entries(academicPlannerDirectory || {});
+        if (dirEntries.length > 0) {
+            dirEntries.forEach(([k, c]) => {
+                if (c && isValidNonZeroCoordPair(Number(c.lat), Number(c.lng))) {
+                    refs.push({ tag: `🏫 ${c.name || k}`, lat: Number(c.lat), lng: Number(c.lng) });
+                }
+            });
+        }
         const homeLoc = academicPlannerState?.locations?.home;
         if (homeLoc && isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng))) {
             refs.push({ tag: '🏠 Casa', lat: Number(homeLoc.lat), lng: Number(homeLoc.lng) });
@@ -16024,14 +16374,13 @@ function populateMapPickerQuickPresets() {
     const bar = document.getElementById('mapPickerQuickPresets');
     if (!bar) return;
     bar.replaceChildren();
-    const cPrin = getEffectiveCampusEntryClient('principal');
-    const cBoil = getEffectiveCampusEntryClient('boillot');
-    const cMira = getEffectiveCampusEntryClient('miravalle');
-    const presets = [
-        { text: '🏫 Tec Principal (CTO-002)', lat: Number(cPrin.lat), lng: Number(cPrin.lng), zoom: 16, summary: cPrin.address },
-        { text: '🏛️ Tec Blvd/Glorieta (CTO-004)', lat: Number(cBoil.lat), lng: Number(cBoil.lng), zoom: 16, summary: cBoil.address },
-        { text: '🏢 Tec Miravalle (CTO-003)', lat: Number(cMira.lat), lng: Number(cMira.lng), zoom: 16, summary: cMira.address }
-    ];
+    const presets = [];
+    Object.entries(academicPlannerDirectory || {}).forEach(([k, c]) => {
+        if (c && isValidNonZeroCoordPair(Number(c.lat), Number(c.lng))) {
+            const label = `🏫 ${c.name || k}${c.plano ? ` (${c.plano})` : ''}`;
+            presets.push({ text: label, lat: Number(c.lat), lng: Number(c.lng), zoom: 16, summary: c.address || c.name });
+        }
+    });
     const homeLoc = academicPlannerState?.locations?.home;
     if (homeLoc && isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng))) {
         presets.push({ text: '🏠 Mi Casa', lat: Number(homeLoc.lat), lng: Number(homeLoc.lng), zoom: 16, summary: homeLoc.address || homeLoc.label });
@@ -16081,17 +16430,17 @@ function setMapPickerLayer(layer) {
     renderMapPickerViewport();
 }
 
-function openLocationMapPicker(target = 'home') {
+function openLocationMapPicker(target = 'home', options = null) {
     const modal = document.getElementById('locationMapPickerModal');
     const badgeEl = document.getElementById('mapPickerTargetBadge');
-    const resetBtn = document.getElementById('btnResetCampusDefaultLocation');
     const searchInput = document.getElementById('mapPickerSearchInput');
     const resultsEl = document.getElementById('mapPickerSearchResults');
     const addrInput = document.getElementById('mapPickerAddressLabelInput');
     const bannerEl = document.getElementById('mapPickerBanner');
     if (!modal) return;
 
-    const cfg = getMapTargetInitialConfig(target);
+    mapPickerState.draftOptions = options && typeof options === 'object' ? options : null;
+    const cfg = getMapTargetInitialConfig(target, mapPickerState.draftOptions);
     mapPickerState.isOpen = true;
     mapPickerState.target = target;
     mapPickerState.centerLat = cfg.lat;
@@ -16106,9 +16455,6 @@ function openLocationMapPicker(target = 'home') {
     syncMapPickerLayerButtons();
 
     if (badgeEl) badgeEl.textContent = cfg.badge;
-    if (resetBtn) {
-        resetBtn.hidden = !['campus_principal', 'campus_boillot', 'campus_miravalle', 'university'].includes(target);
-    }
     if (searchInput) searchInput.value = '';
     if (resultsEl) {
         resultsEl.replaceChildren();
@@ -16142,7 +16488,6 @@ function initLocationMapPickerModal() {
     const btnClose = document.getElementById('btnCloseLocationMapPicker');
     const btnCancel = document.getElementById('btnCancelMapPickerLocation');
     const btnConfirm = document.getElementById('btnConfirmMapPickerLocation');
-    const btnResetCampus = document.getElementById('btnResetCampusDefaultLocation');
     const btnZoomIn = document.getElementById('btnMapZoomIn');
     const btnZoomOut = document.getElementById('btnMapZoomOut');
     const btnRecenter = document.getElementById('btnMapRecenterPin');
@@ -16404,44 +16749,24 @@ function initLocationMapPickerModal() {
         );
     });
 
-    btnResetCampus?.addEventListener('click', () => {
-        const campusKeyMap = {
-            campus_principal: 'principal',
-            university: 'principal',
-            campus_boillot: 'boillot',
-            campus_miravalle: 'miravalle'
-        };
-        const cKey = campusKeyMap[mapPickerState.target];
-        if (!cKey) return;
-        runWithButtonLock(btnResetCampus, async () => {
-            try {
-                const resData = await submitMutationRequest({
-                    url: '/api/planner/location',
-                    method: 'POST',
-                    scopeKey: `planner-loc-reset-${cKey}`,
-                    signature: `reset:${cKey}:${Date.now()}`,
-                    buildBody: () => ({ target: `reset_campus_${cKey}` }),
-                    parseJson: true
-                });
-                if (resData?.planner) academicPlannerState = resData.planner;
-                if (resData?.campusDirectory) {
-                    academicPlannerDirectory = resData.campusDirectory;
-                    renderItsCroquisDirectory(academicPlannerDirectory);
-                }
-                if (resData?.planner) renderPlannerResidenciasAndWorkUI();
-                if (resData?.commutePreview) renderLiveCommuteCards(resData.commutePreview);
-                closeLocationMapPicker();
-                showToast('ok', tServer(resData?.message) || tUi('Official croquis restored.', 'Croquis oficial restaurado.'));
-            } catch (err) {
-                showToast('err', err.message || 'Could not reset campus location.');
-            }
-        }, { loadingText: tUi('Updating...', 'Actualizando...') });
-    });
-
     btnConfirm?.addEventListener('click', () => {
         const customText = String(addrInput?.value || '').trim();
         const target = mapPickerState.target || 'home';
         const addrToSave = customText || mapPickerState.resolvedAddress || '';
+
+        if (mapPickerState.draftOptions && typeof mapPickerState.draftOptions.onConfirm === 'function') {
+            const onConfirmCb = mapPickerState.draftOptions.onConfirm;
+            mapPickerState.draftOptions = null;
+            onConfirmCb({
+                lat: mapPickerState.pinLat,
+                lng: mapPickerState.pinLng,
+                address: addrToSave,
+                label: customText || addrToSave
+            });
+            closeLocationMapPicker();
+            return;
+        }
+
         const labelToSave = target === 'home'
             ? (document.getElementById('homeLocationLabel')?.value?.trim() || 'Mi Casa')
             : (target.startsWith('campus_')
@@ -16750,7 +17075,11 @@ function initAcademicPlannerHandlers() {
         });
     }
 
-    // Live classroom croquis detector
+    document.getElementById('btnAddCampusPlace')?.addEventListener('click', () => {
+        openCampusPlaceModal('');
+    });
+
+    // Live classroom croquis & custom rooms detector
     const courseRoomInput = document.getElementById('courseRoom');
     const roomBadge = document.getElementById('courseRoomCroquisBadge');
     const courseCampusSelect = document.getElementById('courseCampus');
@@ -16760,8 +17089,26 @@ function initAcademicPlannerHandlers() {
             clearTimeout(roomTimer);
             const roomVal = courseRoomInput.value.trim();
             if (!roomVal) {
-                roomBadge.textContent = 'Type a room (R02, R11, N21, A10, S15) to detect ITS Campus & Croquis building.';
+                roomBadge.textContent = tUi(
+                    'Type a room (R02, R11, N21, A10, S15) to detect ITS Campus & Croquis building.',
+                    'Escribe un salón (R02, R11, N21, A10, S15) para detectar Campus ITS y edificio del Croquis.'
+                );
                 return;
+            }
+            const cleanUpper = roomVal.toUpperCase().replace(/\s+/g, '');
+            const compactUpper = cleanUpper.replace(/-/g, '');
+            for (const [cKey, camp] of Object.entries(academicPlannerDirectory || {})) {
+                const customRooms = Array.isArray(camp?.rooms) ? camp.rooms.map(normalizeCampusRoomTagClient) : [];
+                if (customRooms.some(r => r === cleanUpper || r.replace(/-/g, '') === compactUpper)) {
+                    const campId = camp.id || cKey;
+                    const codeTxt = camp.plano ? ` (${camp.plano})` : '';
+                    roomBadge.textContent = `📍 ${cleanUpper} → ${camp.name || campId}${codeTxt}`;
+                    if (courseCampusSelect) {
+                        renderCourseCampusSelectOptions(campId);
+                        courseCampusSelect.value = campId;
+                    }
+                    break;
+                }
             }
             roomTimer = setTimeout(() => {
                 submitMutationRequest({
@@ -16774,8 +17121,10 @@ function initAcademicPlannerHandlers() {
                 }).then(data => {
                     if (data && data.resolved) {
                         const r = data.resolved;
-                        roomBadge.textContent = `📍 Aula ${r.room} → ${r.buildingName} · ${r.campusName} (${r.croquisCode})`;
+                        const codeSuffix = r.croquisCode ? ` (${r.croquisCode})` : '';
+                        roomBadge.textContent = `📍 Aula ${r.room} → ${r.buildingName} · ${r.campusName}${codeSuffix}`;
                         if (courseCampusSelect && r.campusId) {
+                            renderCourseCampusSelectOptions(r.campusId);
                             courseCampusSelect.value = r.campusId;
                         }
                     }
@@ -16817,7 +17166,7 @@ function initAcademicPlannerHandlers() {
             const name = String(document.getElementById('courseName')?.value || '').trim();
             const teacher = String(document.getElementById('courseTeacher')?.value || '').trim();
             const room = String(document.getElementById('courseRoom')?.value || '').trim().toUpperCase();
-            const campusId = document.getElementById('courseCampus')?.value || 'boillot';
+            const campusId = document.getElementById('courseCampus')?.value || Object.keys(academicPlannerDirectory || {})[0] || 'principal';
             const startTime = String(document.getElementById('courseStartTime')?.value || '09:00').slice(0, 5);
             const endTime = String(document.getElementById('courseEndTime')?.value || '10:00').slice(0, 5);
             const days = Array.from(document.querySelectorAll('#courseDaysGroup input[type="checkbox"]:checked')).map(cb => Number(cb.value));
@@ -17973,6 +18322,7 @@ function initApp() {
     initWordStyleProofing();
     initAcademicPlannerHandlers();
     initQuickLocationModal();
+    initCampusPlaceModal();
     initLocationMapPickerModal();
     initCrisisHandlers();
     initMusicEntityEditModal();
