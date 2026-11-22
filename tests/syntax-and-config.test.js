@@ -1575,11 +1575,16 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
             assert.ok(indexHtml.includes(legacyId), `public/index.html debe conservar ${legacyId}`);
         }
 
-        // Verificar CSP estricta intacta + tiles OSM permitidos solo en img-src
+        // Verificar CSP estricta intacta + tiles cargados vía proxy local autenticado (sin referrerPolicy=no-referrer ni URL directa a tile.openstreetmap.org)
         assert.match(serverJs, /script-src 'self'/);
         assert.match(serverJs, /connect-src 'self'/);
         assert.match(serverJs, /img-src 'self' data: https:\/\/i\.ytimg\.com https:\/\/tile\.openstreetmap\.org https:\/\/\*\.tile\.openstreetmap\.org/);
         assert.ok(serverJs.includes('/api/planner/geocode-search') && serverJs.includes('/api/planner/reverse-geocode'));
+        assert.ok(serverJs.includes('mapTileLimiter') && serverJs.includes('/api/planner/map-tile/:z/:x/:y.png'));
         assert.ok(frontendJs.includes('function openLocationMapPicker(') && frontendJs.includes('function openPlannerCourseModal('));
+        assert.ok(frontendJs.includes('/api/planner/map-tile/'), 'El mapa debe solicitar tiles a través del proxy local autenticado');
+        assert.ok(!frontendJs.includes("referrerPolicy = 'no-referrer'"), 'No debe enviarse referrerPolicy no-referrer para tiles del mapa');
+        assert.ok(!frontendJs.includes('https://tile.openstreetmap.org/'), 'frontend.js no debe cargar tiles directamente desde tile.openstreetmap.org');
+        assert.ok(indexHtml.includes('id="btnMapLayerStreets"') && indexHtml.includes('id="btnMapLayerSatellite"'), 'El selector de mapa debe incluir cambio de capa Calles / Satélite');
     });
 });

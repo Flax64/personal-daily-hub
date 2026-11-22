@@ -15673,6 +15673,7 @@ const mapPickerState = {
     pinLat: 25.4414,
     pinLng: -100.9922,
     zoom: 15,
+    layer: 'streets',
     resolvedAddress: '',
     labelDirty: false,
     draggingMap: false,
@@ -15879,7 +15880,10 @@ function renderMapPickerViewport() {
 
     renderMapPickerCanvas(width, height, viewLeft, viewTop, z);
 
-    // Sync OpenStreetMap tiles (img-src allows tile.openstreetmap.org)
+    // Load map tiles via authenticated same-origin proxy (CARTO / OSM / Esri fallback & cache)
+    const activeLayer = mapPickerState.layer === 'satellite' ? 'satellite' : 'streets';
+    const layerQuery = activeLayer === 'satellite' ? '?layer=satellite' : '';
+    const tileLoadedOpacity = activeLayer === 'satellite' ? '0.96' : '0.94';
     const minTileX = Math.floor(viewLeft / 256);
     const maxTileX = Math.floor((viewLeft + width) / 256);
     const minTileY = Math.floor(viewTop / 256);
@@ -15891,7 +15895,7 @@ function renderMapPickerViewport() {
         for (let ty = minTileY; ty <= maxTileY; ty++) {
             if (ty < 0 || ty >= nTiles) continue;
             const wrappedX = ((tx % nTiles) + nTiles) % nTiles;
-            const cacheKey = `${z}/${tx}/${ty}`;
+            const cacheKey = `${activeLayer}/${z}/${tx}/${ty}`;
             visibleKeys.add(cacheKey);
             let img = mapPickerState.tileElements.get(cacheKey);
             if (!img) {
@@ -15900,14 +15904,17 @@ function renderMapPickerViewport() {
                 img.alt = '';
                 img.draggable = false;
                 img.loading = 'eager';
-                img.referrerPolicy = 'no-referrer';
-                img.src = `https://tile.openstreetmap.org/${z}/${wrappedX}/${ty}.png`;
+                img.style.opacity = '0';
                 img.addEventListener('error', () => {
                     img.style.opacity = '0';
                 });
                 img.addEventListener('load', () => {
-                    img.style.opacity = '0.92';
+                    img.style.opacity = tileLoadedOpacity;
                 });
+                img.src = `/api/planner/map-tile/${z}/${wrappedX}/${ty}.png${layerQuery}`;
+                if (img.complete && img.naturalWidth > 0) {
+                    img.style.opacity = tileLoadedOpacity;
+                }
                 mapPickerState.tileElements.set(cacheKey, img);
                 tilesLayer.appendChild(img);
             }
@@ -16037,6 +16044,37 @@ function populateMapPickerQuickPresets() {
     });
 }
 
+function syncMapPickerLayerButtons() {
+    const activeLayer = mapPickerState.layer === 'satellite' ? 'satellite' : 'streets';
+    const btnStreets = document.getElementById('btnMapLayerStreets');
+    const btnSatellite = document.getElementById('btnMapLayerSatellite');
+    const attrEl = document.getElementById('mapPickerAttribution');
+    if (btnStreets) {
+        btnStreets.classList.toggle('is-active', activeLayer === 'streets');
+        btnStreets.setAttribute('aria-pressed', String(activeLayer === 'streets'));
+    }
+    if (btnSatellite) {
+        btnSatellite.classList.toggle('is-active', activeLayer === 'satellite');
+        btnSatellite.setAttribute('aria-pressed', String(activeLayer === 'satellite'));
+    }
+    if (attrEl) {
+        attrEl.textContent = activeLayer === 'satellite'
+            ? '© Esri World Imagery · OpenStreetMap'
+            : '© OpenStreetMap contributors · CARTO';
+    }
+}
+
+function setMapPickerLayer(layer) {
+    const nextLayer = layer === 'satellite' ? 'satellite' : 'streets';
+    if (mapPickerState.layer === nextLayer) {
+        syncMapPickerLayerButtons();
+        return;
+    }
+    mapPickerState.layer = nextLayer;
+    syncMapPickerLayerButtons();
+    renderMapPickerViewport();
+}
+
 function openLocationMapPicker(target = 'home') {
     const modal = document.getElementById('locationMapPickerModal');
     const badgeEl = document.getElementById('mapPickerTargetBadge');
@@ -16059,6 +16097,7 @@ function openLocationMapPicker(target = 'home') {
     mapPickerState.labelDirty = false;
     mapPickerState.tileElements.forEach(el => el.remove());
     mapPickerState.tileElements.clear();
+    syncMapPickerLayerButtons();
 
     if (badgeEl) badgeEl.textContent = cfg.badge;
     if (resetBtn) {
@@ -16101,6 +16140,8 @@ function initLocationMapPickerModal() {
     const btnZoomIn = document.getElementById('btnMapZoomIn');
     const btnZoomOut = document.getElementById('btnMapZoomOut');
     const btnRecenter = document.getElementById('btnMapRecenterPin');
+    const btnLayerStreets = document.getElementById('btnMapLayerStreets');
+    const btnLayerSatellite = document.getElementById('btnMapLayerSatellite');
     const btnSearch = document.getElementById('btnMapPickerSearch');
     const searchInput = document.getElementById('mapPickerSearchInput');
     const resultsEl = document.getElementById('mapPickerSearchResults');
@@ -16135,6 +16176,15 @@ function initLocationMapPickerModal() {
         mapPickerState.centerLat = mapPickerState.pinLat;
         mapPickerState.centerLng = mapPickerState.pinLng;
         renderMapPickerViewport();
+    });
+
+    btnLayerStreets?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setMapPickerLayer('streets');
+    });
+    btnLayerSatellite?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setMapPickerLayer('satellite');
     });
 
     viewport.addEventListener('wheel', (e) => {
@@ -16187,7 +16237,14 @@ function initLocationMapPickerModal() {
     pinEl?.addEventListener('pointercancel', finishPinDrag);
 
     viewport.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('.map-picker-zoom-controls') || e.target.closest('.map-picker-ref-dot') || e.target.closest('.map-picker-pin-marker')) {
+        if (
+            e.target.closest('.map-picker-zoom-controls')
+            || e.target.closest('.map-picker-layer-toggle')
+            || e.target.closest('.map-picker-hint-pill')
+            || e.target.closest('.map-picker-attribution')
+            || e.target.closest('.map-picker-ref-dot')
+            || e.target.closest('.map-picker-pin-marker')
+        ) {
             return;
         }
         const z = Math.round(mapPickerState.zoom);

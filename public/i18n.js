@@ -1846,7 +1846,12 @@
         ['📍 Pin on Map', '📍 Fijar en Mapa'],
         ['↺ Restore', '↺ Restaurar'],
         ['📐 Official Croquis', '📐 Croquis Oficial'],
-        ['📍 Custom Pin', '📍 Pin Personalizado']
+        ['📍 Custom Pin', '📍 Pin Personalizado'],
+        ['Map layer', 'Capa del mapa'],
+        ['🗺️ Streets', '🗺️ Calles'],
+        ['Show street map view', 'Mostrar vista de calles'],
+        ['🛰️ Satellite', '🛰️ Satélite'],
+        ['Show satellite imagery view', 'Mostrar vista satelital']
     ];
 
     var EN_FROM_KEY = new Map();

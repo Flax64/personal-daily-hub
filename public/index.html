@@ -3482,13 +3482,17 @@
                     <span class="map-picker-pin-head">📍</span>
                     <span class="map-picker-pin-shadow"></span>
                 </div>
+                <div class="map-picker-layer-toggle" role="group" aria-label="Map layer">
+                    <button type="button" class="map-picker-layer-btn is-active" id="btnMapLayerStreets" aria-pressed="true" title="Show street map view">🗺️ Streets</button>
+                    <button type="button" class="map-picker-layer-btn" id="btnMapLayerSatellite" aria-pressed="false" title="Show satellite imagery view">🛰️ Satellite</button>
+                </div>
                 <div class="map-picker-zoom-controls">
                     <button type="button" class="map-picker-zoom-btn" id="btnMapZoomIn" aria-label="Zoom in" title="Zoom in">+</button>
                     <button type="button" class="map-picker-zoom-btn" id="btnMapZoomOut" aria-label="Zoom out" title="Zoom out">−</button>
                     <button type="button" class="map-picker-zoom-btn" id="btnMapRecenterPin" aria-label="Center map on pin" title="Center map on selected pin">🎯</button>
                 </div>
                 <div class="map-picker-hint-pill">Drag the map or tap any spot to move the pin</div>
-                <div class="map-picker-attribution">© OpenStreetMap contributors</div>
+                <div class="map-picker-attribution" id="mapPickerAttribution">© OpenStreetMap contributors · CARTO</div>
             </div>
 
             <div class="map-picker-summary-card">
