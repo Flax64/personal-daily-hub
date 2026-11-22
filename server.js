@@ -9782,13 +9782,13 @@ app.post('/api/language/translate', apiWriteLimiter.middleware, requireAdmin, re
 
 app.post('/api/english/music/translate-lyrics', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
     try {
-        const nativeTracksEs = String(req.body.tracks?.es || '').trim().slice(0, 12000);
+        const nativeTracksEs = String(req.body.tracks?.es || '').trim().slice(0, 24000);
         const lyrics = String(req.body.lyrics || req.body.text || req.body.tracks?.original || nativeTracksEs || '').trim();
         if (!lyrics) {
             return res.status(400).send('Provide song lyrics to translate to Spanish.');
         }
-        if (lyrics.length > 12000) {
-            return res.status(400).send('Lyrics cannot exceed 12,000 characters.');
+        if (lyrics.length > 24000) {
+            return res.status(400).send('Lyrics cannot exceed 24,000 characters.');
         }
 
         const modeRaw = String(req.body.mode || 'auto').toLowerCase();
@@ -9812,7 +9812,7 @@ app.post('/api/english/music/translate-lyrics', apiWriteLimiter.middleware, requ
             .digest('hex');
 
         const embeddedEs = (!forceRefresh && mode !== 'offline') ? extractSpanishBlockFromLyrics(lyrics) : '';
-        const ytEsLyrics = (!forceRefresh && mode !== 'offline') ? (nativeTracksEs || (/(?:^|\n)\[ES(?:-[^\]]+)?\]\s*\n/i.test(lyrics) ? embeddedEs : '')) : '';
+        const ytEsLyrics = (!forceRefresh && mode !== 'offline') ? (nativeTracksEs || (/(?:^|\n)(?:\[ES(?:-[^\]]+)?\]|Spanish)\s*\n/i.test(lyrics) ? embeddedEs : '')) : '';
         let result = (!ytEsLyrics && !embeddedEs && !forceRefresh && mode !== 'offline') ? lyricsTranslationCache.get(cacheKey) : null;
         if (ytEsLyrics) {
             result = {

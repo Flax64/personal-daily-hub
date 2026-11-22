@@ -1859,6 +1859,9 @@ def _extraer_campos_bloque_word(lineas_texto, heading_text=""):
     for raw in lineas_texto or []:
         line = str(raw or "").replace("\r", "").strip()
         if not line:
+            if current_key in ("lyrics_study", "stanzas_breakdown") and fields.get(current_key):
+                if not fields[current_key].endswith("\n\n"):
+                    fields[current_key] = fields[current_key].rstrip("\n") + "\n\n"
             continue
         matched_label = False
         for label, key in _WORD_SONG_LABEL_MAP:
@@ -1880,24 +1883,72 @@ def _extraer_campos_bloque_word(lineas_texto, heading_text=""):
                 break
         if not matched_label and current_key:
             prev = fields.get(current_key, "")
-            fields[current_key] = f"{prev}\n{line}" if prev else line
+            if prev:
+                sep = "" if prev.endswith("\n") else "\n"
+                fields[current_key] = f"{prev}{sep}{line}"
+            else:
+                fields[current_key] = line
 
     return fields
 
 
 _LANG_CODE_ALIASES = {
     "kr": "ko",
+    "korean": "ko",
+    "coreano": "ko",
+    "en": "en",
+    "eng": "en",
+    "english": "en",
+    "inglés": "en",
+    "ingles": "en",
     "jp": "ja",
+    "jpn": "ja",
+    "japanese": "ja",
+    "japonés": "ja",
+    "japones": "ja",
+    "es": "es",
+    "esp": "es",
+    "spa": "es",
+    "spanish": "es",
+    "español": "es",
+    "espanol": "es",
     "orig": "original",
+    "original": "original",
     "jp-en": "original",
     "en-jp": "original",
     "ja-en": "original",
     "en-ja": "original",
 }
+
+_CANON_LYRIC_LANG_NAMES = {
+    "original": "Original",
+    "ko": "Korean",
+    "en": "English",
+    "ja": "Japanese",
+    "es": "Spanish",
+}
+
 _RE_ENCABEZADO_IDIOMA_LETRA = re.compile(
-    r"^(?:===\s*)?\[(?:Letra\s*[—\-]\s*)?(original|orig|en|ko|kr|es|ja|jp|jp-en|en-jp|ja-en|en-ja|zh|fr|pt|de|it|ru|sub|und)(?:-[A-Za-z0-9]+)?(?:\s*(?:[—/\-])[^\]]*)?\](?:\s*===)?\s*$",
+    r"^(?:===\s*)?(?:"
+    r"\[(?:Letra\s*[—\-]\s*)?(original|orig|en|eng|english|ko|kr|korean|es|esp|spanish|ja|jp|japanese|jp-en|en-jp|ja-en|en-ja|zh|fr|pt|de|it|ru|sub|und)(?:-[A-Za-z0-9]+)?(?:\s*[—/\-:]\s*([^\]]*))?\]"
+    r"|"
+    r"(Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:]\s*((?:Traducci[oó]n|Translation|Subt[ií]tulos|Subtitles|IA|AI|Local|Romaji|Romanizaci[oó]n)[^\n]*))?"
+    r")(?:\s*===)?\s*$",
     re.IGNORECASE,
 )
+
+
+def _formatear_encabezado_idioma_word(clave, raw_header=""):
+    base_name = _CANON_LYRIC_LANG_NAMES.get(clave) or (str(clave or "").strip().title() or "Original")
+    raw = str(raw_header or "").strip()
+    if raw:
+        m = _RE_ENCABEZADO_IDIOMA_LETRA.match(raw)
+        if m:
+            suffix = (m.group(2) or m.group(4) or "").strip()
+            suffix = re.sub(r"\s*===+\s*$", "", suffix).strip(" —-:")
+            if suffix:
+                return f"{base_name} — {suffix}"
+    return base_name
 _RE_HANGUL_CHAR = re.compile(r"[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]")
 _RE_JAPANESE_CHAR = re.compile(
     r"[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]"
@@ -2042,7 +2093,7 @@ def _limpiar_notas_redundantes_cancion(notes_val, lyrics_val=""):
     lyrics_clean = str(lyrics_val or "")
     has_es_in_lyrics = bool(
         re.search(
-            r"(?:^|\n)(?:===\s*)?\[es(?:\s*[—/\-][^\]]*)?\](?:\s*===)?\s*(?:\n|$)",
+            r"(?:^|\n)(?:(?:===\s*)?\[es(?:\s*[—/\-][^\]]*)?\](?:\s*===)?|Spanish(?:\s*[—\-:][^\n]*)?)\s*(?:\n|$)",
             lyrics_clean,
             re.IGNORECASE,
         )
@@ -2054,87 +2105,126 @@ def _limpiar_notas_redundantes_cancion(notes_val, lyrics_val=""):
     return notes_clean
 
 
+def _deduplicar_lineas_bloque_letra(cuerpo):
+    """Elimina estrofas consecutivas idénticas dentro del mismo idioma sin perder coros reales entre versos."""
+    raw = str(cuerpo or "").replace("\r", "").strip()
+    if not raw:
+        return ""
+    stanzas = [st.strip() for st in re.split(r"\n{2,}", raw) if st.strip()]
+    clean_stanzas = []
+    prev_stanza_norm = ""
+    for st in stanzas:
+        lines_in = [ln.rstrip() for ln in st.split("\n") if ln.strip()]
+        dedup_lines = []
+        for ln in lines_in:
+            if dedup_lines and " ".join(dedup_lines[-1].split()).lower() == " ".join(ln.split()).lower():
+                continue
+            dedup_lines.append(ln)
+        st_clean = "\n".join(dedup_lines).strip()
+        st_norm = " ".join(st_clean.split()).lower()
+        if st_norm and st_norm == prev_stanza_norm:
+            continue
+        clean_stanzas.append(st_clean)
+        prev_stanza_norm = st_norm
+    return "\n\n".join(clean_stanzas).strip()
+
+
 def _dividir_letra_por_idiomas(texto):
-    """Divide una letra en bloques [(clave_idioma, encabezado, cuerpo)] según [EN]/[KO]/=== [ES — ...] ===."""
+    """Divide una letra en bloques [(clave_idioma, encabezado, cuerpo)] aceptando English/Spanish y [EN]/[ES]."""
     bloques = []
     clave, encabezado, cuerpo = "", "", []
     for raw in str(texto or "").replace("\r", "").split("\n"):
         m = _RE_ENCABEZADO_IDIOMA_LETRA.match(raw.strip())
         if m:
             if encabezado or any(ln.strip() for ln in cuerpo):
-                bloques.append((clave, encabezado, "\n".join(cuerpo).strip()))
-            raw_code = m.group(1).lower()
+                bloques.append((clave, encabezado, _deduplicar_lineas_bloque_letra("\n".join(cuerpo))))
+            raw_code = (m.group(1) or m.group(3) or "").lower()
             clave = _LANG_CODE_ALIASES.get(raw_code, raw_code)
-            encabezado, cuerpo = raw.strip(), []
+            encabezado = _formatear_encabezado_idioma_word(clave, raw.strip())
+            cuerpo = []
         else:
             cuerpo.append(raw)
     if encabezado or any(ln.strip() for ln in cuerpo):
-        bloques.append((clave, encabezado, "\n".join(cuerpo).strip()))
+        bloques.append((clave, encabezado, _deduplicar_lineas_bloque_letra("\n".join(cuerpo))))
     return bloques
 
 
 def _combinar_letra_por_idiomas(prev_val, new_val, append=False):
-    """Fusiona letras sin duplicar bloques de idioma ni perder idiomas o bloques base ya guardados en Word."""
+    """Fusiona letras sin duplicar bloques de idioma ni perder idiomas y usa nombres completos (English, Spanish, etc.)."""
     prev_clean = _limpiar_ruido_letra(prev_val)
     new_clean = _limpiar_ruido_letra(new_val)
-    if not new_clean:
-        return prev_clean
-    if not prev_clean:
-        return new_clean
+    if not new_clean and not prev_clean:
+        return ""
 
     def norm(s):
         return " ".join(str(s or "").split()).lower()
 
-    prev_norm = norm(prev_clean)
-    new_norm = norm(new_clean)
-    if new_norm == prev_norm or new_norm in prev_norm:
-        return prev_clean
-    if prev_norm in new_norm:
-        return new_clean
+    if not new_clean:
+        prev_blocks = _dividir_letra_por_idiomas(prev_clean)
+        if not any(b[1] for b in prev_blocks):
+            return _deduplicar_lineas_bloque_letra(prev_clean)
+        new_clean = ""
+    elif not prev_clean:
+        new_blocks = _dividir_letra_por_idiomas(new_clean)
+        if not any(b[1] for b in new_blocks):
+            return _deduplicar_lineas_bloque_letra(new_clean)
+    else:
+        prev_norm = norm(prev_clean)
+        new_norm = norm(new_clean)
+        if new_norm == prev_norm or new_norm in prev_norm:
+            if not any(b[1] for b in _dividir_letra_por_idiomas(prev_clean)):
+                return _deduplicar_lineas_bloque_letra(prev_clean)
+            new_clean = ""
 
-    prev_blocks = _dividir_letra_por_idiomas(prev_clean)
-    new_blocks = _dividir_letra_por_idiomas(new_clean)
+    prev_blocks = _dividir_letra_por_idiomas(prev_clean) if prev_clean else []
+    new_blocks = _dividir_letra_por_idiomas(new_clean) if new_clean else []
     prev_has_lang = any(b[1] for b in prev_blocks)
     new_has_lang = any(b[1] for b in new_blocks)
 
     if not prev_has_lang and not new_has_lang:
-        return _combinar_campo_multilinea(prev_clean, new_clean, append=append)
+        return _deduplicar_lineas_bloque_letra(_combinar_campo_multilinea(prev_clean, new_clean, append=append))
 
     ordered_keys = []
     block_map = {}
 
     for clave, enc, cuerpo in prev_blocks:
         slot = clave if enc else "__base__"
+        clean_body = _deduplicar_lineas_bloque_letra(cuerpo)
         if slot not in block_map:
             ordered_keys.append(slot)
-            block_map[slot] = (clave, enc, cuerpo)
-        elif cuerpo and norm(cuerpo) not in norm(block_map[slot][2]):
+            block_map[slot] = (clave, enc, clean_body)
+        elif clean_body and norm(clean_body) not in norm(block_map[slot][2]):
             prev_c = block_map[slot][2]
             block_map[slot] = (
                 clave,
                 block_map[slot][1] or enc,
-                f"{prev_c}\n\n{cuerpo}".strip() if prev_c else cuerpo,
+                _deduplicar_lineas_bloque_letra(f"{prev_c}\n\n{clean_body}".strip() if prev_c else clean_body),
             )
 
     for clave, enc, cuerpo in new_blocks:
         slot = clave if enc else "__base__"
+        clean_body = _deduplicar_lineas_bloque_letra(cuerpo)
         if slot in block_map:
             old_clave, old_enc, old_cuerpo = block_map[slot]
             if (
                 slot == "__base__"
                 and append
                 and old_cuerpo
-                and norm(cuerpo) != norm(old_cuerpo)
+                and norm(clean_body) != norm(old_cuerpo)
             ):
-                updated_body = _combinar_campo_multilinea(
-                    old_cuerpo, cuerpo, append=True
-                )
+                updated_body = _deduplicar_lineas_bloque_letra(_combinar_campo_multilinea(old_cuerpo, clean_body, append=True))
             else:
-                updated_body = cuerpo or old_cuerpo
-            block_map[slot] = (clave or old_clave, enc or old_enc, updated_body)
+                updated_body = clean_body or old_cuerpo
+            chosen_enc = enc if (enc and ("—" in enc or len(enc) > len(old_enc or ""))) else (old_enc or enc)
+            final_clave = clave or old_clave
+            block_map[slot] = (
+                final_clave,
+                _formatear_encabezado_idioma_word(final_clave, chosen_enc) if final_clave else chosen_enc,
+                updated_body,
+            )
         else:
             ordered_keys.append(slot)
-            block_map[slot] = (clave, enc, cuerpo)
+            block_map[slot] = (clave, _formatear_encabezado_idioma_word(clave, enc) if clave else enc, clean_body)
 
     canon_order = {"__base__": 0, "original": 1, "ko": 2, "en": 3, "ja": 4, "es": 5}
     ordered_keys = sorted(
@@ -2157,7 +2247,8 @@ def _combinar_letra_por_idiomas(prev_val, new_val, append=False):
             continue
         if h:
             seen_bodies.add(h)
-        merged.append((clave, enc, cuerpo))
+        pretty_enc = _formatear_encabezado_idioma_word(clave, enc) if clave else enc
+        merged.append((clave, pretty_enc, cuerpo))
 
     return "\n\n".join(
         f"{enc}\n{cuerpo}".strip() if enc else cuerpo for _, enc, cuerpo in merged
@@ -2194,7 +2285,7 @@ def _combinar_metadata_cancion_word(existing_fields, new_entry):
         raw_old_lyrics, raw_new_lyrics, append=append_study
     )
     if not re.search(
-        r"(?:^|\n)(?:===\s*)?\[es(?:\s*[—/\-][^\]]*)?\](?:\s*===)?\s*(?:\n|$)",
+        r"(?:^|\n)(?:(?:===\s*)?\[es(?:\s*[—/\-][^\]]*)?\](?:\s*===)?|Spanish(?:\s*[—\-:][^\n]*)?)\s*(?:\n|$)",
         combined_lyrics,
         re.IGNORECASE,
     ):
@@ -2202,7 +2293,7 @@ def _combinar_metadata_cancion_word(existing_fields, new_entry):
         if m_es and m_es.group(1).strip():
             combined_lyrics = _combinar_letra_por_idiomas(
                 combined_lyrics,
-                f"=== [ES — Traducción IA] ===\n{m_es.group(1).strip()}",
+                f"Spanish — Traducción IA\n{m_es.group(1).strip()}",
                 append=False,
             )
 
@@ -2269,33 +2360,80 @@ def _combinar_metadata_cancion_word(existing_fields, new_entry):
 
 def _agregar_lineas_texto(lineas_spec, label, raw_text, preserve_stanzas=False):
     if preserve_stanzas:
-        raw_lines = str(raw_text or "").replace("\r", "").split("\n")
+        normalized_raw = _combinar_letra_por_idiomas("", raw_text) if raw_text else ""
+        if not normalized_raw:
+            return
         cleaned = []
         pending_blank = False
-        for raw_ln in raw_lines:
+        for raw_ln in str(normalized_raw).replace("\r", "").split("\n"):
             s = raw_ln.strip()
             if not s:
                 if cleaned:
                     pending_blank = True
                 continue
-            if pending_blank and cleaned and cleaned[-1] != "":
+            m_hdr = _RE_ENCABEZADO_IDIOMA_LETRA.match(s)
+            if m_hdr:
+                raw_code = (m_hdr.group(1) or m_hdr.group(3) or "").lower()
+                canon_k = _LANG_CODE_ALIASES.get(raw_code, raw_code)
+                s = _formatear_encabezado_idioma_word(canon_k, s)
+                if cleaned and cleaned[-1] != "":
+                    cleaned.append("")
+                pending_blank = False
+            elif pending_blank and cleaned and cleaned[-1] != "":
                 cleaned.append("")
-            pending_blank = False
+                pending_blank = False
             cleaned.append(s)
         while cleaned and cleaned[-1] == "":
             cleaned.pop()
-        for idx, line in enumerate(cleaned):
-            is_lang_hdr = idx > 0 and bool(_RE_ENCABEZADO_IDIOMA_LETRA.match(line))
-            lineas_spec.append(
-                {
-                    "label": label if idx == 0 else "",
-                    "text": line,
-                    "size": 11,
-                    "bold_all": is_lang_hdr,
-                    "italic": False,
-                    "muted": False,
-                }
-            )
+        if not cleaned:
+            return
+        lineas_spec.append(
+            {
+                "label": label.rstrip(),
+                "text": "",
+                "size": 11,
+                "bold_all": True,
+                "italic": False,
+                "muted": False,
+            }
+        )
+        for line in cleaned:
+            is_lang_hdr = bool(line and _RE_ENCABEZADO_IDIOMA_LETRA.match(line))
+            if not line:
+                lineas_spec.append(
+                    {
+                        "label": "",
+                        "text": "",
+                        "size": 11,
+                        "bold_all": False,
+                        "italic": False,
+                        "muted": False,
+                    }
+                )
+            elif is_lang_hdr:
+                lineas_spec.append(
+                    {
+                        "label": "",
+                        "text": line,
+                        "size": 11,
+                        "bold_all": True,
+                        "italic": False,
+                        "muted": False,
+                        "indent_left": 240,
+                    }
+                )
+            else:
+                lineas_spec.append(
+                    {
+                        "label": "",
+                        "text": line,
+                        "size": 11,
+                        "bold_all": False,
+                        "italic": False,
+                        "muted": False,
+                        "indent_left": 480,
+                    }
+                )
         return
     partes = _dividir_lineas_limpias(raw_text)
     for idx, line in enumerate(partes):
@@ -3587,9 +3725,13 @@ def _ooxml_crear_parrafo_texto(
     italic=False,
     muted=False,
     page_break_before=False,
+    indent_left=None,
+    outline_level=None,
 ):
     p = _ooxml_w_el("p")
-    if style_id or page_break_before:
+    has_indent = indent_left is not None and int(indent_left) > 0
+    has_outline = outline_level is not None and 0 <= int(outline_level) <= 8
+    if style_id or page_break_before or has_indent or has_outline:
         ppr = _ooxml_w_el("pPr")
         if style_id:
             ppr.append(_ooxml_w_el("pStyle", val=style_id))
@@ -3597,6 +3739,10 @@ def _ooxml_crear_parrafo_texto(
             ppr.append(_ooxml_w_el("pageBreakBefore"))
         elif style_id:
             ppr.append(_ooxml_w_el("pageBreakBefore", val="0"))
+        if has_indent:
+            ppr.append(_ooxml_w_el("ind", left=int(indent_left)))
+        if has_outline:
+            ppr.append(_ooxml_w_el("outlineLvl", val=int(outline_level)))
         p.append(ppr)
     color = "666666" if muted else None
     if label_prefix:
@@ -3628,7 +3774,16 @@ def _ooxml_construir_bloque_elementos(
     heading_size,
     spec_lines,
     page_break_before=False,
+    outline_level=None,
 ):
+    if outline_level is None:
+        low_s = str(heading_style_id or "").lower()
+        if "1" in low_s:
+            outline_level = 0
+        elif "2" in low_s:
+            outline_level = 1
+        elif "3" in low_s:
+            outline_level = 2
     elems = [
         _ooxml_crear_parrafo_texto(
             style_id=heading_style_id,
@@ -3636,6 +3791,7 @@ def _ooxml_construir_bloque_elementos(
             font_size=heading_size,
             bold_all=True,
             page_break_before=page_break_before,
+            outline_level=outline_level,
         )
     ]
     for item in spec_lines or []:
@@ -3648,6 +3804,7 @@ def _ooxml_construir_bloque_elementos(
                 italic=bool(item.get("italic", False)),
                 muted=bool(item.get("muted", False)),
                 page_break_before=False,
+                indent_left=item.get("indent_left"),
             )
         )
     elems.append(_ooxml_w_el("p"))
@@ -3686,11 +3843,18 @@ def _ooxml_establecer_texto_heading(p_elem, heading_text, font_size):
 
 
 def _ooxml_encontrar_rango_toc(body_children):
-    """Encuentra el rango [start, end) de párrafos pertenecientes al campo TOC principal."""
+    """Encuentra el rango [start, end) de párrafos o contenedor w:sdt perteneciente a la TOC principal."""
     p_tag = _ooxml_w_tag("p")
+    sdt_tag = _ooxml_w_tag("sdt")
     fld_tag = _ooxml_w_tag("fldChar")
     instr_tag = _ooxml_w_tag("instrText")
     ftype_attr = _ooxml_w_tag("fldCharType")
+
+    for idx, child in enumerate(body_children):
+        if child.tag == sdt_tag:
+            sdt_txt = " ".join((it.text or "") for it in child.iter(instr_tag))
+            if "TOC" in sdt_txt.upper():
+                return idx, idx + 1
 
     depth = 0
     in_toc = False
@@ -4099,6 +4263,159 @@ def _ooxml_bloque_duplicado(body, items, sec_start, sec_end, spec):
     return False
 
 
+def _ooxml_asegurar_estilos_headings_y_toc(styles_bytes, orig_estilos_ids=None):
+    """Garantiza que word/styles.xml defina Heading1..3 (con outlineLvl), TOC1..3 y Hyperlink."""
+    w_ns_uri = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    if not styles_bytes:
+        styles_bytes = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+            f'<w:styles xmlns:w="{w_ns_uri}"></w:styles>'
+        ).encode("utf-8")
+    try:
+        ET.register_namespace("w", w_ns_uri)
+        root = ET.fromstring(styles_bytes)
+    except ET.ParseError:
+        return styles_bytes
+
+    id_attr = _ooxml_w_tag("styleId")
+    existing = {}
+    for st in root.findall(f".//{_ooxml_w_tag('style')}"):
+        sid = st.attrib.get(id_attr, "")
+        if sid:
+            existing[sid] = st
+
+    ids = orig_estilos_ids or {}
+    h1_id = ids.get("heading_1") or "Heading1"
+    h2_id = ids.get("heading_2") or "Heading2"
+    h3_id = ids.get("heading_3") or "Heading3"
+    toc1_id = ids.get("toc_1") or "TOC1"
+    toc2_id = ids.get("toc_2") or "TOC2"
+    toc3_id = ids.get("toc_3") or "TOC3"
+    hl_id = ids.get("hyperlink") or "Hyperlink"
+
+    def _ensure_heading(sid, name_val, outline_num, sz_half):
+        st = existing.get(sid)
+        if st is None:
+            st = ET.fromstring(
+                f'<w:style xmlns:w="{w_ns_uri}" w:type="paragraph" w:styleId="{sid}">'
+                f'<w:name w:val="{name_val}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>'
+                f'<w:pPr><w:keepNext/><w:outlineLvl w:val="{outline_num}"/></w:pPr>'
+                f'<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="{sz_half}"/></w:rPr>'
+                f"</w:style>"
+            )
+            root.append(st)
+            existing[sid] = st
+            return
+        ppr = st.find(_ooxml_w_tag("pPr"))
+        if ppr is None:
+            ppr = _ooxml_w_el("pPr")
+            st.append(ppr)
+        if ppr.find(_ooxml_w_tag("outlineLvl")) is None:
+            ppr.append(_ooxml_w_el("outlineLvl", val=outline_num))
+
+    _ensure_heading(h1_id, "heading 1", 0, 30)
+    _ensure_heading(h2_id, "heading 2", 1, 26)
+    _ensure_heading(h3_id, "heading 3", 2, 23)
+
+    for tid, tname, tind, tsz in (
+        (toc1_id, "toc 1", 0, 21),
+        (toc2_id, "toc 2", 240, 20),
+        (toc3_id, "toc 3", 480, 19),
+    ):
+        if tid not in existing:
+            ind_xml = f'<w:ind w:left="{tind}"/>' if tind else ""
+            st = ET.fromstring(
+                f'<w:style xmlns:w="{w_ns_uri}" w:type="paragraph" w:styleId="{tid}">'
+                f'<w:name w:val="{tname}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'
+                f'<w:pPr><w:spacing w:after="40"/>{ind_xml}</w:pPr>'
+                f'<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="{tsz}"/></w:rPr>'
+                f"</w:style>"
+            )
+            root.append(st)
+
+    if hl_id not in existing:
+        st = ET.fromstring(
+            f'<w:style xmlns:w="{w_ns_uri}" w:type="character" w:styleId="{hl_id}">'
+            '<w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr>'
+            "</w:style>"
+        )
+        root.append(st)
+
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + ET.tostring(root, encoding="unicode")).encode("utf-8")
+
+
+def _ooxml_establecer_estilo_y_outline(p_elem, style_id, outline_level):
+    ppr = p_elem.find(_ooxml_w_tag("pPr"))
+    if ppr is None:
+        ppr = _ooxml_w_el("pPr")
+        p_elem.insert(0, ppr)
+    pstyle = ppr.find(_ooxml_w_tag("pStyle"))
+    if pstyle is not None:
+        pstyle.attrib[_ooxml_w_tag("val")] = style_id
+    else:
+        ppr.insert(0, _ooxml_w_el("pStyle", val=style_id))
+    for old_out in list(ppr.findall(_ooxml_w_tag("outlineLvl"))):
+        ppr.remove(old_out)
+    ppr.append(_ooxml_w_el("outlineLvl", val=int(outline_level)))
+
+
+def _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids):
+    """Repara álbumes/canciones existentes que perdieron Heading 2/3 o outlineLvl para que aparezcan en el índice."""
+    p_tag = _ooxml_w_tag("p")
+    children = list(body)
+    toc_range = _ooxml_encontrar_rango_toc(children)
+    t_start, t_end = toc_range if toc_range[0] is not None else (-1, -1)
+    sect_idx = _ooxml_indice_sectpr(body)
+
+    for idx in range(sect_idx):
+        if t_start <= idx < t_end:
+            continue
+        child = children[idx]
+        if child.tag != p_tag:
+            continue
+        lvl = _nivel_parrafo_ooxml(child, style_levels)
+        if lvl in (1, 2, 3):
+            sid = estilo_ids.get(f"heading_{lvl}") or f"Heading{lvl}"
+            ppr = child.find(_ooxml_w_tag("pPr"))
+            if ppr is None or ppr.find(_ooxml_w_tag("outlineLvl")) is None:
+                _ooxml_establecer_estilo_y_outline(child, sid, lvl - 1)
+
+    sec_start, sec_end, items = _ooxml_buscar_rango_seccion(body, style_levels, "music", toc_range)
+    if sec_start is None:
+        return
+
+    re_album_like = re.compile(
+        r"^(?:Playlist:|Singles\s*&\s*Standalone\b|.+\((?:Album|Mini Album|EP|Single|Collab Single|Mixtape|OST|Soundtrack|Compilation)[^)]*\)$)",
+        re.IGNORECASE,
+    )
+    children = list(body)
+    for idx in range(sec_start + 1, sec_end):
+        child = children[idx]
+        if child.tag != p_tag:
+            continue
+        lvl, txt = items[idx]
+        if not txt or lvl in (1, 2, 3):
+            continue
+        next_txt = ""
+        for j in range(idx + 1, min(sec_end, idx + 4)):
+            if items[j][1]:
+                next_txt = items[j][1]
+                break
+        if next_txt.startswith("Song:"):
+            _ooxml_establecer_estilo_y_outline(child, estilo_ids["heading_3"], 2)
+            for k in range(idx - 1, sec_start, -1):
+                prev_lvl, prev_txt = items[k]
+                if not prev_txt:
+                    continue
+                if prev_lvl in (None, 0) and re_album_like.match(prev_txt):
+                    _ooxml_establecer_estilo_y_outline(children[k], estilo_ids["heading_2"], 1)
+                break
+        elif re_album_like.match(txt):
+            has_song_after = any(items[j][1].startswith("Song:") for j in range(idx + 1, min(sec_end, idx + 6)))
+            if has_song_after:
+                _ooxml_establecer_estilo_y_outline(child, estilo_ids["heading_2"], 1)
+
+
 def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
     """Inserta o actualiza una entrada directamente vía OOXML ZIP/XML en milisegundos sin abrir WINWORD.EXE."""
     if not isinstance(entry, dict):
@@ -4106,6 +4423,7 @@ def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
     with zipfile.ZipFile(archivo, "r") as zf:
         estilos = _ooxml_cargar_estilos_mapa(zf)
         orig_doc_bytes = zf.read("word/document.xml")
+        orig_styles_bytes = zf.read("word/styles.xml") if "word/styles.xml" in zf.namelist() else None
 
     style_levels = estilos["levels"]
     estilo_ids = estilos["ids"]
@@ -4115,6 +4433,7 @@ def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
         raise ET.ParseError("word/document.xml sin elemento w:body")
 
     _ooxml_asegurar_secciones_y_final(body, style_levels, estilo_ids)
+    _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
 
     if (entry.get("category") or "").strip().lower() == "music":
         toc_range = _ooxml_encontrar_rango_toc(list(body))
@@ -4256,22 +4575,29 @@ def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
         for offset, el in enumerate(bloque):
             body.insert(sec_end + offset, el)
 
+    _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
     _ooxml_normalizar_saltos_pagina(body, style_levels)
     _ooxml_reconstruir_toc_con_enlaces(body, style_levels, estilo_ids)
     new_doc_bytes = _ooxml_serializar_documento(doc_root, orig_doc_bytes)
+    new_styles_bytes = _ooxml_asegurar_estilos_headings_y_toc(orig_styles_bytes, estilo_ids)
 
     tmp_zip = f"{archivo}.tmp.{os.getpid()}.{threading.get_ident()}"
     try:
         with zipfile.ZipFile(archivo, "r") as zin, zipfile.ZipFile(
             tmp_zip, "w"
         ) as zout:
+            has_styles = False
             for info in zin.infolist():
-                payload = (
-                    new_doc_bytes
-                    if info.filename == "word/document.xml"
-                    else zin.read(info.filename)
-                )
+                if info.filename == "word/document.xml":
+                    payload = new_doc_bytes
+                elif info.filename == "word/styles.xml":
+                    payload = new_styles_bytes
+                    has_styles = True
+                else:
+                    payload = zin.read(info.filename)
                 zout.writestr(info, payload)
+            if not has_styles:
+                zout.writestr("word/styles.xml", new_styles_bytes)
         os.replace(tmp_zip, archivo)
     finally:
         if os.path.exists(tmp_zip):
@@ -4391,6 +4717,7 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
         with zipfile.ZipFile(archivo, "r") as zf:
             estilos = _ooxml_cargar_estilos_mapa(zf)
             orig_doc_bytes = zf.read("word/document.xml")
+            orig_styles_bytes = zf.read("word/styles.xml") if "word/styles.xml" in zf.namelist() else None
 
         style_levels = estilos["levels"]
         estilo_ids = estilos["ids"]
@@ -4398,6 +4725,8 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
         body = doc_root.find(_ooxml_w_tag("body"))
         if body is None:
             raise ET.ParseError("word/document.xml sin elemento w:body")
+
+        _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
 
         children = list(body)
         toc_range = _ooxml_encontrar_rango_toc(children)
@@ -4569,7 +4898,6 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
                                     tr_lines = [
                                         items[p_i][1]
                                         for p_i in range(k + 1, m)
-                                        if items[p_i][1]
                                     ]
                                     fields = _extraer_campos_bloque_word(tr_lines, ktxt)
                                     if (
@@ -4748,22 +5076,29 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
             body.insert(insert_pos + offset, el)
 
         _ooxml_asegurar_secciones_y_final(body, style_levels, estilo_ids)
+        _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
         _ooxml_normalizar_saltos_pagina(body, style_levels)
         _ooxml_reconstruir_toc_con_enlaces(body, style_levels, estilo_ids)
         new_doc_bytes = _ooxml_serializar_documento(doc_root, orig_doc_bytes)
+        new_styles_bytes = _ooxml_asegurar_estilos_headings_y_toc(orig_styles_bytes, estilo_ids)
 
         tmp_zip = f"{archivo}.tmp.{os.getpid()}.{threading.get_ident()}"
         try:
             with zipfile.ZipFile(archivo, "r") as zin, zipfile.ZipFile(
                 tmp_zip, "w"
             ) as zout:
+                has_styles = False
                 for info in zin.infolist():
-                    payload = (
-                        new_doc_bytes
-                        if info.filename == "word/document.xml"
-                        else zin.read(info.filename)
-                    )
+                    if info.filename == "word/document.xml":
+                        payload = new_doc_bytes
+                    elif info.filename == "word/styles.xml":
+                        payload = new_styles_bytes
+                        has_styles = True
+                    else:
+                        payload = zin.read(info.filename)
                     zout.writestr(info, payload)
+                if not has_styles:
+                    zout.writestr("word/styles.xml", new_styles_bytes)
             os.replace(tmp_zip, archivo)
         finally:
             if os.path.exists(tmp_zip):
@@ -5251,9 +5586,9 @@ def agregar_entrada_ingles_a_word(entry, ruta_docx=None):
 
 
 _ESTUDIO_MAX_BYTES_RESPUESTA = (
-    34000  # AES-GCM + base64 debe caber en el límite de 64000 del puente
+    42000  # AES-GCM + base64 debe caber en el límite de 64000 del puente
 )
-_ESTUDIO_MAX_CHARS_ENTRADA = 10000
+_ESTUDIO_MAX_CHARS_ENTRADA = 60000
 
 
 def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
@@ -5327,7 +5662,7 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
         if cat == "music":
             for grp in _agrupar_musica_desde_items(items, sec_start, sec_end):
                 for tr in grp["tracks"]:
-                    lines = [t for _, t in items[tr["h3_idx"] + 1 : tr["end_idx"]] if t]
+                    lines = [t for _, t in items[tr["h3_idx"] + 1 : tr["end_idx"]]]
                     fields = _extraer_campos_bloque_word(lines, tr["heading"])
                     artist = _limpiar_linea(fields.get("artists_display"))
                     album = grp["heading"]

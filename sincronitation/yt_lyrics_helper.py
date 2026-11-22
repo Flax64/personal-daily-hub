@@ -373,7 +373,7 @@ def base_language_code(lang_tag: str) -> str:
 
 
 _LANG_SECTION_HEADER_RE = re.compile(
-    r"^(?:===\s*\[([^\]]+)\]\s*===|\[((?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|EN|JA|JP|JP-EN|EN-JP|ES|SUB|UND)(?:[-_][A-Za-z0-9]+)*(?:\s*[—\-]\s*[^\]]*)?)\])$",
+    r"^(?:===\s*\[([^\]]+)\]\s*===|\[((?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|KOREAN|COREANO|EN|ENG|ENGLISH|JA|JP|JAPANESE|JP-EN|EN-JP|ES|ESP|SPANISH|ESPA[ÑN]OL|SUB|UND)(?:[-_][A-Za-z0-9]+)*(?:\s*[—\-]\s*[^\]]*)?)\]|((?:Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:]\s*(?:Traducci[oó]n|Translation|Subt[ií]tulos|Subtitles|IA|AI|Local|Romaji|Romanizaci[oó]n)[^\n]*)?))$",
     re.IGNORECASE,
 )
 _NOISE_LYRIC_LINE_RE = re.compile(
@@ -495,7 +495,7 @@ def parse_tagged_lyrics_sections(raw_text: str) -> Dict[str, Any]:
         trimmed = raw.strip()
         hm = _LANG_SECTION_HEADER_RE.match(trimmed)
         if hm:
-            mapped = map_tag(hm.group(1) or hm.group(2) or "")
+            mapped = map_tag(hm.group(1) or hm.group(2) or hm.group(3) or "")
             if mapped == "__ignore__":
                 has_tags = True
                 continue

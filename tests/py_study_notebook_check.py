@@ -93,11 +93,21 @@ def main():
     track = next(e for e in res["entries"] if e["section"] == "music")
     lyr = track["fields"]["lyrics_study"]
     assert (
-        lyr.count("[EN]") == 1
+        "English" in lyr
+        and "Korean" in lyr
+        and "Spanish" in lyr
+        and "[EN]" not in lyr
+        and "[KO]" not in lyr
+        and "[ES]" not in lyr
         and "안녕하세요" in lyr
         and "Bebé tiene ese estilo" in lyr
     ), lyr
     assert lyr.count("Traducción IA") == 1, lyr
+    assert (lyr.startswith("Korean\n") or "\n\nKorean\n" in lyr) and "\n\nEnglish\n" in lyr and "\n\nSpanish" in lyr, repr(lyr)
+    with zipfile.ZipFile(docx, "r") as zchk:
+        doc_xml = zchk.read("word/document.xml").decode("utf-8", errors="replace")
+        assert 'w:ind w:left="480"' in doc_xml, "Verses must be indented under language headers"
+        assert "BATTER UP" not in doc_xml and "Drip" in doc_xml and "_Toc" in doc_xml
 
     filt = s.leer_cuaderno_estudio_word(
         {"section": "music", "artist": "babymonster"}, ruta_docx=docx
@@ -186,7 +196,8 @@ def check_drive_pull(tmp, docx):
     assert (
         "[Intro]" in comb
         and "Line A" in comb
-        and "=== [ES — Traducción IA] ===" in comb
+        and "Spanish — Traducción IA" in comb
+        and "[ES" not in comb
     ), comb
 
     clean_notes = s._limpiar_notas_redundantes_cancion(

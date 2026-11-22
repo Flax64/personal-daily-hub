@@ -974,7 +974,7 @@ describe('Bóveda local (.env / .env.enc)', () => {
                 'read_back = sc.leer_cuaderno_estudio_word({"section": "music", "limit": 50}, ruta_docx=nb_path)',
                 'assert read_back["counts"]["music"] == 1, read_back',
                 'lyr_merged = read_back["entries"][0]["fields"]["lyrics_study"]',
-                'assert "[Intro]" in lyr_merged and "We go up" in lyr_merged and "=== [ES — Traducción IA] ===" in lyr_merged, lyr_merged',
+                'assert "[Intro]" in lyr_merged and "We go up" in lyr_merged and "Spanish — Traducción IA" in lyr_merged, lyr_merged',
                 'print(json.dumps({"ok": True, "summary": summary, "musicCount": read_back["counts"]["music"]}))'
             ].join('\n');
 

@@ -57,18 +57,61 @@ _RE_JAPANESE_SCRIPT_CHAR = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF
 
 _LANG_CODE_ALIASES = {
     "kr": "ko",
+    "korean": "ko",
+    "coreano": "ko",
+    "en": "en",
+    "eng": "en",
+    "english": "en",
+    "inglés": "en",
+    "ingles": "en",
     "jp": "ja",
+    "jpn": "ja",
+    "japanese": "ja",
+    "japonés": "ja",
+    "japones": "ja",
+    "es": "es",
+    "esp": "es",
+    "spa": "es",
+    "spanish": "es",
+    "español": "es",
+    "espanol": "es",
     "orig": "original",
+    "original": "original",
     "jp-en": "original",
     "en-jp": "original",
     "ja-en": "original",
     "en-ja": "original",
 }
 
+_CANON_LYRIC_LANG_NAMES = {
+    "original": "Original",
+    "ko": "Korean",
+    "en": "English",
+    "ja": "Japanese",
+    "es": "Spanish",
+}
+
 _RE_ENCABEZADO_IDIOMA_LETRA = re.compile(
-    r"^(?:===\s*)?\[(?:Letra\s*[—\-]\s*)?(original|orig|en|ko|kr|es|ja|jp|jp-en|en-jp|ja-en|en-ja|zh|fr|pt|de|it|ru|sub|und)(?:-[A-Za-z0-9]+)?(?:\s*(?:[—/\-])[^\]]*)?\](?:\s*===)?\s*$",
+    r"^(?:===\s*)?(?:"
+    r"\[(?:Letra\s*[—\-]\s*)?(original|orig|en|eng|english|ko|kr|korean|es|esp|spanish|ja|jp|japanese|jp-en|en-jp|ja-en|en-ja|zh|fr|pt|de|it|ru|sub|und)(?:-[A-Za-z0-9]+)?(?:\s*[—/\-:]\s*([^\]]*))?\]"
+    r"|"
+    r"(Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:]\s*((?:Traducci[oó]n|Translation|Subt[ií]tulos|Subtitles|IA|AI|Local|Romaji|Romanizaci[oó]n)[^\n]*))?"
+    r")(?:\s*===)?\s*$",
     re.IGNORECASE,
 )
+
+
+def _formatear_encabezado_idioma_word(clave: str, raw_header: str = "") -> str:
+    base_name = _CANON_LYRIC_LANG_NAMES.get(clave) or (str(clave or "").strip().title() or "Original")
+    raw = str(raw_header or "").strip()
+    if raw:
+        m = _RE_ENCABEZADO_IDIOMA_LETRA.match(raw)
+        if m:
+            suffix = (m.group(2) or m.group(4) or "").strip()
+            suffix = re.sub(r"\s*===+\s*$", "", suffix).strip(" —-:")
+            if suffix:
+                return f"{base_name} — {suffix}"
+    return base_name
 _RE_HANGUL_CHAR = re.compile(r"[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]")
 _RE_STRUCTURAL_TAG_LINE = re.compile(
     r"^\[(?:intro|verse(?:\s*\d+)?|pre-?chorus|post-?chorus|chorus|refrain|bridge|rap(?:\s*part)?|interlude|outro|hook|solo|breakdown|coro|verso(?:\s*\d+)?|puente|estribillo)[^\]]*\]$",
@@ -111,9 +154,9 @@ def _w_tag(name: str) -> str:
     return f"{W_NS}{name}"
 
 
-def _w_el(name: str, **attrs) -> ET.Element:
+def _w_el(_tag_name: str, **attrs) -> ET.Element:
     attrib = {_w_tag(k): str(v) for k, v in attrs.items() if v is not None}
-    return ET.Element(_w_tag(name), attrib)
+    return ET.Element(_w_tag(_tag_name), attrib)
 
 
 def _limpiar_linea(texto) -> str:
@@ -244,6 +287,21 @@ def _build_minimal_docx_bytes(mode: str = "english") -> bytes:
         '<w:pPr><w:keepNext/><w:outlineLvl w:val="2"/></w:pPr>'
         '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="23"/></w:rPr>'
         "</w:style>"
+        '<w:style w:type="paragraph" w:styleId="TOC1">'
+        '<w:name w:val="toc 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'
+        '<w:pPr><w:spacing w:after="60"/></w:pPr>'
+        '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="21"/></w:rPr>'
+        "</w:style>"
+        '<w:style w:type="paragraph" w:styleId="TOC2">'
+        '<w:name w:val="toc 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'
+        '<w:pPr><w:spacing w:after="40"/><w:ind w:left="240"/></w:pPr>'
+        '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="20"/></w:rPr>'
+        "</w:style>"
+        '<w:style w:type="paragraph" w:styleId="TOC3">'
+        '<w:name w:val="toc 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'
+        '<w:pPr><w:spacing w:after="40"/><w:ind w:left="480"/></w:pPr>'
+        '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="19"/></w:rPr>'
+        "</w:style>"
         '<w:style w:type="character" w:styleId="Hyperlink">'
         '<w:name w:val="Hyperlink"/>'
         '<w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr>'
@@ -296,6 +354,9 @@ def _ooxml_cargar_estilos_mapa(zf: zipfile.ZipFile) -> dict:
         "heading_1": "Heading1",
         "heading_2": "Heading2",
         "heading_3": "Heading3",
+        "toc_1": "TOC1",
+        "toc_2": "TOC2",
+        "toc_3": "TOC3",
         "hyperlink": "Hyperlink",
     }
     if "word/styles.xml" not in zf.namelist():
@@ -327,6 +388,15 @@ def _ooxml_cargar_estilos_mapa(zf: zipfile.ZipFile) -> dict:
         elif re.search(r"\b(?:heading\s*3|t[ií]tulo\s*3)\b", low):
             levels[sid] = 3
             ids["heading_3"] = sid
+        elif re.search(r"\btoc\s*1\b", low) or sid.lower() == "toc1":
+            levels[sid] = 0
+            ids["toc_1"] = sid
+        elif re.search(r"\btoc\s*2\b", low) or sid.lower() == "toc2":
+            levels[sid] = 0
+            ids["toc_2"] = sid
+        elif re.search(r"\btoc\s*3\b", low) or sid.lower() == "toc3":
+            levels[sid] = 0
+            ids["toc_3"] = sid
 
         lvl_el = style.find(f"{_w_tag('pPr')}/{_w_tag('outlineLvl')}")
         if lvl_el is not None and sid not in levels:
@@ -337,6 +407,88 @@ def _ooxml_cargar_estilos_mapa(zf: zipfile.ZipFile) -> dict:
             except ValueError:
                 pass
     return {"levels": levels, "ids": ids}
+
+
+def _asegurar_estilos_headings_y_toc(styles_bytes: bytes | None, orig_estilos_ids: dict | None = None) -> bytes:
+    """Garantiza que word/styles.xml defina Heading1..3 (con w:outlineLvl), TOC1..3 y Hyperlink."""
+    if not styles_bytes:
+        styles_bytes = (
+            f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+            f'<w:styles xmlns:w="{W_NS_URI}"></w:styles>'
+        ).encode("utf-8")
+    try:
+        ET.register_namespace("w", W_NS_URI)
+        root = ET.fromstring(styles_bytes)
+    except ET.ParseError:
+        return styles_bytes
+
+    id_attr = _w_tag("styleId")
+    val_attr = _w_tag("val")
+    existing = {}
+    for st in root.findall(f".//{_w_tag('style')}"):
+        sid = st.attrib.get(id_attr, "")
+        if sid:
+            existing[sid] = st
+
+    ids = orig_estilos_ids or {}
+    h1_id = ids.get("heading_1") or "Heading1"
+    h2_id = ids.get("heading_2") or "Heading2"
+    h3_id = ids.get("heading_3") or "Heading3"
+    toc1_id = ids.get("toc_1") or "TOC1"
+    toc2_id = ids.get("toc_2") or "TOC2"
+    toc3_id = ids.get("toc_3") or "TOC3"
+    hl_id = ids.get("hyperlink") or "Hyperlink"
+
+    def _ensure_heading_style(sid: str, name_val: str, outline_num: int, sz_half: int):
+        st = existing.get(sid)
+        if st is None:
+            st = ET.fromstring(
+                f'<w:style xmlns:w="{W_NS_URI}" w:type="paragraph" w:styleId="{_xml_escape(sid)}">'
+                f'<w:name w:val="{_xml_escape(name_val)}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>'
+                f'<w:pPr><w:keepNext/><w:outlineLvl w:val="{outline_num}"/></w:pPr>'
+                f'<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="{sz_half}"/></w:rPr>'
+                f'</w:style>'
+            )
+            root.append(st)
+            existing[sid] = st
+            return
+        ppr = st.find(_w_tag("pPr"))
+        if ppr is None:
+            ppr = _w_el("pPr")
+            st.append(ppr)
+        if ppr.find(_w_tag("outlineLvl")) is None:
+            ppr.append(_w_el("outlineLvl", val=outline_num))
+
+    _ensure_heading_style(h1_id, "heading 1", 0, 30)
+    _ensure_heading_style(h2_id, "heading 2", 1, 26)
+    _ensure_heading_style(h3_id, "heading 3", 2, 23)
+
+    for tid, tname, tind, tsz in (
+        (toc1_id, "toc 1", 0, 21),
+        (toc2_id, "toc 2", 240, 20),
+        (toc3_id, "toc 3", 480, 19),
+    ):
+        if tid not in existing:
+            ind_xml = f'<w:ind w:left="{tind}"/>' if tind else ""
+            st = ET.fromstring(
+                f'<w:style xmlns:w="{W_NS_URI}" w:type="paragraph" w:styleId="{_xml_escape(tid)}">'
+                f'<w:name w:val="{_xml_escape(tname)}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'
+                f'<w:pPr><w:spacing w:after="40"/>{ind_xml}</w:pPr>'
+                f'<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="{tsz}"/></w:rPr>'
+                f'</w:style>'
+            )
+            root.append(st)
+            existing[tid] = st
+
+    if hl_id not in existing:
+        st = ET.fromstring(
+            f'<w:style xmlns:w="{W_NS_URI}" w:type="character" w:styleId="{_xml_escape(hl_id)}">'
+            f'<w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr>'
+            f'</w:style>'
+        )
+        root.append(st)
+
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + ET.tostring(root, encoding="unicode")).encode("utf-8")
 
 
 def _texto_parrafo_ooxml(p_elem: ET.Element) -> str:
@@ -420,6 +572,7 @@ def _crear_run_texto(
     italic=False,
     color=None,
     rstyle=None,
+    no_proof=False,
     use_arial=True,
 ) -> ET.Element:
     run = _w_el("r")
@@ -430,6 +583,7 @@ def _crear_run_texto(
             italic=italic,
             color=color,
             rstyle=rstyle,
+            no_proof=no_proof,
             use_arial=use_arial,
         )
     )
@@ -452,9 +606,13 @@ def _crear_parrafo_texto(
     muted=False,
     color=None,
     page_break_before=None,
+    indent_left=None,
+    outline_level=None,
 ) -> ET.Element:
     p = _w_el("p")
-    if style_id or page_break_before is not None:
+    has_indent = indent_left is not None and int(indent_left) > 0
+    has_outline = outline_level is not None and 0 <= int(outline_level) <= 8
+    if style_id or page_break_before is not None or has_indent or has_outline:
         ppr = _w_el("pPr")
         if style_id:
             ppr.append(_w_el("pStyle", val=style_id))
@@ -462,6 +620,10 @@ def _crear_parrafo_texto(
             ppr.append(_w_el("pageBreakBefore"))
         elif page_break_before is False:
             ppr.append(_w_el("pageBreakBefore", val="0"))
+        if has_indent:
+            ppr.append(_w_el("ind", left=int(indent_left)))
+        if has_outline:
+            ppr.append(_w_el("outlineLvl", val=int(outline_level)))
         p.append(ppr)
     color_hex = color if color is not None else ("666666" if muted else None)
     if label:
@@ -642,6 +804,255 @@ def _normalizar_saltos_pagina(body: ET.Element, style_levels: dict) -> None:
             _configurar_page_break_before(child, enabled=False)
 
 
+def _establecer_estilo_y_outline(p_elem: ET.Element, style_id: str, outline_level: int) -> None:
+    ppr = p_elem.find(_w_tag("pPr"))
+    if ppr is None:
+        ppr = _w_el("pPr")
+        p_elem.insert(0, ppr)
+    pstyle = ppr.find(_w_tag("pStyle"))
+    if pstyle is not None:
+        pstyle.attrib[_w_tag("val")] = style_id
+    else:
+        ppr.insert(0, _w_el("pStyle", val=style_id))
+    for old_out in list(ppr.findall(_w_tag("outlineLvl"))):
+        ppr.remove(old_out)
+    ppr.append(_w_el("outlineLvl", val=int(outline_level)))
+
+
+def _reparar_encabezados_musica_huerfanos(body: ET.Element, style_levels: dict, estilo_ids: dict) -> None:
+    """Repara álbumes/canciones existentes que perdieron Heading 2/3 o outlineLvl para que aparezcan en el índice."""
+    p_tag = _w_tag("p")
+    children = list(body)
+    toc_range = _encontrar_rango_toc(children)
+    sect_idx = _indice_sectpr(body)
+
+    # Asegurar outlineLvl explícito en todos los Heading 1..3 existentes
+    for idx in range(sect_idx):
+        if toc_range and toc_range[0] <= idx < toc_range[1]:
+            continue
+        child = children[idx]
+        if child.tag != p_tag:
+            continue
+        lvl = _nivel_parrafo_ooxml(child, style_levels)
+        if lvl in (1, 2, 3):
+            sid = estilo_ids.get(f"heading_{lvl}") or f"Heading{lvl}"
+            ppr = child.find(_w_tag("pPr"))
+            if ppr is None or ppr.find(_w_tag("outlineLvl")) is None:
+                _establecer_estilo_y_outline(child, sid, lvl - 1)
+
+    sec_start, sec_end, items = _buscar_rango_seccion(body, style_levels, "music", toc_range)
+    if sec_start is None:
+        return
+
+    re_album_like = re.compile(
+        r"^(?:Playlist:|Singles\s*&\s*Standalone\b|.+\((?:Album|Mini Album|EP|Single|Collab Single|Mixtape|OST|Soundtrack|Compilation)[^)]*\)$)",
+        re.IGNORECASE,
+    )
+    children = list(body)
+    for idx in range(sec_start + 1, sec_end):
+        child = children[idx]
+        if child.tag != p_tag:
+            continue
+        lvl, txt = items[idx]
+        if not txt or lvl in (1, 2, 3):
+            continue
+        # Buscar siguiente línea no vacía en un rango cercano
+        next_txt = ""
+        for j in range(idx + 1, min(sec_end, idx + 4)):
+            if items[j][1]:
+                next_txt = items[j][1]
+                break
+        if next_txt.startswith("Song:"):
+            _establecer_estilo_y_outline(child, estilo_ids["heading_3"], 2)
+            # Revisar el párrafo no vacío inmediatamente anterior: si parece Álbum, promocionarlo a Heading 2
+            for k in range(idx - 1, sec_start, -1):
+                prev_lvl, prev_txt = items[k]
+                if not prev_txt:
+                    continue
+                if prev_lvl == 0 and re_album_like.match(prev_txt):
+                    _establecer_estilo_y_outline(children[k], estilo_ids["heading_2"], 1)
+                break
+        elif re_album_like.match(txt):
+            # Solo promocionar si viene una canción después antes del próximo H1/H2
+            has_song_after = any(items[j][1].startswith("Song:") for j in range(idx + 1, min(sec_end, idx + 6)))
+            if has_song_after:
+                _establecer_estilo_y_outline(child, estilo_ids["heading_2"], 1)
+
+
+def _crear_run_oculto_campo(fld_type=None, instr_text=None, text=None, is_tab=False) -> ET.Element:
+    run = _w_el("r")
+    run.append(_crear_rpr(font_size=None, no_proof=True, web_hidden=True, use_arial=False))
+    if is_tab:
+        run.append(_w_el("tab"))
+    elif fld_type:
+        run.append(_w_el("fldChar", fldCharType=fld_type))
+    elif instr_text is not None:
+        el = _w_el("instrText")
+        el.attrib[f"{XML_NS}space"] = "preserve"
+        el.text = instr_text
+        run.append(el)
+    elif text is not None:
+        el = _w_el("t")
+        el.text = text
+        run.append(el)
+    return run
+
+
+def _crear_parrafo_toc(lvl: int, title: str, bm_name: str, estilo_ids: dict, is_first: bool = False) -> ET.Element:
+    p = _w_el("p")
+    ppr = _w_el("pPr")
+    toc_style = estilo_ids.get(f"toc_{lvl}") or f"TOC{lvl}"
+    ppr.append(_w_el("pStyle", val=toc_style))
+    tabs = _w_el("tabs")
+    tabs.append(_w_el("tab", val="right", leader="dot", pos="8828"))
+    ppr.append(tabs)
+    p.append(ppr)
+
+    if is_first:
+        r_begin = _w_el("r")
+        r_begin.append(_w_el("fldChar", fldCharType="begin"))
+        p.append(r_begin)
+
+        r_instr = _w_el("r")
+        instr = _w_el("instrText")
+        instr.attrib[f"{XML_NS}space"] = "preserve"
+        instr.text = ' TOC \\o "1-3" \\h \\z \\u '
+        r_instr.append(instr)
+        p.append(r_instr)
+
+        r_sep = _w_el("r")
+        r_sep.append(_w_el("fldChar", fldCharType="separate"))
+        p.append(r_sep)
+
+    hyperlink = ET.Element(_w_tag("hyperlink"), {_w_tag("anchor"): bm_name, _w_tag("history"): "1"})
+    hyperlink.append(
+        _crear_run_texto(
+            title,
+            font_size=None,
+            bold=True,
+            rstyle=estilo_ids.get("hyperlink") or "Hyperlink",
+            no_proof=True,
+        )
+    )
+    hyperlink.append(_crear_run_oculto_campo(is_tab=True))
+    hyperlink.append(_crear_run_oculto_campo(fld_type="begin"))
+    hyperlink.append(_crear_run_oculto_campo(instr_text=f" PAGEREF {bm_name} \\h "))
+    hyperlink.append(_crear_run_oculto_campo(fld_type="separate"))
+    hyperlink.append(_crear_run_oculto_campo(text="1"))
+    hyperlink.append(_crear_run_oculto_campo(fld_type="end"))
+    p.append(hyperlink)
+    return p
+
+
+def _asegurar_bookmark_en_parrafo(p_elem: ET.Element, alloc_bm_fn) -> str:
+    bm_start_tag = _w_tag("bookmarkStart")
+    name_attr = _w_tag("name")
+    for elem in p_elem.iter():
+        if elem.tag == bm_start_tag:
+            bname = elem.attrib.get(name_attr, "")
+            if bname.startswith("_Toc"):
+                return bname
+
+    bm_id, bm_name = alloc_bm_fn()
+    bms = _w_el("bookmarkStart", id=bm_id, name=bm_name)
+    bme = _w_el("bookmarkEnd", id=bm_id)
+    insert_pos = 1 if len(p_elem) > 0 and p_elem[0].tag == _w_tag("pPr") else 0
+    p_elem.insert(insert_pos, bms)
+    p_elem.append(bme)
+    return bm_name
+
+
+def _reconstruir_toc_con_enlaces(body: ET.Element, style_levels: dict, estilo_ids: dict) -> None:
+    """Asegura marcadores _Toc en Heading 1..3 y reconstruye la TOC con hipervínculos para todas las secciones y canciones."""
+    p_tag = _w_tag("p")
+    bm_start_tag = _w_tag("bookmarkStart")
+    id_attr = _w_tag("id")
+    name_attr = _w_tag("name")
+
+    max_id = 0
+    max_toc_num = 245632084
+    for elem in body.iter():
+        if elem.tag == bm_start_tag:
+            raw_id = elem.attrib.get(id_attr, "")
+            if raw_id.isdigit():
+                max_id = max(max_id, int(raw_id))
+            bname = elem.attrib.get(name_attr, "")
+            if bname.startswith("_Toc") and bname[4:].isdigit():
+                max_toc_num = max(max_toc_num, int(bname[4:]))
+
+    bm_state = [max_id, max_toc_num]
+
+    def _alloc_bm():
+        bm_state[0] += 1
+        bm_state[1] += 1
+        return bm_state[0], f"_Toc{bm_state[1]}"
+
+    children = list(body)
+    toc_range = _encontrar_rango_toc(children)
+    toc_start, toc_end = toc_range if toc_range is not None else (None, None)
+
+    toc_entries = []
+    first_h1_idx = None
+    for idx, child in enumerate(children):
+        if toc_start is not None and toc_start <= idx < toc_end:
+            continue
+        if child.tag != p_tag:
+            continue
+        lvl = _nivel_parrafo_ooxml(child, style_levels)
+        if lvl == 1 and first_h1_idx is None:
+            first_h1_idx = idx
+        if lvl in (1, 2, 3):
+            txt = _texto_parrafo_ooxml(child)
+            if txt:
+                bm_name = _asegurar_bookmark_en_parrafo(child, _alloc_bm)
+                toc_entries.append((lvl, txt, bm_name))
+
+    new_toc_ps = [
+        _crear_parrafo_toc(lvl, txt, bm_name, estilo_ids, is_first=(i == 0))
+        for i, (lvl, txt, bm_name) in enumerate(toc_entries)
+    ]
+    end_p = _w_el("p")
+    if not new_toc_ps:
+        r_b = _w_el("r")
+        r_b.append(_w_el("fldChar", fldCharType="begin"))
+        end_p.append(r_b)
+        r_i = _w_el("r")
+        it = _w_el("instrText")
+        it.attrib[f"{XML_NS}space"] = "preserve"
+        it.text = ' TOC \\o "1-3" \\h \\z \\u '
+        r_i.append(it)
+        end_p.append(r_i)
+        r_s = _w_el("r")
+        r_s.append(_w_el("fldChar", fldCharType="separate"))
+        end_p.append(r_s)
+    r_end = _w_el("r")
+    r_end.append(_w_el("fldChar", fldCharType="end"))
+    end_p.append(r_end)
+    new_toc_ps.append(end_p)
+
+    if toc_start is not None:
+        # Si el bloque TOC está envuelto en <w:sdt>, reemplazar el sdt completo con los párrafos actualizados
+        for old_el in children[toc_start:toc_end]:
+            body.remove(old_el)
+        for offset, new_el in enumerate(new_toc_ps):
+            body.insert(toc_start + offset, new_el)
+    else:
+        children = list(body)
+        # Evitar doble título "Table of Contents" si un .docx mínimo tenía el título sin campo TOC
+        pre_limit = first_h1_idx if first_h1_idx is not None else len(children)
+        for p_idx in range(pre_limit - 1, -1, -1):
+            el = children[p_idx]
+            if el.tag == p_tag and _texto_parrafo_ooxml(el).strip().lower() in ("table of contents", "tabla de contenido"):
+                body.remove(el)
+        children = list(body)
+        first_h1_after = next((i for i, ch in enumerate(children) if ch.tag == p_tag and _nivel_parrafo_ooxml(ch, style_levels) == 1), None)
+        insert_pos = first_h1_after if first_h1_after is not None else min(2, len(children))
+        toc_title_p = _crear_parrafo_texto(text="Table of Contents", font_size=13, bold_all=True)
+        block = [toc_title_p, *new_toc_ps, _w_el("p")]
+        for offset, new_el in enumerate(block):
+            body.insert(insert_pos + offset, new_el)
+
+
 def _serializar_documento(doc_root: ET.Element, orig_xml_bytes: bytes) -> bytes:
     orig_str = orig_xml_bytes.decode("utf-8", errors="replace")
     ns_pairs = []
@@ -693,7 +1104,7 @@ def _limpiar_notas_redundantes_cancion(notes_val, lyrics_val="") -> str:
         return ""
     has_es = bool(
         re.search(
-            r"(?:^|\n)(?:===\s*)?\[es(?:\s*[—/\-][^\]]*)?\](?:\s*===)?\s*(?:\n|$)",
+            r"(?:^|\n)(?:(?:===\s*)?\[es(?:\s*[—/\-][^\]]*)?\](?:\s*===)?|Spanish(?:\s*[—\-:][^\n]*)?)\s*(?:\n|$)",
             str(lyrics_val or ""),
             re.IGNORECASE,
         )
@@ -705,6 +1116,32 @@ def _limpiar_notas_redundantes_cancion(notes_val, lyrics_val="") -> str:
     return notes_clean
 
 
+def _deduplicar_lineas_bloque_letra(cuerpo: str) -> str:
+    """Elimina estrofas o bloques consecutivos repetidos accidentalmente dentro de un mismo idioma."""
+    raw = str(cuerpo or "").replace("\r", "").strip()
+    if not raw:
+        return ""
+    # Separar por estrofas (doble salto) y eliminar estrofas consecutivas idénticas
+    stanzas = [st.strip() for st in re.split(r"\n{2,}", raw) if st.strip()]
+    clean_stanzas = []
+    prev_stanza_norm = ""
+    for st in stanzas:
+        # También colapsar repeticiones de bloque completo si la segunda mitad es igual a la primera
+        lines_in = [ln.rstrip() for ln in st.split("\n") if ln.strip()]
+        dedup_lines = []
+        for ln in lines_in:
+            if dedup_lines and " ".join(dedup_lines[-1].split()).lower() == " ".join(ln.split()).lower():
+                continue
+            dedup_lines.append(ln)
+        st_clean = "\n".join(dedup_lines).strip()
+        st_norm = " ".join(st_clean.split()).lower()
+        if st_norm and st_norm == prev_stanza_norm:
+            continue
+        clean_stanzas.append(st_clean)
+        prev_stanza_norm = st_norm
+    return "\n\n".join(clean_stanzas).strip()
+
+
 def _dividir_letra_por_idiomas(texto):
     bloques = []
     clave, encabezado, cuerpo = "", "", []
@@ -712,14 +1149,15 @@ def _dividir_letra_por_idiomas(texto):
         m = _RE_ENCABEZADO_IDIOMA_LETRA.match(raw.strip())
         if m:
             if encabezado or any(ln.strip() for ln in cuerpo):
-                bloques.append((clave, encabezado, "\n".join(cuerpo).strip()))
-            raw_code = m.group(1).lower()
+                bloques.append((clave, encabezado, _deduplicar_lineas_bloque_letra("\n".join(cuerpo))))
+            raw_code = (m.group(1) or m.group(3) or "").lower()
             clave = _LANG_CODE_ALIASES.get(raw_code, raw_code)
-            encabezado, cuerpo = raw.strip(), []
+            encabezado = _formatear_encabezado_idioma_word(clave, raw.strip())
+            cuerpo = []
         else:
             cuerpo.append(raw)
     if encabezado or any(ln.strip() for ln in cuerpo):
-        bloques.append((clave, encabezado, "\n".join(cuerpo).strip()))
+        bloques.append((clave, encabezado, _deduplicar_lineas_bloque_letra("\n".join(cuerpo))))
     return bloques
 
 
@@ -742,47 +1180,60 @@ def _combinar_campo_multilinea(prev_val, new_val, append=False) -> str:
 def _combinar_letra_por_idiomas(prev_val, new_val, append=False) -> str:
     prev_clean = _limpiar_ruido_letra(prev_val)
     new_clean = _limpiar_ruido_letra(new_val)
+    if not new_clean and not prev_clean:
+        return ""
     if not new_clean:
-        return prev_clean
-    if not prev_clean:
-        return new_clean
+        # Asegurar normalización de encabezados existentes aunque no haya nuevo texto
+        prev_blocks = _dividir_letra_por_idiomas(prev_clean)
+        if not any(b[1] for b in prev_blocks):
+            return _deduplicar_lineas_bloque_letra(prev_clean)
+        new_clean = ""
 
     def norm(s):
         return " ".join(str(s or "").split()).lower()
 
-    if norm(new_clean) == norm(prev_clean) or norm(new_clean) in norm(prev_clean):
-        return prev_clean
-    if norm(prev_clean) in norm(new_clean):
-        return new_clean
+    if new_clean and not prev_clean:
+        new_blocks = _dividir_letra_por_idiomas(new_clean)
+        if not any(b[1] for b in new_blocks):
+            return _deduplicar_lineas_bloque_letra(new_clean)
+    elif new_clean and (norm(new_clean) == norm(prev_clean) or norm(new_clean) in norm(prev_clean)):
+        prev_blocks_chk = _dividir_letra_por_idiomas(prev_clean)
+        if not any(b[1] for b in prev_blocks_chk):
+            return _deduplicar_lineas_bloque_letra(prev_clean)
+        new_clean = ""
 
-    prev_blocks = _dividir_letra_por_idiomas(prev_clean)
-    new_blocks = _dividir_letra_por_idiomas(new_clean)
+    prev_blocks = _dividir_letra_por_idiomas(prev_clean) if prev_clean else []
+    new_blocks = _dividir_letra_por_idiomas(new_clean) if new_clean else []
     if not any(b[1] for b in prev_blocks) and not any(b[1] for b in new_blocks):
-        return _combinar_campo_multilinea(prev_clean, new_clean, append=append)
+        return _deduplicar_lineas_bloque_letra(_combinar_campo_multilinea(prev_clean, new_clean, append=append))
 
     ordered_keys = []
     block_map = {}
     for clave, enc, cuerpo in prev_blocks:
         slot = clave if enc else "__base__"
+        clean_body = _deduplicar_lineas_bloque_letra(cuerpo)
         if slot not in block_map:
             ordered_keys.append(slot)
-            block_map[slot] = (clave, enc, cuerpo)
-        elif cuerpo and norm(cuerpo) not in norm(block_map[slot][2]):
+            block_map[slot] = (clave, enc, clean_body)
+        elif clean_body and norm(clean_body) not in norm(block_map[slot][2]):
             prev_c = block_map[slot][2]
-            block_map[slot] = (clave, block_map[slot][1] or enc, f"{prev_c}\n\n{cuerpo}".strip() if prev_c else cuerpo)
+            block_map[slot] = (clave, block_map[slot][1] or enc, _deduplicar_lineas_bloque_letra(f"{prev_c}\n\n{clean_body}".strip() if prev_c else clean_body))
 
     for clave, enc, cuerpo in new_blocks:
         slot = clave if enc else "__base__"
+        clean_body = _deduplicar_lineas_bloque_letra(cuerpo)
         if slot in block_map:
             old_clave, old_enc, old_cuerpo = block_map[slot]
-            if slot == "__base__" and append and old_cuerpo and norm(cuerpo) != norm(old_cuerpo):
-                updated_body = _combinar_campo_multilinea(old_cuerpo, cuerpo, append=True)
+            if slot == "__base__" and append and old_cuerpo and norm(clean_body) != norm(old_cuerpo):
+                updated_body = _deduplicar_lineas_bloque_letra(_combinar_campo_multilinea(old_cuerpo, clean_body, append=True))
             else:
-                updated_body = cuerpo or old_cuerpo
-            block_map[slot] = (clave or old_clave, enc or old_enc, updated_body)
+                updated_body = clean_body or old_cuerpo
+            # Preferir encabezado más descriptivo (ej. Spanish — Traducción IA) sin corchetes
+            chosen_enc = enc if (enc and ("—" in enc or len(enc) > len(old_enc or ""))) else (old_enc or enc)
+            block_map[slot] = (clave or old_clave, _formatear_encabezado_idioma_word(clave or old_clave, chosen_enc) if (clave or old_clave) else chosen_enc, updated_body)
         else:
             ordered_keys.append(slot)
-            block_map[slot] = (clave, enc, cuerpo)
+            block_map[slot] = (clave, _formatear_encabezado_idioma_word(clave, enc) if clave else enc, clean_body)
 
     canon_order = {"__base__": 0, "original": 1, "ko": 2, "en": 3, "ja": 4, "es": 5}
     ordered_keys = sorted(ordered_keys, key=lambda k: (canon_order.get(k, 6), ordered_keys.index(k)))
@@ -797,7 +1248,8 @@ def _combinar_letra_por_idiomas(prev_val, new_val, append=False) -> str:
             continue
         if h:
             seen_bodies.add(h)
-        merged.append((enc, cuerpo))
+        pretty_enc = _formatear_encabezado_idioma_word(clave, enc) if clave else enc
+        merged.append((pretty_enc, cuerpo))
 
     return "\n\n".join(f"{enc}\n{cuerpo}".strip() if enc else cuerpo for enc, cuerpo in merged).strip()
 
@@ -836,6 +1288,9 @@ def _extraer_campos_bloque_word(lineas_texto, heading_text="") -> dict:
     for raw in lineas_texto or []:
         line = str(raw or "").replace("\r", "").strip()
         if not line:
+            if current_key in ("lyrics_study", "stanzas_breakdown") and fields.get(current_key):
+                if not fields[current_key].endswith("\n\n"):
+                    fields[current_key] = fields[current_key].rstrip("\n") + "\n\n"
             continue
         matched_label = False
         for label, key in _WORD_SONG_LABEL_MAP:
@@ -853,7 +1308,11 @@ def _extraer_campos_bloque_word(lineas_texto, heading_text="") -> dict:
                 break
         if not matched_label and current_key:
             prev = fields.get(current_key, "")
-            fields[current_key] = f"{prev}\n{line}" if prev else line
+            if prev:
+                sep = "" if prev.endswith("\n") else "\n"
+                fields[current_key] = f"{prev}{sep}{line}"
+            else:
+                fields[current_key] = line
     return fields
 
 
@@ -1146,23 +1605,44 @@ def _clave_orden_pista(track_number, song_title=""):
 
 def _agregar_lineas_texto(lineas_spec: list, label: str, raw_text, preserve_stanzas=False):
     if preserve_stanzas:
+        normalized_raw = _combinar_letra_por_idiomas("", raw_text) if raw_text else ""
+        if not normalized_raw:
+            return
         cleaned = []
         pending_blank = False
-        for raw_ln in str(raw_text or "").replace("\r", "").split("\n"):
+        for raw_ln in str(normalized_raw).replace("\r", "").split("\n"):
             s = raw_ln.strip()
             if not s:
                 if cleaned:
                     pending_blank = True
                 continue
-            if pending_blank and cleaned and cleaned[-1] != "":
+            m_hdr = _RE_ENCABEZADO_IDIOMA_LETRA.match(s)
+            if m_hdr:
+                raw_code = (m_hdr.group(1) or m_hdr.group(3) or "").lower()
+                canon_k = _LANG_CODE_ALIASES.get(raw_code, raw_code)
+                s = _formatear_encabezado_idioma_word(canon_k, s)
+                if cleaned and cleaned[-1] != "":
+                    cleaned.append("")
+                pending_blank = False
+            elif pending_blank and cleaned and cleaned[-1] != "":
                 cleaned.append("")
-            pending_blank = False
+                pending_blank = False
             cleaned.append(s)
         while cleaned and cleaned[-1] == "":
             cleaned.pop()
+        if not cleaned:
+            return
+
+        # Emitir el título del apartado en su propia línea para evitar "[ORIGINAL]" o "English" pegado al label
+        lineas_spec.append({"label": label.rstrip(), "text": "", "size": 11, "bold_all": True, "italic": False, "muted": False})
         for idx, line in enumerate(cleaned):
-            is_lang_hdr = idx > 0 and bool(_RE_ENCABEZADO_IDIOMA_LETRA.match(line))
-            lineas_spec.append({"label": label if idx == 0 else "", "text": line, "size": 11, "bold_all": is_lang_hdr, "italic": False, "muted": False})
+            is_lang_hdr = bool(line and _RE_ENCABEZADO_IDIOMA_LETRA.match(line))
+            if not line:
+                lineas_spec.append({"label": "", "text": "", "size": 11, "bold_all": False, "italic": False, "muted": False})
+            elif is_lang_hdr:
+                lineas_spec.append({"label": "", "text": line, "size": 11, "bold_all": True, "italic": False, "muted": False, "indent_left": 240})
+            else:
+                lineas_spec.append({"label": "", "text": line, "size": 11, "bold_all": False, "italic": False, "muted": False, "indent_left": 480})
         return
     for idx, line in enumerate(_dividir_lineas_limpias(raw_text)):
         lineas_spec.append({"label": label if idx == 0 else "", "text": line, "size": 11, "bold_all": False, "italic": False, "muted": False})
@@ -1297,8 +1777,30 @@ def formatear_entrada_ingles(entry: dict, fecha_dt=None) -> dict:
     return out
 
 
-def _construir_bloque_elementos(heading_text: str, heading_style_id: str, heading_size: float, lines_spec: list) -> list[ET.Element]:
-    elems = [_crear_parrafo_texto(style_id=heading_style_id, text=heading_text, font_size=heading_size, bold_all=True)]
+def _construir_bloque_elementos(
+    heading_text: str,
+    heading_style_id: str,
+    heading_size: float,
+    lines_spec: list,
+    outline_level: int | None = None,
+) -> list[ET.Element]:
+    if outline_level is None:
+        low_s = str(heading_style_id or "").lower()
+        if "1" in low_s:
+            outline_level = 0
+        elif "2" in low_s:
+            outline_level = 1
+        elif "3" in low_s:
+            outline_level = 2
+    elems = [
+        _crear_parrafo_texto(
+            style_id=heading_style_id,
+            text=heading_text,
+            font_size=heading_size,
+            bold_all=True,
+            outline_level=outline_level,
+        )
+    ]
     for spec in lines_spec:
         elems.append(
             _crear_parrafo_texto(
@@ -1308,6 +1810,7 @@ def _construir_bloque_elementos(heading_text: str, heading_style_id: str, headin
                 bold_all=bool(spec.get("bold_all")),
                 italic=bool(spec.get("italic")),
                 muted=bool(spec.get("muted")),
+                indent_left=spec.get("indent_left"),
             )
         )
     elems.append(_w_el("p"))
@@ -1453,6 +1956,7 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
     with zipfile.ZipFile(io.BytesIO(orig_bytes), "r") as zin:
         estilos = _ooxml_cargar_estilos_mapa(zin)
         orig_doc_bytes = zin.read("word/document.xml")
+        orig_styles_bytes = zin.read("word/styles.xml") if "word/styles.xml" in zin.namelist() else None
 
     style_levels = estilos["levels"]
     estilo_ids = estilos["ids"]
@@ -1462,6 +1966,7 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
         raise ValueError("word/document.xml sin elemento w:body")
 
     _asegurar_secciones_y_final(body, style_levels, estilo_ids)
+    _reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
 
     deduplicated = False
     if entry.get("category") == "music":
@@ -1511,7 +2016,7 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
         matched_group = next((g for g in groups if g["group_key"] == target_group_key), None)
 
         if matched_group is None:
-            body.insert(sec_end, _crear_parrafo_texto(style_id=estilo_ids["heading_2"], text=target_group_heading, font_size=13, bold_all=True))
+            body.insert(sec_end, _crear_parrafo_texto(style_id=estilo_ids["heading_2"], text=target_group_heading, font_size=13, bold_all=True, outline_level=1))
             body.insert(sec_end + 1, _w_el("p"))
             toc_range = _encontrar_rango_toc(list(body))
             sec_start, sec_end, items = _buscar_rango_seccion(body, style_levels, "music", toc_range)
@@ -1521,7 +2026,7 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
             _establecer_texto_heading(body[matched_group["h2_idx"]], target_group_heading, 13)
 
         spec = formatear_entrada_ingles(merged_entry)
-        bloque = _construir_bloque_elementos(spec["heading"], estilo_ids["heading_3"], 11.5, spec["lines"])
+        bloque = _construir_bloque_elementos(spec["heading"], estilo_ids["heading_3"], 11.5, spec["lines"], outline_level=2)
         if matched_group is None:
             for offset, el in enumerate(bloque):
                 body.insert(sec_end + offset, el)
@@ -1542,7 +2047,7 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
             deduplicated = True
         else:
             insert_pos = _indice_insercion_agrupado_idioma(items, sec_start, sec_end, spec.get("language_code", "en"))
-            bloque = _construir_bloque_elementos(spec["heading"], estilo_ids["heading_2"], 12, spec["lines"])
+            bloque = _construir_bloque_elementos(spec["heading"], estilo_ids["heading_2"], 12, spec["lines"], outline_level=1)
             for offset, el in enumerate(bloque):
                 body.insert(insert_pos + offset, el)
 
@@ -1555,14 +2060,26 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
             "deduplicated": True,
         }
 
+    _reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
     _normalizar_saltos_pagina(body, style_levels)
+    _reconstruir_toc_con_enlaces(body, style_levels, estilo_ids)
     new_doc_bytes = _serializar_documento(doc_root, orig_doc_bytes)
+    new_styles_bytes = _asegurar_estilos_headings_y_toc(orig_styles_bytes, estilo_ids)
 
     out_buf = io.BytesIO()
     with zipfile.ZipFile(io.BytesIO(orig_bytes), "r") as zin, zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        has_styles = False
         for info in zin.infolist():
-            payload = new_doc_bytes if info.filename == "word/document.xml" else zin.read(info.filename)
+            if info.filename == "word/document.xml":
+                payload = new_doc_bytes
+            elif info.filename == "word/styles.xml":
+                payload = new_styles_bytes
+                has_styles = True
+            else:
+                payload = zin.read(info.filename)
             zout.writestr(info, payload)
+        if not has_styles:
+            zout.writestr("word/styles.xml", new_styles_bytes)
     return out_buf.getvalue(), {
         "category": spec["category"],
         "heading": spec["heading"],

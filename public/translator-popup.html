@@ -39,17 +39,24 @@
         </div>
 
         <section class="lang-translator-panel translator-popup-panel" id="popupTranslatorPanel" aria-label="Floating Extension Translator">
-            <div class="lang-translator-dirs" id="popupDirPills" role="group" aria-label="Translation Direction">
-                <button type="button" class="lang-dir-pill active" data-dir="en_es">🇺🇸 → 🇪🇸 EN → ES</button>
-                <button type="button" class="lang-dir-pill" data-dir="ko_en">🇰🇷 → 🇺🇸 KO → EN</button>
-                <button type="button" class="lang-dir-pill" data-dir="ko_es">🇰🇷 → 🇪🇸 KO → ES</button>
-                <button type="button" class="lang-dir-pill" data-dir="ja_es">🇯🇵 → 🇪🇸 JP → ES</button>
-                <button type="button" class="lang-dir-pill" data-dir="ja_en">🇯🇵 → 🇺🇸 JP → EN</button>
-                <button type="button" class="lang-dir-pill" data-dir="en_ja">🎌 JP-EN → ES</button>
-                <button type="button" class="lang-dir-pill" data-dir="auto">🌐 Auto</button>
-                <button type="button" class="lang-dir-pill" data-dir="es_en">🇪🇸 → 🇺🇸 ES → EN</button>
-                <button type="button" class="lang-dir-pill" data-dir="es_ko">🇪🇸 → 🇰🇷 ES → KO</button>
-                <button type="button" class="lang-dir-pill" data-dir="es_ja">🇪🇸 → 🇯🇵 ES → JP</button>
+            <div class="gt-lang-bar" id="popupTranslatorGtBar">
+                <div class="gt-lang-group gt-source-group" role="tablist" aria-label="Source language">
+                    <button type="button" class="gt-lang-tab active" data-gt-src="auto" title="Detect source language automatically">🌐 Detect</button>
+                    <button type="button" class="gt-lang-tab" data-gt-src="ko" title="Translate from Korean">🇰🇷 Korean</button>
+                    <button type="button" class="gt-lang-tab" data-gt-src="ja" title="Translate from Japanese">🇯🇵 Japanese</button>
+                    <button type="button" class="gt-lang-tab" data-gt-src="en" title="Translate from English (always to Spanish)">🇺🇸 English</button>
+                </div>
+                <span class="gt-arrow-divider" aria-hidden="true">→</span>
+                <div class="gt-lang-group gt-target-group" role="tablist" aria-label="Target language (English or Spanish)">
+                    <button type="button" class="gt-lang-tab active" data-gt-tgt="es" title="Translate to Spanish">🇪🇸 Spanish</button>
+                    <button type="button" class="gt-lang-tab" data-gt-tgt="en" title="Translate to English">🇺🇸 English</button>
+                </div>
+            </div>
+            <div id="popupTranslatorDetectedHint" class="gt-detected-hint" aria-live="polite"></div>
+
+            <!-- Compatibility hidden direction tokens -->
+            <div id="popupDirPills" hidden aria-hidden="true" style="display:none !important;">
+                <span data-dir="ja_es"></span><span data-dir="ja_en"></span><span data-dir="en_ja"></span><span data-dir="es_ja"></span>
             </div>
 
             <div class="translator-popup-toolbar">
@@ -62,17 +69,14 @@
                 <textarea id="popupTranslatorInput" class="english-textarea translator-extension-textarea" rows="4" maxlength="4000"
                     placeholder="Type or paste any word, phrase, or lyric (Enter to translate · Shift+Enter for new line)..."></textarea>
                 <div class="lang-translator-actions">
-                    <select id="popupDirectionSelect" class="select-input select-compact" aria-label="Translation direction">
-                        <option value="en_es" selected>English → Spanish</option>
-                        <option value="ko_en">Korean → English</option>
+                    <select id="popupDirectionSelect" class="select-input select-compact" hidden aria-hidden="true" style="display:none !important;" aria-label="Translation direction">
+                        <option value="auto" selected>Auto Detect (EN/KO/JP)</option>
+                        <option value="en_es">English → Spanish</option>
                         <option value="ko_es">Korean → Spanish</option>
+                        <option value="ko_en">Korean → English</option>
                         <option value="ja_es">Japanese → Spanish</option>
                         <option value="ja_en">Japanese → English</option>
                         <option value="en_ja">Japanese + English (JP-EN) → Spanish</option>
-                        <option value="auto">Auto Detect (EN/KO/JP)</option>
-                        <option value="es_en">Spanish → English</option>
-                        <option value="es_ko">Spanish → Korean</option>
-                        <option value="es_ja">Spanish → Japanese</option>
                     </select>
                     <select id="popupEngineSelect" class="select-input select-compact" aria-label="Translator engine">
                         <option value="auto">Auto (Gemini / Local)</option>

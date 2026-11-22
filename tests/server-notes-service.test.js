@@ -566,4 +566,115 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
         assert.match(aiEn.aiAnswer, /dígrafos/);
         assert.ok(aiEn.compositionRules.some((r) => String(r.rule || '').includes('Silent E')));
     });
+
+    it('aplica reglas Google Translate: inglés siempre a español y KO/JP solo a inglés o español según idioma del sistema', () => {
+        assert.strictEqual(langStudio.resolveGoogleStyleTranslationDirection('사랑해', 'auto', 'es'), 'ko_es');
+        assert.strictEqual(langStudio.resolveGoogleStyleTranslationDirection('사랑해', 'auto', 'en'), 'ko_en');
+        assert.strictEqual(langStudio.resolveGoogleStyleTranslationDirection('ありがとう', 'auto', 'es'), 'ja_es');
+        assert.strictEqual(langStudio.resolveGoogleStyleTranslationDirection('ありがとう', 'auto', 'en'), 'ja_en');
+        assert.strictEqual(langStudio.resolveGoogleStyleTranslationDirection('hold on', 'auto', 'es'), 'en_es');
+        assert.strictEqual(langStudio.resolveGoogleStyleTranslationDirection('hold on', 'auto', 'en'), 'en_es');
+
+        const koEs = langStudio.translateOffline({ text: '사랑해', direction: 'auto', uiLang: 'es' });
+        assert.strictEqual(koEs.direction, 'ko_es');
+        assert.match(koEs.translatedText, /Te amo|Te quiero/i);
+
+        const koEn = langStudio.translateOffline({ text: '사랑해', direction: 'auto', uiLang: 'en' });
+        assert.strictEqual(koEn.direction, 'ko_en');
+        assert.match(koEn.translatedText, /I love you/i);
+
+        const enAlwaysEs = langStudio.translateOffline({ text: 'hold on', direction: 'auto', uiLang: 'en' });
+        assert.strictEqual(enAlwaysEs.direction, 'en_es');
+        assert.match(enAlwaysEs.translatedText, /esperar|resistir/i);
+    });
+
+    it('formatea Word (.docx) con English/Spanish sin [EN]/[ES], salto de línea, indentación, sin duplicados e índice TOC reparado para todas las canciones', () => {
+        const pyCmd = resolvePythonCmd();
+        assert.ok(pyCmd, 'Python 3 debe estar disponible');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-docx-format-toc-'));
+        const docxPath = path.join(tmpDir, 'English_Learning_Notebook.docx');
+        try {
+            const utf8Env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+            const pyCheck = spawnSync(
+                pyCmd,
+                [
+                    '-c',
+                    [
+                        'import io, json, sys, zipfile, xml.etree.ElementTree as ET',
+                        `sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'lib'))})`,
+                        'import docx_writer as dw',
+                        'docx_path = sys.argv[1]',
+                        '# Crear un Word heredado donde BABYMONS7ER y BATTER UP perdieron estilos Heading2/3 y falta Heading3 en styles.xml',
+                        'W = dw.W_NS_URI',
+                        'legacy_styles = f\'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style></w:styles>\'',
+                        'legacy_doc = (',
+                        '  f\'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}"><w:body>\'',
+                        '  \'<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>4. Songs &amp; Music Study</w:t></w:r></w:p>\'',
+                        '  \'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>BABYMONS7ER (Album, 2024)</w:t></w:r></w:p>\'',
+                        '  \'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>BATTER UP — BABYMONSTER</w:t></w:r></w:p>\'',
+                        '  \'<w:p><w:r><w:t>Song: BATTER UP</w:t></w:r></w:p>\'',
+                        '  \'<w:p><w:r><w:t>Artists / Collabs: BABYMONSTER</w:t></w:r></w:p>\'',
+                        '  \'<w:sectPr/></w:body></w:document>\'',
+                        ')',
+                        'buf = io.BytesIO()',
+                        'with zipfile.ZipFile(buf, "w") as zout:',
+                        '    zout.writestr("[Content_Types].xml", \'<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>\')',
+                        '    zout.writestr("word/styles.xml", legacy_styles)',
+                        '    zout.writestr("word/document.xml", legacy_doc)',
+                        '# Insertar nueva canción con [ORIGINAL], [KO], [EN], === [ES — Traducción IA] === y versos repetidos',
+                        'out_bytes, meta = dw.update_english_docx_bytes(buf.getvalue(), {',
+                        '    "category": "music",',
+                        '    "language": "English + Korean",',
+                        '    "song_title": "DRIP",',
+                        '    "artists_display": "BABYMONSTER",',
+                        '    "album_title": "Drip",',
+                        '    "album_type": "Album",',
+                        '    "release_year": "2024",',
+                        '    "track_number": 2,',
+                        '    "lyrics_study": "[ORIGINAL]\\nBaby got no chill\\n소릴 높여\\n\\n[KO]\\n소릴 높여\\n\\n[EN]\\nI\'m on a mission\\n\\nI\'m on a mission\\n\\n=== [ES — Traducción IA] ===\\nEstoy en una misión"',
+                        '})',
+                        'with open(docx_path, "wb") as fh: fh.write(out_bytes)',
+                        'with zipfile.ZipFile(docx_path, "r") as zin:',
+                        '    doc_xml = zin.read("word/document.xml").decode("utf-8")',
+                        '    styles_xml = zin.read("word/styles.xml").decode("utf-8")',
+                        'root = ET.fromstring(doc_xml)',
+                        'paras = [dw._texto_parrafo_ooxml(p) for p in root.findall(f".//{{{W}}}p")]',
+                        'joined = "\\n".join(paras)',
+                        'assert "[ORIGINAL]" not in doc_xml and "[EN]" not in doc_xml and "[KO]" not in doc_xml and "[ES" not in doc_xml, "No raw bracketed language codes allowed"',
+                        'assert "Lyrics & Meaning Breakdown: [ORIGINAL]" not in joined',
+                        'idx_lbl = paras.index("Lyrics & Meaning Breakdown:")',
+                        'assert paras[idx_lbl + 1] == "Original", paras[idx_lbl:idx_lbl+6]',
+                        'assert "Korean" in paras and "English" in paras and "Spanish — Traducción IA" in paras, paras',
+                        '# Verificar salto de línea antes de English/Spanish y sangría en versos',
+                        'idx_en = paras.index("English")',
+                        'assert paras[idx_en - 1] == "", paras[idx_en-2:idx_en+2]',
+                        'assert paras.count("I\'m on a mission") == 1, "Duplicate consecutive verse must be removed"',
+                        'assert \'w:ind w:left="480"\' in doc_xml, "Verses must be indented"',
+                        'assert "Heading3" in styles_xml and "TOC3" in styles_xml',
+                        '# Verificar que BOTH BABYMONS7ER + BATTER UP y Drip + DRIP están en la TOC',
+                        'hyperlinks = ["".join(t.text or "" for t in h.iter(f"{{{W}}}t")) for h in root.findall(f".//{{{W}}}hyperlink")]',
+                        'hl_str = " | ".join(hyperlinks)',
+                        'assert "BABYMONS7ER (Album, 2024)" in hl_str, hl_str',
+                        'assert "BATTER UP — BABYMONSTER" in hl_str, hl_str',
+                        'assert "Drip (Album, 2024)" in hl_str, hl_str',
+                        'assert "02. DRIP — BABYMONSTER" in hl_str, hl_str',
+                    ].join('\n'),
+                    docxPath
+                ],
+                { encoding: 'utf8', env: utf8Env }
+            );
+            assert.strictEqual(pyCheck.status, 0, pyCheck.stderr || pyCheck.stdout);
+
+            const parsed = langStudio.parseStudyNotebookDocxBuffer(fs.readFileSync(docxPath), { includeAllEntries: true });
+            assert.strictEqual(parsed.ok, true);
+            assert.strictEqual(parsed.counts.music, 2);
+            const drip = parsed.allEntries.find((e) => e.song === 'DRIP');
+            assert.ok(drip && drip.fields && drip.fields.lyrics_study);
+            assert.ok(drip.fields.lyrics_study.includes('English\n'));
+            assert.ok(drip.fields.lyrics_study.includes('Spanish — Traducción IA\n'));
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });

@@ -1337,7 +1337,7 @@
                                         <span id="musicLyricsMetaBadge" class="badge-pill">Cuaderno Word</span>
                                     </div>
                                     <div class="music-lyrics-viewer-actions">
-                                        <select id="musicLyricsTrackLangFilter" class="select-input select-compact"
+                                        <select id="musicLyricsTrackLangFilter" class="select-input select-compact" hidden aria-hidden="true" style="display:none !important;"
                                             title="Alterna entre Todos, Original, Coreano, Inglés, Japonés, Híbrido JP-EN o Español">
                                             <option value="all">🌐 Todos los Apartados</option>
                                             <option value="original">🎵 Original (Mezcla Nativa)</option>
@@ -3347,18 +3347,20 @@
             </div>
         </div>
 
-        <div class="lang-translator-dirs" id="floatTranslatorDirPills" role="group" aria-label="Quick Translation Direction">
-            <button type="button" class="lang-dir-pill active" data-dir="en_es">🇺🇸 → 🇪🇸 EN → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="ko_en">🇰🇷 → 🇺🇸 KO → EN</button>
-            <button type="button" class="lang-dir-pill" data-dir="ko_es">🇰🇷 → 🇪🇸 KO → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="ja_es">🇯🇵 → 🇪🇸 JP → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="ja_en">🇯🇵 → 🇺🇸 JP → EN</button>
-            <button type="button" class="lang-dir-pill" data-dir="en_ja">🎌 JP-EN → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="auto">🌐 Auto</button>
-            <button type="button" class="lang-dir-pill" data-dir="es_en">🇪🇸 → 🇺🇸 ES → EN</button>
-            <button type="button" class="lang-dir-pill" data-dir="es_ko">🇪🇸 → 🇰🇷 ES → KO</button>
-            <button type="button" class="lang-dir-pill" data-dir="es_ja">🇪🇸 → 🇯🇵 ES → JP</button>
+        <div class="gt-lang-bar" id="floatTranslatorGtBar">
+            <div class="gt-lang-group gt-source-group" role="tablist" aria-label="Source language">
+                <button type="button" class="gt-lang-tab active" data-gt-src="auto" title="Detect source language automatically">🌐 Detect</button>
+                <button type="button" class="gt-lang-tab" data-gt-src="ko" title="Translate from Korean">🇰🇷 Korean</button>
+                <button type="button" class="gt-lang-tab" data-gt-src="ja" title="Translate from Japanese">🇯🇵 Japanese</button>
+                <button type="button" class="gt-lang-tab" data-gt-src="en" title="Translate from English (always to Spanish)">🇺🇸 English</button>
+            </div>
+            <span class="gt-arrow-divider" aria-hidden="true">→</span>
+            <div class="gt-lang-group gt-target-group" role="tablist" aria-label="Target language (English or Spanish)">
+                <button type="button" class="gt-lang-tab active" data-gt-tgt="es" title="Translate to Spanish">🇪🇸 Spanish</button>
+                <button type="button" class="gt-lang-tab" data-gt-tgt="en" title="Translate to English">🇺🇸 English</button>
+            </div>
         </div>
+        <div id="floatTranslatorDetectedHint" class="gt-detected-hint" aria-live="polite"></div>
 
         <div class="translator-popup-toolbar">
             <button type="button" class="btn-secondary btn-small" id="btnFloatTranslatorPaste">📋 Paste &amp; Translate</button>
@@ -3370,17 +3372,14 @@
             <textarea id="floatTranslatorInput" class="english-textarea translator-extension-textarea" rows="4" maxlength="4000"
                 placeholder="Type or select text + Alt+T... Enter to translate (Shift+Enter for new line)"></textarea>
             <div class="lang-translator-actions">
-                <select id="floatTranslatorDirectionSelect" class="select-input select-compact" aria-label="Quick translation direction">
-                    <option value="en_es" selected>English → Spanish</option>
-                    <option value="ko_en">Korean → English</option>
+                <select id="floatTranslatorDirectionSelect" class="select-input select-compact" hidden aria-hidden="true" style="display:none !important;" aria-label="Quick translation direction">
+                    <option value="auto" selected>Auto Detect (EN/KO/JP)</option>
+                    <option value="en_es">English → Spanish</option>
                     <option value="ko_es">Korean → Spanish</option>
+                    <option value="ko_en">Korean → English</option>
                     <option value="ja_es">Japanese → Spanish</option>
                     <option value="ja_en">Japanese → English</option>
                     <option value="en_ja">Japanese + English (JP-EN) → Spanish</option>
-                    <option value="auto">Auto Detect (EN/KO/JP)</option>
-                    <option value="es_en">Spanish → English</option>
-                    <option value="es_ko">Spanish → Korean</option>
-                    <option value="es_ja">Spanish → Japanese</option>
                 </select>
                 <select id="floatTranslatorEngineSelect" class="select-input select-compact" aria-label="Quick translator engine" title="Elige el modo de traducción">
                     <option value="auto">Automático (Gemini / Local)</option>
@@ -3436,7 +3435,7 @@
                     <option value="notes">5. Notas Manuales</option>
                     <option value="alphabet">6. Alfabetos y Reglas</option>
                 </select>
-                <select id="studyViewerNotebookLangFilter" class="select-input" aria-label="Notebook language section filter" title="Filtrar todo el cuaderno por apartado de idioma">
+                <select id="studyViewerNotebookLangFilter" class="select-input" hidden aria-hidden="true" style="display:none !important;" aria-label="Notebook language section filter" title="Filtrar todo el cuaderno por apartado de idioma">
                     <option value="all">🌍 Todos los Apartados por Idioma</option>
                     <option value="en">🇺🇸 Inglés</option>
                     <option value="ko">🇰🇷 Coreano</option>
@@ -3453,7 +3452,7 @@
                 <select id="studyViewerSongFilter" class="select-input" aria-label="Song filter">
                     <option value="">Todas las canciones</option>
                 </select>
-                <select id="studyViewerLangFilter" class="select-input" aria-label="Lyrics language filter" title="Idioma mostrado dentro de la letra de las canciones">
+                <select id="studyViewerLangFilter" class="select-input" hidden aria-hidden="true" style="display:none !important;" aria-label="Lyrics language filter" title="Idioma mostrado dentro de la letra de las canciones">
                     <option value="all">🎵 Letra: Todos los Idiomas</option>
                     <option value="original">🎵 Original (Mezcla Nativa)</option>
                     <option value="ko">🇰🇷 Coreano (Solo Coreano)</option>

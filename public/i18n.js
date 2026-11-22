@@ -1761,7 +1761,15 @@
         ['💾 Save Alphabet to Notes & Word', '💾 Guardar Alfabeto en Notas y Word'],
         ['📖 View in Word Notebook', '📖 Ver en Cuaderno Word'],
         ['Error loading alphabet & composition guide.', 'Error al cargar la guía de alfabeto y composición.'],
-        ['Error generating AI alphabet & composition guide.', 'Error al generar la guía IA de alfabeto y composición.']
+        ['Error generating AI alphabet & composition guide.', 'Error al generar la guía IA de alfabeto y composición.'],
+        ['🌐 Detect', '🌐 Detectar'],
+        ['Detect source language automatically', 'Detectar idioma origen automáticamente'],
+        ['Translate from Korean', 'Traducir desde Coreano'],
+        ['Translate from Japanese', 'Traducir desde Japonés'],
+        ['Translate from English (always to Spanish)', 'Traducir desde Inglés (siempre al español)'],
+        ['Translate to Spanish', 'Traducir a Español'],
+        ['Translate to English', 'Traducir a Inglés'],
+        ['⚡ Instant Local', '⚡ Local Instantáneo']
     ];
 
     var EN_FROM_KEY = new Map();
