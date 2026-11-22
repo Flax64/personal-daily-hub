@@ -1588,16 +1588,21 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
             assert.ok(indexHtml.includes(legacyId), `public/index.html debe conservar ${legacyId}`);
         }
 
-        // Verificar CSP estricta intacta + tiles cargados vía proxy local autenticado (sin referrerPolicy=no-referrer ni URL directa a tile.openstreetmap.org)
+        // Verificar CSP estricta intacta + tiles cargados vía proxy local autenticado (sin CARTO, con OSM + Esri y caché v2)
         assert.match(serverJs, /script-src 'self'/);
         assert.match(serverJs, /connect-src 'self'/);
         assert.match(serverJs, /img-src 'self' data: https:\/\/i\.ytimg\.com https:\/\/tile\.openstreetmap\.org https:\/\/\*\.tile\.openstreetmap\.org/);
         assert.ok(serverJs.includes('/api/planner/geocode-search') && serverJs.includes('/api/planner/reverse-geocode'));
         assert.ok(serverJs.includes('mapTileLimiter') && serverJs.includes('/api/planner/map-tile/:z/:x/:y.png'));
+        assert.strictEqual(serverJs.includes('basemaps.cartocdn.com'), false, 'server.js no debe usar basemaps.cartocdn.com (API KEY REQUIRED)');
+        assert.ok(serverJs.includes('https://tile.openstreetmap.org/'), 'server.js debe usar OpenStreetMap como proveedor principal');
+        assert.ok(serverJs.includes('World_Street_Map/MapServer/tile/') && serverJs.includes('World_Topo_Map/MapServer/tile/') && serverJs.includes('World_Imagery/MapServer/tile/'), 'server.js debe incluir respaldo Esri World Street/Topo/Imagery sin API key');
+        assert.ok(serverJs.includes("MAP_TILE_CACHE_VERSION = 'v2'") && serverJs.includes('detectMapTileImageMime('), 'server.js debe versionar caché de tiles (v2) y validar magic bytes');
         assert.ok(frontendJs.includes('function openLocationMapPicker(') && frontendJs.includes('function openPlannerCourseModal('));
-        assert.ok(frontendJs.includes('/api/planner/map-tile/'), 'El mapa debe solicitar tiles a través del proxy local autenticado');
+        assert.ok(frontendJs.includes('/api/planner/map-tile/') && frontendJs.includes('&v=2'), 'El mapa debe solicitar tiles v=2 a través del proxy local autenticado');
         assert.ok(!frontendJs.includes("referrerPolicy = 'no-referrer'"), 'No debe enviarse referrerPolicy no-referrer para tiles del mapa');
         assert.ok(!frontendJs.includes('https://tile.openstreetmap.org/'), 'frontend.js no debe cargar tiles directamente desde tile.openstreetmap.org');
+        assert.strictEqual(frontendJs.includes('CARTO') || indexHtml.includes('CARTO'), false, 'La atribución del mapa no debe mencionar CARTO');
         assert.ok(indexHtml.includes('id="btnMapLayerStreets"') && indexHtml.includes('id="btnMapLayerSatellite"'), 'El selector de mapa debe incluir cambio de capa Calles / Satélite');
     });
 });

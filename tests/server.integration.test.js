@@ -5242,7 +5242,7 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.ok(csp.includes('https://tile.openstreetmap.org'));
     });
 
-    it('proxy GET /api/planner/map-tile valida auth/coordenadas, aplica fallback 403->osm y cache LRU en memoria', async () => {
+    it('proxy GET /api/planner/map-tile valida auth/coordenadas/magic-bytes, usa OSM->Esri fallback y cache LRU v2', async () => {
         // 1. Requiere sesión autenticada
         const unauthRes = await request({ port, reqPath: '/api/planner/map-tile/15/7191/13946.png' });
         assert.strictEqual(unauthRes.status, 401);
@@ -5267,46 +5267,101 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         });
         assert.strictEqual(offlineRes.status, 502);
 
-        // 4. Con ALLOW_TEST_MAP_TILES=true: 403 en CARTO -> fallback a OSM (200) -> hit-mem en cache
-        const fakePng = Buffer.concat([
-            Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-            Buffer.from('DAILY_HUB_TEST_TILE_PNG_DATA_PADDING_64_BYTES_OK_0123456789ABCDEF')
-        ]);
-        const fakeSatJpg = Buffer.concat([
-            Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]),
-            Buffer.from('DAILY_HUB_TEST_SAT_JPEG_DATA_PADDING_64_BYTES_OK_0123456789ABCDEF')
-        ]);
+        // 4. Con ALLOW_TEST_MAP_TILES=true: valida magic bytes, > 100 bytes y cadena OSM -> Esri Streets -> Esri Topo / World Imagery
+        const validPad = Buffer.from('DAILY_HUB_TEST_TILE_PADDING_'.repeat(5)); // 140 bytes
+        const fakeOsmPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), validPad]);
+        const fakeEsriStreetsPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.from('ESRI_STREETS_'), validPad]);
+        const fakeEsriTopoPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.from('ESRI_TOPO_'), validPad]);
+        const fakeSatJpg = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), validPad]);
+        const tinyPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47]), Buffer.from('TINY_TILE_UNDER_100B')]);
+        const corruptBody = Buffer.from('<html><body>API KEY REQUIRED fake 200 payload ' + 'X'.repeat(120) + '</body></html>');
+
         const origFetch = global.fetch;
         const origAllow = process.env.ALLOW_TEST_MAP_TILES;
         const fetchedUrls = [];
         const fetchedUserAgents = [];
+        let allowTinyTileRecovery = false;
         process.env.ALLOW_TEST_MAP_TILES = 'true';
         global.fetch = async (url, opts = {}) => {
             const urlStr = String(url);
             fetchedUrls.push(urlStr);
             fetchedUserAgents.push(opts?.headers?.['User-Agent'] || '');
-            if (urlStr.includes('basemaps.cartocdn.com')) {
-                return {
-                    ok: false,
-                    status: 403,
-                    headers: new Map([['content-type', 'text/plain']]),
-                    arrayBuffer: async () => Buffer.from('blocked')
-                };
-            }
-            if (urlStr.includes('tile.openstreetmap.org')) {
+
+            // Coord 7191: OSM devuelve 200 pero magic bytes inválidos -> debe caer a Esri World Street Map
+            if (urlStr.includes('tile.openstreetmap.org/15/7191/13946.png')) {
                 return {
                     ok: true,
                     status: 200,
                     headers: new Map([['content-type', 'image/png']]),
-                    arrayBuffer: async () => fakePng
+                    arrayBuffer: async () => corruptBody
                 };
             }
+            if (urlStr.includes('World_Street_Map/MapServer/tile/15/13946/7191')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Map([['content-type', 'image/png']]),
+                    arrayBuffer: async () => fakeEsriStreetsPng
+                };
+            }
+            // Coord 7193: OSM directo OK
+            if (urlStr.includes('tile.openstreetmap.org/15/7193/13946.png')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Map([['content-type', 'image/png']]),
+                    arrayBuffer: async () => fakeOsmPng
+                };
+            }
+            // Coord 7194: OSM 429 + Esri Streets 503 -> Esri World Topo OK
+            if (urlStr.includes('tile.openstreetmap.org/15/7194/13946.png')) {
+                return {
+                    ok: false,
+                    status: 429,
+                    headers: new Map([['content-type', 'text/plain']]),
+                    arrayBuffer: async () => Buffer.from('rate limited')
+                };
+            }
+            if (urlStr.includes('World_Street_Map/MapServer/tile/15/13946/7194')) {
+                return {
+                    ok: false,
+                    status: 503,
+                    headers: new Map([['content-type', 'text/plain']]),
+                    arrayBuffer: async () => Buffer.from('unavailable')
+                };
+            }
+            if (urlStr.includes('World_Topo_Map/MapServer/tile/15/13946/7194')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Map([['content-type', 'image/png']]),
+                    arrayBuffer: async () => fakeEsriTopoPng
+                };
+            }
+            // Satélite coord 7192: Esri World Imagery (z/y/x)
             if (urlStr.includes('World_Imagery/MapServer/tile/15/13946/7192')) {
                 return {
                     ok: true,
                     status: 200,
                     headers: new Map([['content-type', 'image/jpeg']]),
                     arrayBuffer: async () => fakeSatJpg
+                };
+            }
+            // Coord 7195: primero todos <= 100 bytes (no cachea fallo), luego se recupera
+            if (urlStr.includes('/7195/') || urlStr.endsWith('/7195')) {
+                if (allowTinyTileRecovery && urlStr.includes('tile.openstreetmap.org')) {
+                    return {
+                        ok: true,
+                        status: 200,
+                        headers: new Map([['content-type', 'image/png']]),
+                        arrayBuffer: async () => fakeOsmPng
+                    };
+                }
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Map([['content-type', 'image/png']]),
+                    arrayBuffer: async () => tinyPng
                 };
             }
             return {
@@ -5318,9 +5373,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         };
 
         try {
-            const fallbackRes = await new Promise((resolve, reject) => {
+            const getRawTile = (reqPath) => new Promise((resolve, reject) => {
                 const req = http.request(
-                    { hostname: '127.0.0.1', port, path: '/api/planner/map-tile/15/7191/13946.png', method: 'GET', headers: { Cookie: adminCookie } },
+                    { hostname: '127.0.0.1', port, path: reqPath, method: 'GET', headers: { Cookie: adminCookie } },
                     (res) => {
                         const chunks = [];
                         res.on('data', (c) => chunks.push(c));
@@ -5330,36 +5385,63 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                 req.on('error', reject);
                 req.end();
             });
+
+            // A) Rechaza 200 con magic bytes inválidos en OSM y cae a esri-streets
+            const fallbackRes = await getRawTile('/api/planner/map-tile/15/7191/13946.png?layer=streets&v=2');
             assert.strictEqual(fallbackRes.status, 200);
             assert.strictEqual(fallbackRes.headers['content-type'], 'image/png');
-            assert.strictEqual(fallbackRes.headers['x-map-tile-provider'], 'osm');
+            assert.strictEqual(fallbackRes.headers['x-map-tile-provider'], 'esri-streets');
             assert.strictEqual(fallbackRes.headers['x-map-tile-cache'], 'miss');
-            assert.ok(fallbackRes.raw.equals(fakePng));
+            assert.ok(fallbackRes.raw.equals(fakeEsriStreetsPng));
             assert.strictEqual(fetchedUrls.length, 2);
-            assert.ok(fetchedUrls[0].includes('basemaps.cartocdn.com/rastertiles/voyager/15/7191/13946.png'));
-            assert.ok(fetchedUrls[1].includes('tile.openstreetmap.org/15/7191/13946.png'));
-            assert.ok(fetchedUserAgents.every((ua) => ua.includes('PersonalDailyHub/')));
+            assert.ok(fetchedUrls[0].includes('tile.openstreetmap.org/15/7191/13946.png'));
+            assert.ok(fetchedUrls[1].includes('World_Street_Map/MapServer/tile/15/13946/7191'));
+            assert.ok(fetchedUrls.every((u) => !u.includes('basemaps.cartocdn.com')));
+            assert.ok(fetchedUserAgents.every((ua) => ua.includes('PersonalDailyHub/1.21')));
 
-            // Segundo hit idéntico debe responder desde caché LRU sin volver a llamar a fetch
+            // B) Segundo hit idéntico responde desde caché LRU v2 sin volver a llamar a fetch
             const cachedRes = await request({
                 port,
-                reqPath: '/api/planner/map-tile/15/7191/13946.png',
+                reqPath: '/api/planner/map-tile/15/7191/13946.png?layer=streets&v=2',
                 headers: { Cookie: adminCookie }
             });
             assert.strictEqual(cachedRes.status, 200);
             assert.strictEqual(cachedRes.headers['x-map-tile-cache'], 'hit-mem');
             assert.strictEqual(fetchedUrls.length, 2);
 
-            // Solicitud de capa satélite usa Esri World Imagery con orden z/y/x
-            const satRes = await request({
-                port,
-                reqPath: '/api/planner/map-tile/15/7192/13946.png?layer=satellite',
-                headers: { Cookie: adminCookie }
-            });
+            // C) Hit directo válido a OpenStreetMap Standard
+            const osmRes = await getRawTile('/api/planner/map-tile/15/7193/13946.png?layer=streets&v=2');
+            assert.strictEqual(osmRes.status, 200);
+            assert.strictEqual(osmRes.headers['x-map-tile-provider'], 'osm');
+            assert.ok(osmRes.raw.equals(fakeOsmPng));
+            assert.strictEqual(fetchedUrls.length, 3);
+
+            // D) Cascada completa OSM 429 -> Esri Streets 503 -> Esri World Topo 200
+            const topoRes = await getRawTile('/api/planner/map-tile/15/7194/13946.png?layer=streets&v=2');
+            assert.strictEqual(topoRes.status, 200);
+            assert.strictEqual(topoRes.headers['x-map-tile-provider'], 'esri-topo');
+            assert.ok(topoRes.raw.equals(fakeEsriTopoPng));
+            assert.strictEqual(fetchedUrls.length, 6);
+
+            // E) Capa satélite usa Esri World Imagery con orden z/y/x
+            const satRes = await getRawTile('/api/planner/map-tile/15/7192/13946.png?layer=satellite&v=2');
             assert.strictEqual(satRes.status, 200);
             assert.strictEqual(satRes.headers['content-type'], 'image/jpeg');
             assert.strictEqual(satRes.headers['x-map-tile-provider'], 'esri-imagery');
-            assert.strictEqual(fetchedUrls.length, 3);
+            assert.ok(satRes.raw.equals(fakeSatJpg));
+
+            // F) Payloads <= 100 bytes fallan con 502 y no se cachean
+            const failTinyRes = await request({
+                port,
+                reqPath: '/api/planner/map-tile/15/7195/13946.png?layer=streets&v=2',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(failTinyRes.status, 502);
+            allowTinyTileRecovery = true;
+            const retryValidRes = await getRawTile('/api/planner/map-tile/15/7195/13946.png?layer=streets&v=2');
+            assert.strictEqual(retryValidRes.status, 200);
+            assert.strictEqual(retryValidRes.headers['x-map-tile-provider'], 'osm');
+            assert.strictEqual(retryValidRes.headers['x-map-tile-cache'], 'miss');
         } finally {
             global.fetch = origFetch;
             if (origAllow === undefined) delete process.env.ALLOW_TEST_MAP_TILES;

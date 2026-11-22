@@ -15880,9 +15880,8 @@ function renderMapPickerViewport() {
 
     renderMapPickerCanvas(width, height, viewLeft, viewTop, z);
 
-    // Load map tiles via authenticated same-origin proxy (CARTO / OSM / Esri fallback & cache)
+    // Load map tiles via authenticated same-origin proxy (OSM / Esri fallback & cache v2)
     const activeLayer = mapPickerState.layer === 'satellite' ? 'satellite' : 'streets';
-    const layerQuery = activeLayer === 'satellite' ? '?layer=satellite' : '';
     const tileLoadedOpacity = activeLayer === 'satellite' ? '0.96' : '0.94';
     const minTileX = Math.floor(viewLeft / 256);
     const maxTileX = Math.floor((viewLeft + width) / 256);
@@ -15911,7 +15910,7 @@ function renderMapPickerViewport() {
                 img.addEventListener('load', () => {
                     img.style.opacity = tileLoadedOpacity;
                 });
-                img.src = `/api/planner/map-tile/${z}/${wrappedX}/${ty}.png${layerQuery}`;
+                img.src = `/api/planner/map-tile/${z}/${wrappedX}/${ty}.png?layer=${activeLayer}&v=2`;
                 if (img.complete && img.naturalWidth > 0) {
                     img.style.opacity = tileLoadedOpacity;
                 }
@@ -16060,7 +16059,7 @@ function syncMapPickerLayerButtons() {
     if (attrEl) {
         attrEl.textContent = activeLayer === 'satellite'
             ? '© Esri World Imagery · OpenStreetMap'
-            : '© OpenStreetMap contributors · CARTO';
+            : '© OpenStreetMap contributors · Esri';
     }
 }
 
