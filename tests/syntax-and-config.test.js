@@ -1522,4 +1522,59 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
             'verify-ubuntu-local.sh no debe eliminar espacios internos de RCLONE_BACKUP_DIR (ej. Personal Daily Hub/RespaldosApp)'
         );
     });
+
+    it('ubica #plannerCourseForm dentro de #plannerCourseModal y configura #locationMapPickerModal con CSP segura para tiles OSM', () => {
+        const indexHtml = readText('public/index.html');
+        const serverJs = readText('server.js');
+        const frontendJs = readText('public/frontend.js');
+
+        const courseModalPos = indexHtml.indexOf('id="plannerCourseModal"');
+        const courseFormPos = indexHtml.indexOf('id="plannerCourseForm"');
+        const mapModalPos = indexHtml.indexOf('id="locationMapPickerModal"');
+        assert.ok(courseModalPos > -1, 'public/index.html debe incluir #plannerCourseModal');
+        assert.ok(courseFormPos > courseModalPos, '#plannerCourseForm debe estar dentro de #plannerCourseModal');
+        assert.ok(mapModalPos > courseFormPos, '#locationMapPickerModal debe definirse en el DOM');
+
+        for (const requiredId of [
+            'id="btnOpenCourseModal"',
+            'id="btnCloseCourseModal"',
+            'id="mapPickerViewport"',
+            'id="mapPickerCanvas"',
+            'id="mapPickerTilesLayer"',
+            'id="mapPickerPinMarker"',
+            'id="btnMapZoomIn"',
+            'id="btnMapZoomOut"',
+            'id="mapPickerSearchInput"',
+            'id="btnMapPickerSearch"',
+            'id="btnConfirmMapPickerLocation"',
+            'id="btnResetCampusDefaultLocation"',
+            'id="btnHomeOpenMapPicker"',
+            'id="btnResOpenMapPicker"',
+            'id="btnWorkOpenMapPicker"'
+        ]) {
+            assert.ok(indexHtml.includes(requiredId), `public/index.html debe incluir ${requiredId}`);
+        }
+
+        // Todos los IDs previos de coordenadas siguen presentes en inputs ocultos para retrocompatibilidad
+        for (const legacyId of [
+            'id="homeLocationLat"',
+            'id="homeLocationLng"',
+            'id="homeLocationMapsUrl"',
+            'id="uniLocationLat"',
+            'id="uniLocationLng"',
+            'id="resLocationLat"',
+            'id="resLocationLng"',
+            'id="workLocationLat"',
+            'id="workLocationLng"'
+        ]) {
+            assert.ok(indexHtml.includes(legacyId), `public/index.html debe conservar ${legacyId}`);
+        }
+
+        // Verificar CSP estricta intacta + tiles OSM permitidos solo en img-src
+        assert.match(serverJs, /script-src 'self'/);
+        assert.match(serverJs, /connect-src 'self'/);
+        assert.match(serverJs, /img-src 'self' data: https:\/\/i\.ytimg\.com https:\/\/tile\.openstreetmap\.org https:\/\/\*\.tile\.openstreetmap\.org/);
+        assert.ok(serverJs.includes('/api/planner/geocode-search') && serverJs.includes('/api/planner/reverse-geocode'));
+        assert.ok(frontendJs.includes('function openLocationMapPicker(') && frontendJs.includes('function openPlannerCourseModal('));
+    });
 });

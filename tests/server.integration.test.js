@@ -5107,4 +5107,138 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
+
+    it('permite personalizar los 3 campus ITS, buscar/geocodificar en mapa y restaurar coordenadas oficiales del croquis', async () => {
+        // 1. Personalizar Campus Principal (y verificar sincronía con university), Miravalle y Boillot
+        const prinRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/location',
+            headers: { Cookie: adminCookie },
+            body: {
+                target: 'campus_principal',
+                lat: 25.4428,
+                lng: -100.9905,
+                label: 'Campus Principal (Acceso Norte)',
+                address: 'Blvd. V. Carranza #2400 Norte, Saltillo',
+                source: 'map_picker'
+            }
+        });
+        assert.strictEqual(prinRes.status, 200);
+        const prinBody = JSON.parse(prinRes.body);
+        assert.strictEqual(prinBody.campusDirectory.principal.isCustom, true);
+        assert.strictEqual(prinBody.campusDirectory.principal.lat, 25.4428);
+        assert.strictEqual(prinBody.campusDirectory.principal.lng, -100.9905);
+        assert.strictEqual(prinBody.planner.locations.university.lat, 25.4428);
+        assert.strictEqual(prinBody.planner.locations.university.lng, -100.9905);
+
+        const miraRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/location',
+            headers: { Cookie: adminCookie },
+            body: { target: 'campus_miravalle', lat: 25.4205, lng: -101.0215, source: 'map_picker' }
+        });
+        assert.strictEqual(miraRes.status, 200);
+        assert.strictEqual(JSON.parse(miraRes.body).campusDirectory.miravalle.isCustom, true);
+
+        const boilRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/location',
+            headers: { Cookie: adminCookie },
+            body: { target: 'campus_boillot', lat: 25.4392, lng: -100.9931, source: 'map_picker' }
+        });
+        assert.strictEqual(boilRes.status, 200);
+        assert.strictEqual(JSON.parse(boilRes.body).campusDirectory.boillot.isCustom, true);
+
+        // 2. GET /api/planner y POST /api/planner/resolve-room reflejan las coordenadas personalizadas
+        const plannerRes = await request({
+            port,
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(plannerRes.status, 200);
+        const plannerBody = JSON.parse(plannerRes.body);
+        assert.strictEqual(plannerBody.campusDirectory.principal.lat, 25.4428);
+        assert.strictEqual(plannerBody.campusDirectory.miravalle.lat, 25.4205);
+        assert.strictEqual(plannerBody.campusDirectory.boillot.lat, 25.4392);
+        assert.strictEqual(plannerBody.commutePreview.campuses.boillot.lat, 25.4392);
+
+        const roomRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/resolve-room',
+            headers: { Cookie: adminCookie },
+            body: { room: 'R11' }
+        });
+        assert.strictEqual(roomRes.status, 200);
+        const roomBody = JSON.parse(roomRes.body);
+        assert.strictEqual(roomBody.resolved.campusId, 'boillot');
+        assert.strictEqual(roomBody.resolved.lat, 25.4392);
+        assert.strictEqual(roomBody.resolved.lng, -100.9931);
+
+        // 3. Búsqueda geográfica local/OSM y geocodificación inversa para selector en mapa
+        const badSearch = await request({
+            port,
+            reqPath: '/api/planner/geocode-search?q=a',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(badSearch.status, 400);
+
+        const searchRes = await request({
+            port,
+            reqPath: '/api/planner/geocode-search?q=Tec+Saltillo',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(searchRes.status, 200);
+        const searchBody = JSON.parse(searchRes.body);
+        assert.strictEqual(searchBody.ok, true);
+        assert.ok(Array.isArray(searchBody.results) && searchBody.results.length >= 1);
+        assert.ok(Number.isFinite(Number(searchBody.results[0].lat)) && Number.isFinite(Number(searchBody.results[0].lng)));
+
+        const badRev = await request({
+            port,
+            reqPath: '/api/planner/reverse-geocode?lat=0&lng=0',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(badRev.status, 400);
+
+        const revRes = await request({
+            port,
+            reqPath: '/api/planner/reverse-geocode?lat=25.4414&lng=-100.9922',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(revRes.status, 200);
+        const revBody = JSON.parse(revRes.body);
+        assert.strictEqual(revBody.ok, true);
+        assert.ok(typeof revBody.displayName === 'string' && revBody.displayName.length > 4);
+
+        // 4. Restaurar los 3 campus a coordenadas oficiales del Croquis TecNM Saltillo
+        for (const [resetTarget, key, expLat, expLng] of [
+            ['reset_campus_principal', 'principal', 25.4414, -100.9922],
+            ['reset_campus_miravalle', 'miravalle', 25.4194, -101.0232],
+            ['reset_campus_boillot', 'boillot', 25.4385, -100.9940]
+        ]) {
+            const rstRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/planner/location',
+                headers: { Cookie: adminCookie },
+                body: { target: resetTarget }
+            });
+            assert.strictEqual(rstRes.status, 200);
+            const rstBody = JSON.parse(rstRes.body);
+            assert.strictEqual(rstBody.campusDirectory[key].isCustom, false);
+            assert.strictEqual(rstBody.campusDirectory[key].lat, expLat);
+            assert.strictEqual(rstBody.campusDirectory[key].lng, expLng);
+        }
+
+        // Confirmar CSP estricta intacta
+        const htmlRes = await request({ port, reqPath: '/index.html' });
+        assert.strictEqual(htmlRes.status, 200);
+        const csp = String(htmlRes.headers['content-security-policy'] || '');
+        assert.ok(csp.includes("script-src 'self'") && csp.includes("connect-src 'self'"));
+        assert.ok(csp.includes('https://tile.openstreetmap.org'));
+    });
 });
