@@ -91,6 +91,7 @@ services:
       - DB_PASS=${DB_PASS}
       - DB_NAME=${DB_NAME}
       - PORT=${PORT:-3000}
+      - APP_VERSION=${APP_VERSION:-}
       - TZ=${TZ:-America/Monterrey}
       - LOG_DIR=${LOG_DIR:-/app/logs}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -134,7 +135,6 @@ services:
         condition: service_healthy
 
   app2:
-    build: .
     image: personal-daily-hub-app:latest
     container_name: mood_app2
     restart: always
@@ -168,6 +168,7 @@ services:
       - DB_PASS=${DB_PASS}
       - DB_NAME=${DB_NAME}
       - PORT=${PORT:-3000}
+      - APP_VERSION=${APP_VERSION:-}
       - TZ=${TZ:-America/Monterrey}
       - LOG_DIR=${LOG_DIR:-/app/logs}/app2
       - LOG_LEVEL=${LOG_LEVEL:-info}

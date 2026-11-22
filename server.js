@@ -11479,6 +11479,9 @@ app.post('/api/language/pronunciation', apiWriteLimiter.middleware, requireAdmin
 });
 
 function loadVersionMetadata() {
+    const rawEnvVersion = String(process.env.APP_VERSION || '').trim().replace(/^v/i, '');
+    const envVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(rawEnvVersion) ? rawEnvVersion : '';
+
     let pkgVersion = '1.0.0';
     try {
         const pkgPath = path.join(__dirname, 'package.json');
@@ -11491,6 +11494,7 @@ function loadVersionMetadata() {
     } catch (_) {
         pkgVersion = '1.0.0';
     }
+    const fallbackVersion = envVersion || pkgVersion || '1.0.0';
 
     let historyData = null;
     try {
@@ -11505,8 +11509,8 @@ function loadVersionMetadata() {
     const releases = Array.isArray(historyData?.releases)
         ? historyData.releases
         : [{
-            version: pkgVersion,
-            tag: `v${pkgVersion}`,
+            version: fallbackVersion,
+            tag: `v${fallbackVersion}`,
             bumpType: 'initial',
             previousVersion: '0.0.0',
             releasedAt: null,
@@ -11520,7 +11524,7 @@ function loadVersionMetadata() {
     const latest = releases[0] || null;
     const currentVersion = (historyData && typeof historyData.currentVersion === 'string' && historyData.currentVersion.trim())
         ? historyData.currentVersion.trim()
-        : (latest?.version || pkgVersion || '1.0.0');
+        : (latest?.version || fallbackVersion);
 
     return {
         currentVersion,
