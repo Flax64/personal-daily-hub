@@ -1,8 +1,32 @@
 {
   "standard": "SemVer 2.0.0 + Conventional Commits",
-  "currentVersion": "1.17.0",
-  "updatedAt": "2026-11-18T06:40:49.383Z",
+  "currentVersion": "1.23.0",
+  "updatedAt": "2026-11-22T22:27:47.386Z",
   "releases": [
+    {
+      "version": "1.23.0",
+      "tag": "v1.23.0",
+      "bumpType": "minor",
+      "previousVersion": "1.22.0",
+      "releasedAt": "2026-11-22T22:27:47.386Z",
+      "commitSha": "cabcc91",
+      "trigger": "push",
+      "summary": "feat(planner): add full CRUD for custom campuses/buildings, editable names, and custom rooms",
+      "counts": {
+        "breaking": 0,
+        "features": 1,
+        "fixes": 0,
+        "maintenance": 0
+      },
+      "changes": {
+        "breaking": [],
+        "features": [
+          "feat(planner): add full CRUD for custom campuses/buildings, editable names, and custom rooms (06d515b)"
+        ],
+        "fixes": [],
+        "maintenance": []
+      }
+    },
     {
       "version": "1.17.0",
       "tag": "v1.17.0",
