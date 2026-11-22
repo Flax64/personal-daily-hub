@@ -2121,7 +2121,7 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         const psychPlannerRes = await request({ port, reqPath: '/api/planner', headers: { Cookie: medicoCookie } });
         assert.strictEqual(psychPlannerRes.status, 403);
 
-        // 2. Obtener planificador inicial con materias MindBox 9no semestre del ITS y directorio del croquis
+        // 2. Obtener planificador inicial limpio (sin materias precargadas ni mindboxPreset) y directorio del croquis
         const getPlannerRes = await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } });
         assert.strictEqual(getPlannerRes.status, 200);
         const plannerBody = JSON.parse(getPlannerRes.body);
@@ -2131,7 +2131,8 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.ok(plannerBody.campusDirectory.miravalle);
         assert.ok(plannerBody.campusDirectory.boillot);
         assert.strictEqual(plannerBody.planner.activeSemesterId, 'sem-9no-2026');
-        assert.ok(plannerBody.planner.semesters[0].courses.length >= 5, 'Debe incluir las 5 materias MindBox de 9no semestre');
+        assert.strictEqual(plannerBody.planner.semesters[0].courses.length, 0, 'El planificador inicial debe iniciar sin materias precargadas');
+        assert.strictEqual(plannerBody.mindboxPreset, undefined, 'GET /api/planner no debe exponer mindboxPreset');
 
         // 3. Resolver aulas del croquis oficial del ITS (R02/R11 -> Boillot CTO-004, N21 -> Miravalle CTO-003, S14 -> Principal CTO-002)
         const roomR02Res = await request({
@@ -2222,6 +2223,43 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(insertedBody.titulo, 'Software Engineering Sprint Review');
         assert.strictEqual(insertedBody.descripcion, 'Present continuous deployment pipeline in room LC2');
         assert.ok(insertedBody.actividad.includes('Software Engineering Sprint Review — Present continuous deployment pipeline'));
+
+        // Guardar materias de prueba para validar sincronización semanal, vacaciones y vínculo materia_id
+        const plannerBeforeCourses = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+        plannerBeforeCourses.semesters[0].courses = [
+            {
+                id: 'its-test-1',
+                code: 'ACA0910',
+                name: 'Taller de Investigación II',
+                teacher: 'Docente Prueba',
+                group: 'B',
+                room: 'R02',
+                campusId: 'boillot',
+                days: [1, 2, 3, 4],
+                startTime: '09:00',
+                endTime: '10:00'
+            },
+            {
+                id: 'its-test-2',
+                code: 'DED2504',
+                name: 'Integración y Despliegue Continuos',
+                teacher: 'Docente Prueba 2',
+                group: 'A',
+                room: 'R11',
+                campusId: 'boillot',
+                days: [1, 2, 3, 4, 5],
+                startTime: '14:00',
+                endTime: '15:00'
+            }
+        ];
+        const seedCoursesRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: { planner: plannerBeforeCourses }
+        });
+        assert.strictEqual(seedCoursesRes.status, 200);
 
         // 6. Sincronizar horario ITS a la Agenda Semanal (respetando vacaciones)
         const syncRes = await request({
@@ -2320,6 +2358,70 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(personalItem.categoria, 'personal');
         assert.strictEqual(personalItem.materia_id, null);
         assert.strictEqual(personalItem.materia_nombre, null);
+
+        // 8. Crear un segundo semestre y luego eliminarlo vía PUT /api/planner, validando activeSemesterId y fallback si queda vacío
+        const baseForSemOps = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+        const withTwoSemesters = {
+            ...baseForSemOps,
+            activeSemesterId: 'sem-10mo-2027',
+            semesters: [
+                baseForSemOps.semesters[0],
+                {
+                    id: 'sem-10mo-2027',
+                    name: '10mo Semestre · Residencias',
+                    termCode: '2027-1',
+                    startDate: '2027-01-18',
+                    endDate: '2027-06-04',
+                    active: true,
+                    courses: []
+                }
+            ]
+        };
+        const addSemRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: { planner: withTwoSemesters }
+        });
+        assert.strictEqual(addSemRes.status, 200);
+
+        const afterAddSem = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+        assert.strictEqual(afterAddSem.semesters.length, 2);
+        assert.strictEqual(afterAddSem.activeSemesterId, 'sem-10mo-2027');
+
+        const afterDeletePayload = {
+            ...afterAddSem,
+            activeSemesterId: afterAddSem.semesters[0].id,
+            semesters: [afterAddSem.semesters[0]]
+        };
+        const delSemRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: { planner: afterDeletePayload }
+        });
+        assert.strictEqual(delSemRes.status, 200);
+
+        const afterDelSem = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+        assert.strictEqual(afterDelSem.semesters.length, 1);
+        assert.strictEqual(afterDelSem.activeSemesterId, 'sem-9no-2026');
+        assert.strictEqual(afterDelSem.semesters[0].courses.length, 2, 'Al eliminar el 2° semestre debe conservar las materias del semestre restante');
+
+        // Si se envía semesters: [] el backend asegura el semestre por defecto vacío y activeSemesterId válido
+        const emptySemRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: { planner: { ...afterDelSem, semesters: [] } }
+        });
+        assert.strictEqual(emptySemRes.status, 200);
+        const afterEmptySem = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+        assert.strictEqual(afterEmptySem.semesters.length, 1);
+        assert.strictEqual(afterEmptySem.semesters[0].courses.length, 0);
+        assert.strictEqual(afterEmptySem.activeSemesterId, afterEmptySem.semesters[0].id);
     });
 
     it('soporta túnel de transporte cifrado X25519 + AES-256-CTR + HMAC-SHA256 para grandes volúmenes, rechaza manipulación/replay y expone Studio Multilingüe EN/KR/K-Pop', async () => {

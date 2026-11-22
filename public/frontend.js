@@ -10746,7 +10746,6 @@ function ensureAcademicPlannerLoaded() {
             if (data && data.planner) {
                 academicPlannerState = data.planner;
                 if (data.campusDirectory) academicPlannerDirectory = data.campusDirectory;
-                if (data.mindboxPreset) academicPlannerMindboxPreset = data.mindboxPreset;
                 renderAgendaCourseFilterOptions();
                 if (typeof renderAgendaBoard === 'function') renderAgendaBoard();
                 if (agendaModal && !agendaModal.hidden && typeof syncAgendaMateriaFieldUI === 'function') {
@@ -14670,7 +14669,6 @@ function initWordStyleProofing() {
 // ==========================================
 let academicPlannerState = null;
 let academicPlannerDirectory = null;
-let academicPlannerMindboxPreset = null;
 let academicPlannerCommutePreview = null;
 
 function setPlannerBanner(type, message) {
@@ -14856,10 +14854,12 @@ function renderPlannerSemesterUI() {
     const semEnd = document.getElementById('plannerSemEnd');
     const coursesList = document.getElementById('plannerCoursesContainer');
     const countBadge = document.getElementById('plannerCoursesCountBadge');
+    const btnDeleteSem = document.getElementById('btnDeleteSemester');
     if (!academicPlannerState || !semSelect) return;
 
+    const semesters = Array.isArray(academicPlannerState.semesters) ? academicPlannerState.semesters : [];
     semSelect.replaceChildren();
-    (academicPlannerState.semesters || []).forEach(sem => {
+    semesters.forEach(sem => {
         const opt = document.createElement('option');
         opt.value = sem.id;
         const labelName = sem.name || sem.nombre || tUi('Semester', 'Semestre');
@@ -14867,6 +14867,13 @@ function renderPlannerSemesterUI() {
         opt.textContent = `${labelName} (${clsCount} ${tUi(clsCount === 1 ? 'class' : 'classes', clsCount === 1 ? 'materia' : 'materias')})`;
         semSelect.appendChild(opt);
     });
+    if (btnDeleteSem) {
+        const onlyOne = semesters.length <= 1;
+        btnDeleteSem.disabled = onlyOne;
+        btnDeleteSem.title = onlyOne
+            ? tUi('At least one semester must remain', 'Debe permanecer al menos un semestre')
+            : tUi('Delete the selected semester', 'Eliminar el semestre seleccionado');
+    }
     const activeSem = getActiveSemesterObj();
     if (!activeSem) return;
 
@@ -14889,8 +14896,8 @@ function renderPlannerSemesterUI() {
         const empty = document.createElement('div');
         empty.className = 'agenda-empty';
         empty.textContent = tUi(
-            'No classes in this semester yet. Click "+ Add Class" or "Load MindBox 9th Sem Preset".',
-            'Aún no hay materias en este semestre. Presiona "+ Agregar Clase" o "Cargar Plantilla MindBox 9°".'
+            'No classes in this semester yet. Click "+ Add Class" to add your first course.',
+            'Aún no hay materias en este semestre. Presiona "+ Agregar Clase" para añadir tu primera materia.'
         );
         coursesList.appendChild(empty);
         return;
@@ -16641,7 +16648,6 @@ function cargarPlannerVista() {
         .then(data => {
             academicPlannerState = data.planner || {};
             academicPlannerDirectory = data.campusDirectory || null;
-            academicPlannerMindboxPreset = data.mindboxPreset || null;
             renderItsCroquisDirectory(academicPlannerDirectory);
             renderPlannerSemesterUI();
             renderPlannerVacationsUI();
@@ -16714,28 +16720,33 @@ function initAcademicPlannerHandlers() {
         });
     }
 
-    const btnLoadPreset = document.getElementById('btnLoadMindboxPreset');
-    if (btnLoadPreset) {
-        btnLoadPreset.addEventListener('click', () => {
-            const applyPreset = (presetCourses) => {
-                const activeSem = getActiveSemesterObj();
-                if (!activeSem || !Array.isArray(presetCourses)) return;
-                activeSem.courses = presetCourses.map(c => ({ ...c }));
-                resetPlannerCourseForm();
-                renderPlannerSemesterUI();
-                setPlannerBanner('ok', tUi('Loaded your 5 MindBox 9th-semester ITS courses! Click "Save All..." at the bottom to persist.', '¡Cargadas tus 5 materias MindBox 9° semestre ITS! Presiona "Guardar Todo..." abajo para guardarlas.'));
-            };
-            if (Array.isArray(academicPlannerMindboxPreset) && academicPlannerMindboxPreset.length) {
-                applyPreset(academicPlannerMindboxPreset);
+    const btnDeleteSem = document.getElementById('btnDeleteSemester');
+    if (btnDeleteSem) {
+        btnDeleteSem.addEventListener('click', () => {
+            if (!academicPlannerState || !Array.isArray(academicPlannerState.semesters) || academicPlannerState.semesters.length <= 1) {
                 return;
             }
-            fetch('/api/planner', { cache: 'no-store' })
-                .then(r => r.json())
-                .then(data => {
-                    academicPlannerMindboxPreset = data.mindboxPreset || [];
-                    applyPreset(academicPlannerMindboxPreset);
-                })
-                .catch(() => { });
+            const activeSem = getActiveSemesterObj();
+            if (!activeSem) return;
+            const semLabel = activeSem.name || activeSem.nombre || activeSem.id;
+            const clsCount = Array.isArray(activeSem.courses) ? activeSem.courses.length : 0;
+            const confirmMsg = tUi(
+                `Delete semester "${semLabel}" (${clsCount} ${clsCount === 1 ? 'class' : 'classes'})?`,
+                `¿Eliminar el semestre "${semLabel}" (${clsCount} ${clsCount === 1 ? 'materia' : 'materias'})?`
+            );
+            if (typeof window.confirm === 'function' && !window.confirm(confirmMsg)) {
+                return;
+            }
+            const removedIdx = academicPlannerState.semesters.findIndex(s => s.id === activeSem.id);
+            const remaining = academicPlannerState.semesters.filter(s => s.id !== activeSem.id);
+            if (remaining.length === 0) return;
+            academicPlannerState.semesters = remaining;
+            const nextIdx = Math.min(Math.max(removedIdx, 0), remaining.length - 1);
+            academicPlannerState.activeSemesterId = remaining[nextIdx].id;
+            resetPlannerCourseForm();
+            closePlannerCourseModal();
+            renderPlannerSemesterUI();
+            setPlannerBanner('info', tUi('Semester removed. Click "Save All..." at the bottom to persist changes.', 'Semestre eliminado. Presiona "Guardar Todo..." abajo para guardar los cambios.'));
         });
     }
 
