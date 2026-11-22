@@ -1,11 +1,20 @@
 # Historial de Versiones / Changelog
 
-> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.17.0**
+> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.19.0**
 >
 > Reglas automáticas en cada despliegue a `main`:
 > - **MAJOR (`+1.0.0`)**: Cambios incompatibles (`BREAKING CHANGE:` o `<tipo>!:`).
 > - **MINOR (`+0.1.0`)**: Nuevas funcionalidades compatibles (`feat:` / `feat(alcance):`).
 > - **PATCH (`+0.0.1`)**: Corrección de errores (`fix:`), seguridad, documentación o mantenimiento.
+
+## [v1.19.0] - 2026-11-22 (MINOR) · `8c12155`
+**feat(language-studio): fix Tailnet timeouts, add Hangul practice, AI alphabet guides and per-language notebook sections**
+
+### ✨ Features / Nuevas Funciones
+- feat(language-studio): fix Tailnet timeouts, add Hangul practice, AI alphabet guides and per-language notebook sections (9be8321)
+
+### 🐛 Bug Fixes / Correcciones
+- fix(language-studio): format Word lyrics with full language names and TOC links, add Google Translate UI and remove redundant filters (d0f9ef5)
 
 ## [v1.17.0] - 2026-11-18 (MINOR) · `593ce77`
 **feat: ntfy**

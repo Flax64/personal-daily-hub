@@ -1,8 +1,34 @@
 {
   "standard": "SemVer 2.0.0 + Conventional Commits",
-  "currentVersion": "1.17.0",
-  "updatedAt": "2026-11-18T06:40:49.383Z",
+  "currentVersion": "1.19.0",
+  "updatedAt": "2026-11-22T06:23:55.063Z",
   "releases": [
+    {
+      "version": "1.19.0",
+      "tag": "v1.19.0",
+      "bumpType": "minor",
+      "previousVersion": "1.18.4",
+      "releasedAt": "2026-11-22T06:23:55.063Z",
+      "commitSha": "8c12155",
+      "trigger": "push",
+      "summary": "feat(language-studio): fix Tailnet timeouts, add Hangul practice, AI alphabet guides and per-language notebook sections",
+      "counts": {
+        "breaking": 0,
+        "features": 1,
+        "fixes": 1,
+        "maintenance": 0
+      },
+      "changes": {
+        "breaking": [],
+        "features": [
+          "feat(language-studio): fix Tailnet timeouts, add Hangul practice, AI alphabet guides and per-language notebook sections (9be8321)"
+        ],
+        "fixes": [
+          "fix(language-studio): format Word lyrics with full language names and TOC links, add Google Translate UI and remove redundant filters (d0f9ef5)"
+        ],
+        "maintenance": []
+      }
+    },
     {
       "version": "1.17.0",
       "tag": "v1.17.0",
