@@ -1,11 +1,17 @@
 # Historial de Versiones / Changelog
 
-> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.17.0**
+> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.19.1**
 >
 > Reglas automáticas en cada despliegue a `main`:
 > - **MAJOR (`+1.0.0`)**: Cambios incompatibles (`BREAKING CHANGE:` o `<tipo>!:`).
 > - **MINOR (`+0.1.0`)**: Nuevas funcionalidades compatibles (`feat:` / `feat(alcance):`).
 > - **PATCH (`+0.0.1`)**: Corrección de errores (`fix:`), seguridad, documentación o mantenimiento.
+
+## [v1.19.1] - 2026-11-22 (PATCH) · `a976694`
+**fix(language-studio,auth): add read-only Drive Korean notes, zero-save symbol comparator, auth bar alignment and PC boot screen failsafe**
+
+### 🐛 Bug Fixes / Correcciones
+- fix(language-studio,auth): add read-only Drive Korean notes, zero-save symbol comparator, auth bar alignment and PC boot screen failsafe (c7c1442)
 
 ## [v1.17.0] - 2026-11-18 (MINOR) · `593ce77`
 **feat: ntfy**
