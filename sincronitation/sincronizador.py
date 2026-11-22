@@ -3842,6 +3842,128 @@ def _ooxml_establecer_texto_heading(p_elem, heading_text, font_size):
             p_elem.append(bme)
 
 
+_RE_OOXML_TOC_STYLE_ID = re.compile(
+    r"^(?:toc\s*\d*|tocheading|tabla\s*de\s*contenido.*|indice\s*\d*|índice\s*\d*|tdc\s*\d*)$",
+    re.IGNORECASE,
+)
+
+
+def _ooxml_es_titulo_toc_ingles(el):
+    if el.tag != _ooxml_w_tag("p"):
+        return False
+    return _texto_parrafo_ooxml(el).strip().lower() in (
+        "table of contents",
+        "tabla de contenido",
+        "índice",
+        "indice",
+    )
+
+
+def _ooxml_es_elemento_residuo_toc_ingles(el, estilo_ids=None):
+    if el.tag == _ooxml_w_tag("sdt"):
+        full_instr = " ".join(it.text or "" for it in el.iter(_ooxml_w_tag("instrText"))).upper()
+        if "TOC" in full_instr or "PAGEREF" in full_instr:
+            return True
+        val_attr = _ooxml_w_tag("val")
+        for g in el.iter(_ooxml_w_tag("docPartGallery")):
+            gval = g.attrib.get(val_attr, "").strip().lower()
+            if "table of contents" in gval or "tabla de contenido" in gval:
+                return True
+        for p in el.iter(_ooxml_w_tag("p")):
+            if _ooxml_es_titulo_toc_ingles(p) or _ooxml_es_elemento_residuo_toc_ingles(p, estilo_ids):
+                return True
+        return False
+
+    if el.tag != _ooxml_w_tag("p"):
+        return False
+
+    val_attr = _ooxml_w_tag("val")
+    toc_style_ids = set()
+    if estilo_ids:
+        for k in ("toc_1", "toc_2", "toc_3"):
+            v = str(estilo_ids.get(k) or "").strip().lower()
+            if v:
+                toc_style_ids.add(v)
+
+    ppr = el.find(_ooxml_w_tag("pPr"))
+    if ppr is not None:
+        pstyle_el = ppr.find(_ooxml_w_tag("pStyle"))
+        if pstyle_el is not None:
+            sid = pstyle_el.attrib.get(val_attr, "").strip()
+            if _RE_OOXML_TOC_STYLE_ID.match(sid) or sid.lower() in toc_style_ids:
+                return True
+
+    for it in el.iter(_ooxml_w_tag("instrText")):
+        upper = (it.text or "").upper()
+        if any(tok in upper for tok in ("TOC", "PAGEREF", "_TOC", "BOOKMARK=ID")):
+            return True
+
+    for hl in el.iter(_ooxml_w_tag("hyperlink")):
+        for aval in hl.attrib.values():
+            low_a = str(aval or "").lower()
+            if "_toc" in low_a or "bookmark=id" in low_a:
+                return True
+
+    if any(True for _ in el.iter(_ooxml_w_tag("fldChar"))):
+        return True
+
+    low_txt = _texto_parrafo_ooxml(el).lower()
+    if any(
+        marker in low_txt
+        for marker in (
+            "content not found",
+            "#bookmark=id",
+            "bookmark=id.",
+            "error! bookmark not defined",
+            "¡error! marcador no definido",
+        )
+    ):
+        return True
+    return False
+
+
+def _ooxml_tiene_marcador_toc_roto(el):
+    for hl in el.iter(_ooxml_w_tag("hyperlink")):
+        for aval in hl.attrib.values():
+            if "bookmark=id" in str(aval or "").lower():
+                return True
+    low_txt = _texto_parrafo_ooxml(el).lower()
+    return any(
+        marker in low_txt
+        for marker in (
+            "content not found",
+            "#bookmark=id",
+            "bookmark=id.",
+            "error! bookmark not defined",
+            "¡error! marcador no definido",
+        )
+    )
+
+
+def _ooxml_es_heading_real_para_corte_toc(el, style_levels=None):
+    if el.tag != _ooxml_w_tag("p"):
+        return False
+    if _ooxml_es_elemento_residuo_toc_ingles(el) or _ooxml_es_titulo_toc_ingles(el):
+        return False
+    val_attr = _ooxml_w_tag("val")
+    ppr = el.find(_ooxml_w_tag("pPr"))
+    if ppr is None:
+        return False
+    pstyle_el = ppr.find(_ooxml_w_tag("pStyle"))
+    if pstyle_el is not None:
+        sid = pstyle_el.attrib.get(val_attr, "")
+        if style_levels and sid in style_levels and style_levels[sid] in (1, 2, 3):
+            return True
+        if re.search(r"heading\s*[1-3]|t[ií]tulo\s*[1-3]", sid.lower()):
+            return True
+    lvl_el = ppr.find(_ooxml_w_tag("outlineLvl"))
+    if lvl_el is not None:
+        raw_lvl = lvl_el.attrib.get(val_attr, "")
+        if raw_lvl in ("0", "1", "2"):
+            return True
+    return False
+
+
 def _ooxml_encontrar_rango_toc(body_children):
     """Encuentra el rango [start, end) de párrafos o contenedor w:sdt perteneciente a la TOC principal."""
     p_tag = _ooxml_w_tag("p")
@@ -3849,11 +3971,17 @@ def _ooxml_encontrar_rango_toc(body_children):
     fld_tag = _ooxml_w_tag("fldChar")
     instr_tag = _ooxml_w_tag("instrText")
     ftype_attr = _ooxml_w_tag("fldCharType")
+    val_attr = _ooxml_w_tag("val")
 
     for idx, child in enumerate(body_children):
         if child.tag == sdt_tag:
             sdt_txt = " ".join((it.text or "") for it in child.iter(instr_tag))
-            if "TOC" in sdt_txt.upper():
+            has_toc_gallery = any(
+                "table of contents" in (g.attrib.get(val_attr, "")).lower()
+                or "tabla de contenido" in (g.attrib.get(val_attr, "")).lower()
+                for g in child.iter(_ooxml_w_tag("docPartGallery"))
+            )
+            if re.search(r"\bTOC\b", sdt_txt, re.IGNORECASE) or has_toc_gallery:
                 return idx, idx + 1
 
     depth = 0
@@ -3864,6 +3992,8 @@ def _ooxml_encontrar_rango_toc(body_children):
     for idx, child in enumerate(body_children):
         if child.tag != p_tag:
             continue
+        if in_toc and _ooxml_es_heading_real_para_corte_toc(child):
+            return toc_start, idx
         for elem in child.iter():
             if elem.tag == fld_tag:
                 ftype = elem.attrib.get(ftype_attr, "")
@@ -3879,7 +4009,8 @@ def _ooxml_encontrar_rango_toc(body_children):
                     if not in_toc and depth == 0:
                         pending_start = None
             elif elem.tag == instr_tag and pending_start is not None:
-                if "TOC" in (elem.text or "").upper():
+                instr_txt = elem.text or ""
+                if re.search(r"\bTOC\b", instr_txt, re.IGNORECASE) and "PAGEREF" not in instr_txt.upper():
                     in_toc = True
                     toc_start = pending_start
     return (
@@ -3975,23 +4106,141 @@ def _ooxml_asegurar_bookmark_en_parrafo(p_elem, alloc_bm_fn):
     return bm_name
 
 
+def _ooxml_tiene_residuos_toc_corrupta(body, style_levels, estilo_ids):
+    p_tag = _ooxml_w_tag("p")
+    children = list(body)
+    sect_idx = _ooxml_indice_sectpr(body)
+    first_h1_idx = next(
+        (
+            idx
+            for idx in range(sect_idx)
+            if children[idx].tag == p_tag
+            and _nivel_parrafo_ooxml(children[idx], style_levels) == 1
+            and not _ooxml_es_elemento_residuo_toc_ingles(children[idx], estilo_ids)
+            and not _ooxml_es_titulo_toc_ingles(children[idx])
+        ),
+        None,
+    )
+    pre_limit = first_h1_idx if first_h1_idx is not None else sect_idx
+    pre_children = children[:pre_limit]
+    t_start, t_end = _ooxml_encontrar_rango_toc(pre_children)
+    if t_start is None:
+        t_start, t_end = -1, -1
+
+    title_count = 0
+    for idx, el in enumerate(pre_children):
+        if _ooxml_es_titulo_toc_ingles(el):
+            title_count += 1
+            if title_count > 1:
+                return True
+        if t_start <= idx < t_end:
+            if _ooxml_tiene_marcador_toc_roto(el):
+                return True
+            if el.tag == _ooxml_w_tag("sdt"):
+                for p in el.iter(p_tag):
+                    if _ooxml_tiene_marcador_toc_roto(p):
+                        return True
+        elif _ooxml_es_elemento_residuo_toc_ingles(el, estilo_ids):
+            return True
+    return False
+
+
 def _ooxml_reconstruir_toc_con_enlaces(body, style_levels, estilo_ids):
-    """Asegura marcadores _Toc en Heading 1..3 y reconstruye la TOC con hipervínculos."""
+    """Asegura marcadores _Toc en Heading 1..3 y reconstruye una única TOC limpia auto-sanando residuos previos al primer H1."""
     p_tag = _ooxml_w_tag("p")
     bm_start_tag = _ooxml_w_tag("bookmarkStart")
     id_attr = _ooxml_w_tag("id")
     name_attr = _ooxml_w_tag("name")
 
+    children = list(body)
+    sect_idx = _ooxml_indice_sectpr(body)
+    first_h1_idx = next(
+        (
+            idx
+            for idx in range(sect_idx)
+            if children[idx].tag == p_tag
+            and _nivel_parrafo_ooxml(children[idx], style_levels) == 1
+            and not _ooxml_es_elemento_residuo_toc_ingles(children[idx], estilo_ids)
+            and not _ooxml_es_titulo_toc_ingles(children[idx])
+        ),
+        None,
+    )
+    pre_limit = first_h1_idx if first_h1_idx is not None else sect_idx
+    pre_children = children[:pre_limit]
+    toc_start, toc_end = _ooxml_encontrar_rango_toc(pre_children)
+    t_start, t_end = (toc_start, toc_end) if toc_start is not None else (-1, -1)
+
+    toc_titles_seen = 0
+    blank_outside_count = 0
+    corrupted_removed = 0
+    seen_inside_toc = set()
+    to_remove = []
+
+    for idx, el in enumerate(pre_children):
+        in_main_toc = t_start <= idx < t_end
+        if in_main_toc:
+            to_remove.append(el)
+            if el.tag == _ooxml_w_tag("sdt"):
+                for p in el.iter(p_tag):
+                    ptxt = _texto_parrafo_ooxml(p)
+                    if _ooxml_tiene_marcador_toc_roto(p) or (ptxt and ptxt in seen_inside_toc):
+                        corrupted_removed += 1
+                    elif ptxt:
+                        seen_inside_toc.add(ptxt)
+            elif el.tag == p_tag:
+                ptxt = _texto_parrafo_ooxml(el)
+                if _ooxml_tiene_marcador_toc_roto(el) or (ptxt and ptxt in seen_inside_toc):
+                    corrupted_removed += 1
+                elif ptxt:
+                    seen_inside_toc.add(ptxt)
+            continue
+
+        if _ooxml_es_titulo_toc_ingles(el):
+            toc_titles_seen += 1
+            if toc_titles_seen > 1:
+                corrupted_removed += 1
+            to_remove.append(el)
+        elif _ooxml_es_elemento_residuo_toc_ingles(el, estilo_ids):
+            corrupted_removed += 1
+            to_remove.append(el)
+        elif el.tag == p_tag and not _texto_parrafo_ooxml(el) and not any(
+            n.tag.split("}")[-1].lower() in {"drawing", "pict", "object", "imagedata"}
+            for n in el.iter()
+        ):
+            blank_outside_count += 1
+            to_remove.append(el)
+
+    if blank_outside_count > 1 and (corrupted_removed > 0 or toc_titles_seen > 1 or toc_start is not None):
+        corrupted_removed += blank_outside_count - 1
+
+    for old_el in to_remove:
+        if old_el in body:
+            body.remove(old_el)
+
+    children = list(body)
+    sect_idx = _ooxml_indice_sectpr(body)
+    first_h1_after = next(
+        (
+            i
+            for i in range(sect_idx)
+            if children[i].tag == p_tag
+            and _nivel_parrafo_ooxml(children[i], style_levels) == 1
+        ),
+        None,
+    )
+    body_scan_start = first_h1_after if first_h1_after is not None else 0
+
     max_id = 0
     max_toc_num = 245632084
-    for elem in body.iter():
-        if elem.tag == bm_start_tag:
-            raw_id = elem.attrib.get(id_attr, "")
-            if raw_id.isdigit():
-                max_id = max(max_id, int(raw_id))
-            bname = elem.attrib.get(name_attr, "")
-            if bname.startswith("_Toc") and bname[4:].isdigit():
-                max_toc_num = max(max_toc_num, int(bname[4:]))
+    for ch in children[body_scan_start:sect_idx]:
+        for elem in ch.iter():
+            if elem.tag == bm_start_tag:
+                raw_id = elem.attrib.get(id_attr, "")
+                if raw_id.isdigit():
+                    max_id = max(max_id, int(raw_id))
+                bname = elem.attrib.get(name_attr, "")
+                if bname.startswith("_Toc") and bname[4:].isdigit():
+                    max_toc_num = max(max_toc_num, int(bname[4:]))
 
     bm_state = [max_id, max_toc_num]
 
@@ -4000,19 +4249,12 @@ def _ooxml_reconstruir_toc_con_enlaces(body, style_levels, estilo_ids):
         bm_state[1] += 1
         return bm_state[0], f"_Toc{bm_state[1]}"
 
-    children = list(body)
-    toc_start, toc_end = _ooxml_encontrar_rango_toc(children)
-
     toc_entries = []
-    first_h1_idx = None
-    for idx, child in enumerate(children):
-        if toc_start is not None and toc_start <= idx < toc_end:
-            continue
+    for idx in range(body_scan_start, sect_idx):
+        child = children[idx]
         if child.tag != p_tag:
             continue
         lvl = _nivel_parrafo_ooxml(child, style_levels)
-        if lvl == 1 and first_h1_idx is None:
-            first_h1_idx = idx
         if lvl in (1, 2, 3):
             txt = _texto_parrafo_ooxml(child)
             if txt:
@@ -4042,19 +4284,19 @@ def _ooxml_reconstruir_toc_con_enlaces(body, style_levels, estilo_ids):
     end_p.append(r_end)
     new_toc_ps.append(end_p)
 
-    if toc_start is not None:
-        for old_el in children[toc_start:toc_end]:
-            body.remove(old_el)
-        for offset, new_el in enumerate(new_toc_ps):
-            body.insert(toc_start + offset, new_el)
-    else:
-        insert_pos = first_h1_idx if first_h1_idx is not None else min(2, len(children))
-        toc_title_p = _ooxml_crear_parrafo_texto(
-            text="Table of Contents", font_size=13, bold_all=True
-        )
-        block = [toc_title_p, *new_toc_ps, _ooxml_w_el("p")]
-        for offset, new_el in enumerate(block):
-            body.insert(insert_pos + offset, new_el)
+    insert_pos = first_h1_after if first_h1_after is not None else min(2, sect_idx)
+    toc_title_p = _ooxml_crear_parrafo_texto(
+        text="Table of Contents", font_size=13, bold_all=True
+    )
+    block = [toc_title_p, *new_toc_ps, _ooxml_w_el("p")]
+    for offset, new_el in enumerate(block):
+        body.insert(insert_pos + offset, new_el)
+
+    return {
+        "corrupted_removed": corrupted_removed,
+        "toc_entries_count": len(toc_entries),
+        "toc_paragraphs_count": len(new_toc_ps),
+    }
 
 
 def _ooxml_indice_sectpr(body):
@@ -4565,15 +4807,17 @@ def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
             body, style_levels, spec["category"], toc_range
         )
         if _ooxml_bloque_duplicado(body, items, sec_start, sec_end, spec):
-            logging.info(
-                f"English Notebook: entrada duplicada omitida [{spec['category']}]: {spec['heading']}"
+            if not _ooxml_tiene_residuos_toc_corrupta(body, style_levels, estilo_ids):
+                logging.info(
+                    f"English Notebook: entrada duplicada omitida [{spec['category']}]: {spec['heading']}"
+                )
+                return True
+        else:
+            bloque = _ooxml_construir_bloque_elementos(
+                spec["heading"], estilo_ids["heading_2"], 12, spec["lines"]
             )
-            return True
-        bloque = _ooxml_construir_bloque_elementos(
-            spec["heading"], estilo_ids["heading_2"], 12, spec["lines"]
-        )
-        for offset, el in enumerate(bloque):
-            body.insert(sec_end + offset, el)
+            for offset, el in enumerate(bloque):
+                body.insert(sec_end + offset, el)
 
     _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
     _ooxml_normalizar_saltos_pagina(body, style_levels)
@@ -5914,10 +6158,23 @@ def _nivel_parrafo_ooxml(p_elem, style_levels):
     """Determina nivel jerárquico (1..3, 0 si TOC, None si normal) de un <w:p>."""
     val_attr = f"{_OOXML_W_NS}val"
     ppr = p_elem.find(f"{_OOXML_W_NS}pPr")
+    style_id = ""
+    if ppr is not None:
+        pstyle_el = ppr.find(f"{_OOXML_W_NS}pStyle")
+        style_id = pstyle_el.attrib.get(val_attr, "").strip() if pstyle_el is not None else ""
+        if style_id and _RE_OOXML_TOC_STYLE_ID.match(style_id):
+            return 0
+    for it in p_elem.iter(f"{_OOXML_W_NS}instrText"):
+        upper = (it.text or "").upper()
+        if "TOC" in upper or "PAGEREF" in upper:
+            return 0
+    for hl in p_elem.iter(f"{_OOXML_W_NS}hyperlink"):
+        for aval in hl.attrib.values():
+            low_a = str(aval or "").lower()
+            if "_toc" in low_a or "bookmark=id" in low_a:
+                return 0
     if ppr is None:
         return None
-    pstyle_el = ppr.find(f"{_OOXML_W_NS}pStyle")
-    style_id = pstyle_el.attrib.get(val_attr, "") if pstyle_el is not None else ""
     if style_id in style_levels:
         mapped = style_levels[style_id]
         if mapped == 0:

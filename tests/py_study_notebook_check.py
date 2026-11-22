@@ -356,6 +356,211 @@ def check_drive_pull(tmp, docx):
     ), jp_mixed
     assert jp_mixed["ja"] == "夢を見る\n空を見上げて", jp_mixed
 
+    check_toc_regression_and_self_heal(tmp)
+
+
+def check_toc_regression_and_self_heal(tmp):
+    """Regresión TOC: 5+ guardados consecutivos sin cascada + auto-sanación de TOC corrupta."""
+    import xml.etree.ElementTree as ET
+
+    lib_dir = os.path.join(ROOT, "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    import docx_writer as dw  # noqa: E402
+
+    W = dw.W_NS_URI
+    w_tag = dw._w_tag
+
+    def inspect_toc_structure(docx_bytes):
+        with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zf:
+            styles_info = dw._ooxml_cargar_estilos_mapa(zf)
+            root = ET.fromstring(zf.read("word/document.xml"))
+        body = root.find(w_tag("body"))
+        children = list(body)
+        p_tag = w_tag("p")
+        fld_tag = w_tag("fldChar")
+        instr_tag = w_tag("instrText")
+        ftype_attr = w_tag("fldCharType")
+        hl_tag = w_tag("hyperlink")
+        val_attr = w_tag("val")
+
+        body_headings = []
+        toc_titles = 0
+        toc_instr_count = 0
+        toc_style_paras = []
+        toc_hyperlinks = []
+        broken_markers = []
+        depth = 0
+        in_toc = False
+        outer_toc_closed = 0
+        orphan_ends = 0
+
+        for child in children:
+            if child.tag != p_tag:
+                continue
+            txt = dw._texto_parrafo_ooxml(child)
+            if txt.strip().lower() in ("table of contents", "tabla de contenido"):
+                toc_titles += 1
+            ppr = child.find(w_tag("pPr"))
+            sid = ""
+            if ppr is not None:
+                ps = ppr.find(w_tag("pStyle"))
+                if ps is not None:
+                    sid = ps.attrib.get(val_attr, "")
+            if sid.upper().startswith("TOC"):
+                toc_style_paras.append(txt)
+            if "content not found" in txt.lower() or "bookmark=id" in txt.lower():
+                broken_markers.append(txt)
+            for hl in child.iter(hl_tag):
+                anchor = hl.attrib.get(w_tag("anchor"), "")
+                if "bookmark=id" in anchor.lower():
+                    broken_markers.append(anchor)
+                elif anchor.startswith("_Toc"):
+                    toc_hyperlinks.append(
+                        "".join(t.text or "" for t in hl.iter(w_tag("t")))
+                    )
+            for el in child.iter():
+                if el.tag == instr_tag:
+                    up = (el.text or "").upper()
+                    if "TOC \\O" in up or ("TOC" in up and "PAGEREF" not in up):
+                        toc_instr_count += 1
+                elif el.tag == fld_tag:
+                    ft = el.attrib.get(ftype_attr, "")
+                    if ft == "begin":
+                        depth += 1
+                    elif ft == "end":
+                        if depth == 0:
+                            orphan_ends += 1
+                        else:
+                            depth -= 1
+                            if in_toc and depth == 0:
+                                in_toc = False
+                                outer_toc_closed += 1
+                if el.tag == instr_tag and "TOC" in (el.text or "").upper() and "PAGEREF" not in (el.text or "").upper() and depth == 1:
+                    in_toc = True
+
+            lvl = dw._nivel_parrafo_ooxml(child, styles_info["levels"])
+            if lvl in (1, 2, 3) and txt:
+                body_headings.append((lvl, txt))
+
+        return {
+            "toc_titles": toc_titles,
+            "toc_instr_count": toc_instr_count,
+            "toc_style_paras": toc_style_paras,
+            "toc_hyperlinks": toc_hyperlinks,
+            "body_headings": body_headings,
+            "broken_markers": broken_markers,
+            "depth": depth,
+            "outer_toc_closed": outer_toc_closed,
+            "orphan_ends": orphan_ends,
+        }
+
+    # 1) Guardar 6 entradas consecutivas con update_english_docx_bytes
+    entries = [
+        {"category": "vocabulary", "language": "English", "word": "ephemeral", "part_of_speech": "adjective", "spanish": "efímero"},
+        {"category": "vocabulary", "language": "English", "word": "lucid", "part_of_speech": "adjective", "spanish": "lúcido"},
+        {"category": "grammar", "language": "English", "title": "Subjunctive Mood", "notes": "If I were you..."},
+        {"category": "phrasal_verb", "language": "English", "verb": "carry on", "meaning_es": "continuar"},
+        {"category": "notes", "language": "English", "title": "Study Plan", "notes": "Review 15 minutes daily."},
+        {"category": "music", "language": "English", "song_title": "Starlight", "artists_display": "Muse", "album_title": "Black Holes", "album_type": "Album", "release_year": "2006", "track_number": 2, "lyrics_study": "[EN]\nHold you in my arms"},
+    ]
+    doc_bytes = None
+    for ent in entries:
+        doc_bytes, _ = dw.update_english_docx_bytes(doc_bytes, ent)
+
+    st_clean = inspect_toc_structure(doc_bytes)
+    assert st_clean["toc_titles"] == 1, st_clean
+    assert st_clean["toc_instr_count"] == 1, st_clean
+    assert st_clean["outer_toc_closed"] == 1, st_clean
+    assert st_clean["depth"] == 0 and st_clean["orphan_ends"] == 0, st_clean
+    assert len(st_clean["toc_style_paras"]) == len(st_clean["body_headings"]), st_clean
+    assert len(st_clean["toc_hyperlinks"]) == len(st_clean["body_headings"]), st_clean
+
+    # 2) Corromper severamente el .docx previo al primer Heading 1 y verificar reparación
+    with zipfile.ZipFile(io.BytesIO(doc_bytes), "r") as zin:
+        orig_xml = zin.read("word/document.xml")
+        other_files = {i.filename: zin.read(i.filename) for i in zin.infolist() if i.filename != "word/document.xml"}
+    root_c = ET.fromstring(orig_xml)
+    body_c = root_c.find(w_tag("body"))
+    first_h1_pos = next(
+        i for i, ch in enumerate(list(body_c))
+        if ch.tag == w_tag("p") and dw._nivel_parrafo_ooxml(ch, {"Heading1": 1}) == 1
+    )
+
+    corrupt_nodes = [
+        dw._crear_parrafo_texto(text="Table of Contents", font_size=13, bold_all=True),
+        dw._crear_parrafo_texto(text="Tabla de contenido", font_size=13, bold_all=True),
+        dw._crear_parrafo_toc(1, "1. Glossary & New Words", "_Toc245632085", {"toc_1": "TOC1", "hyperlink": "Hyperlink"}, is_first=False),
+        dw._crear_parrafo_toc(2, "ephemeral (adjective) — efímero", "_Toc245632086", {"toc_2": "TOC2", "hyperlink": "Hyperlink"}, is_first=False),
+        dw._crear_parrafo_toc(1, "1. Glossary & New Words", "_Toc245632085", {"toc_1": "TOC1", "hyperlink": "Hyperlink"}, is_first=False),
+    ]
+    # Agregar párrafo con PAGEREF huérfano, cierre fldChar end huérfano y enlace Google Docs roto
+    p_orphan_pageref = ET.fromstring(
+        f'<w:p xmlns:w="{W}"><w:pPr><w:pStyle w:val="TOC2"/></w:pPr>'
+        f'<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:instrText xml:space="preserve"> PAGEREF _Toc999999 \\h </w:instrText></w:r>'
+        f'<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        f'<w:r><w:t>Content not found</w:t></w:r>'
+        f'<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    )
+    p_gdocs_broken = ET.fromstring(
+        f'<w:p xmlns:w="{W}"><w:hyperlink w:anchor="bookmark=id.gdocs123">'
+        f'<w:r><w:t>#bookmark=id.gdocs123 Content not found</w:t></w:r></w:hyperlink></w:p>'
+    )
+    p_orphan_end = ET.fromstring(
+        f'<w:p xmlns:w="{W}"><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    )
+    corrupt_nodes.extend([p_orphan_pageref, p_gdocs_broken, p_orphan_end, dw._w_el("p"), dw._w_el("p")])
+    for off, node in enumerate(corrupt_nodes):
+        body_c.insert(first_h1_pos + off, node)
+
+    corrupt_buf = io.BytesIO()
+    with zipfile.ZipFile(corrupt_buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        for fn, pl in other_files.items():
+            zout.writestr(fn, pl)
+        zout.writestr("word/document.xml", dw._serializar_documento(root_c, orig_xml))
+    corrupt_bytes = corrupt_buf.getvalue()
+
+    # 2a) Reparación en frío con repair_english_docx_bytes
+    repaired_bytes, rstats = dw.repair_english_docx_bytes(corrupt_bytes)
+    assert rstats["ok"] is True and rstats["repaired"] is True, rstats
+    assert rstats["removedTocParagraphs"] >= 8, rstats
+    assert rstats["sectionsIntact"] is True, rstats
+    assert rstats["counts"]["vocabulary"] == 2, rstats
+    assert rstats["counts"]["music"] == 1, rstats
+
+    st_rep = inspect_toc_structure(repaired_bytes)
+    assert st_rep["toc_titles"] == 1, st_rep
+    assert st_rep["toc_instr_count"] == 1, st_rep
+    assert st_rep["outer_toc_closed"] == 1, st_rep
+    assert st_rep["depth"] == 0 and st_rep["orphan_ends"] == 0, st_rep
+    assert st_rep["broken_markers"] == [], st_rep
+    assert len(st_rep["toc_style_paras"]) == len(st_rep["body_headings"]), st_rep
+    assert st_rep["body_headings"] == st_clean["body_headings"], (st_rep["body_headings"], st_clean["body_headings"])
+
+    # 2b) Auto-sanación en update_english_docx_bytes incluso con entrada nueva o duplicada
+    healed_dup_bytes, hmeta = dw.update_english_docx_bytes(corrupt_bytes, entries[0])
+    assert hmeta["deduplicated"] is True and hmeta["removedTocParagraphs"] >= 8, hmeta
+    st_hdup = inspect_toc_structure(healed_dup_bytes)
+    assert st_hdup["toc_titles"] == 1 and st_hdup["toc_instr_count"] == 1 and st_hdup["broken_markers"] == [], st_hdup
+
+    # 2c) Auto-sanación equivalente en sincronizador._guardar_entrada_ingles_en_docx_xml
+    corrupt_sync_path = os.path.join(tmp, "Corrupt_Notebook.docx")
+    with open(corrupt_sync_path, "wb") as fh:
+        fh.write(corrupt_bytes)
+    assert s._guardar_entrada_ingles_en_docx_xml(corrupt_sync_path, {
+        "category": "vocabulary", "language": "English", "word": "serene", "part_of_speech": "adjective", "spanish": "sereno"
+    }) is True
+    with open(corrupt_sync_path, "rb") as fh:
+        sync_bytes = fh.read()
+    st_sync = inspect_toc_structure(sync_bytes)
+    assert st_sync["toc_titles"] == 1 and st_sync["toc_instr_count"] == 1 and st_sync["broken_markers"] == [], st_sync
+    assert st_sync["depth"] == 0 and st_sync["orphan_ends"] == 0, st_sync
+    assert len(st_sync["toc_style_paras"]) == len(st_sync["body_headings"]), st_sync
+    sync_read = s.leer_cuaderno_estudio_word({"limit": 50}, ruta_docx=corrupt_sync_path)
+    assert sync_read["ok"] and sync_read["counts"]["vocabulary"] == 3 and sync_read["counts"]["music"] == 1, sync_read
+    print("TOC SELF-HEAL OK")
+
 
 if __name__ == "__main__":
     main()
