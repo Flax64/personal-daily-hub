@@ -1,11 +1,17 @@
 # Historial de Versiones / Changelog
 
-> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.17.0**
+> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.21.2**
 >
 > Reglas automáticas en cada despliegue a `main`:
 > - **MAJOR (`+1.0.0`)**: Cambios incompatibles (`BREAKING CHANGE:` o `<tipo>!:`).
 > - **MINOR (`+0.1.0`)**: Nuevas funcionalidades compatibles (`feat:` / `feat(alcance):`).
 > - **PATCH (`+0.0.1`)**: Corrección de errores (`fix:`), seguridad, documentación o mantenimiento.
+
+## [v1.21.2] - 2026-11-22 (PATCH) · `c2a6771`
+**fix(deploy): resolve msoffcrypto verify check, UFW/disk warnings, and Docker build advisories**
+
+### 🐛 Bug Fixes / Correcciones
+- fix(deploy): resolve msoffcrypto verify check, UFW/disk warnings, and Docker build advisories (8c4cb2a)
 
 ## [v1.17.0] - 2026-11-18 (MINOR) · `593ce77`
 **feat: ntfy**
