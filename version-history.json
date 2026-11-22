@@ -1,8 +1,32 @@
 {
   "standard": "SemVer 2.0.0 + Conventional Commits",
-  "currentVersion": "1.17.0",
-  "updatedAt": "2026-11-18T06:40:49.383Z",
+  "currentVersion": "1.20.0",
+  "updatedAt": "2026-11-22T20:28:36.226Z",
   "releases": [
+    {
+      "version": "1.20.0",
+      "tag": "v1.20.0",
+      "bumpType": "minor",
+      "previousVersion": "1.19.7",
+      "releasedAt": "2026-11-22T20:28:36.226Z",
+      "commitSha": "5fccf99",
+      "trigger": "push",
+      "summary": "feat(planner): add interactive map location picker, custom ITS campus pins, and class modal",
+      "counts": {
+        "breaking": 0,
+        "features": 1,
+        "fixes": 0,
+        "maintenance": 0
+      },
+      "changes": {
+        "breaking": [],
+        "features": [
+          "feat(planner): add interactive map location picker, custom ITS campus pins, and class modal (8c47844)"
+        ],
+        "fixes": [],
+        "maintenance": []
+      }
+    },
     {
       "version": "1.17.0",
       "tag": "v1.17.0",

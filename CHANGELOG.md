@@ -1,11 +1,17 @@
 # Historial de Versiones / Changelog
 
-> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.17.0**
+> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.20.0**
 >
 > Reglas automáticas en cada despliegue a `main`:
 > - **MAJOR (`+1.0.0`)**: Cambios incompatibles (`BREAKING CHANGE:` o `<tipo>!:`).
 > - **MINOR (`+0.1.0`)**: Nuevas funcionalidades compatibles (`feat:` / `feat(alcance):`).
 > - **PATCH (`+0.0.1`)**: Corrección de errores (`fix:`), seguridad, documentación o mantenimiento.
+
+## [v1.20.0] - 2026-11-22 (MINOR) · `5fccf99`
+**feat(planner): add interactive map location picker, custom ITS campus pins, and class modal**
+
+### ✨ Features / Nuevas Funciones
+- feat(planner): add interactive map location picker, custom ITS campus pins, and class modal (8c47844)
 
 ## [v1.17.0] - 2026-11-18 (MINOR) · `593ce77`
 **feat: ntfy**
