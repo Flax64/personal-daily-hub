@@ -56,6 +56,7 @@ jobs:
 
       - name: Commit version bump and create annotated release tag
         env:
+          PUSH_RELEASE_COMMIT: ${{ vars.RELEASE_PUSH_TO_MAIN || 'false' }}
           NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
           TAG_NAME: ${{ steps.semver.outputs.tag_name }}
           BUMP_TYPE: ${{ steps.semver.outputs.bump_type }}
@@ -64,12 +65,14 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json version-history.json CHANGELOG.md
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(release): ${TAG_NAME} (${BUMP_TYPE}) [skip ci]"
-            if ! git push origin HEAD:main; then
-              echo "::warning::Direct push to main skipped; EC2 will apply release metadata via workflow output."
+          if [ "${PUSH_RELEASE_COMMIT}" = "true" ]; then
+            git add package.json package-lock.json version-history.json CHANGELOG.md
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(release): ${TAG_NAME} (${BUMP_TYPE}) [skip ci]"
+              git push origin HEAD:main
             fi
+          else
+            echo "Protected main mode (RELEASE_PUSH_TO_MAIN!=true): tagging merged HEAD directly without pushing commit to main."
           fi
           if ! git rev-parse "${TAG_NAME}" >/dev/null 2>&1; then
             git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}: ${RELEASE_SUMMARY}"
@@ -102,9 +105,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout del repositorio
-        uses: actions/checkout@v4
-
       - name: Detectar modo Tailscale para conexión SSH privada
         id: ts_mode
         env:
@@ -305,25 +305,49 @@ jobs:
             else
               echo "💾 Memoria Swap suficiente ya activa (${TOTAL_SWAP_BYTES} bytes)."
             fi
-            $SUDO sysctl -w vm.swappiness=15 vm.vfs_cache_pressure=50 >/dev/null 2>&1 || true
+            CUR_SWAPPINESS="$(cat /proc/sys/vm/swappiness 2>/dev/null || true)"
+            CUR_VFS_PRESSURE="$(cat /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true)"
+            TUNING_NEEDS_SYSCTL=0
+            if [ "$CUR_SWAPPINESS" != "15" ] || [ "$CUR_VFS_PRESSURE" != "50" ]; then
+              TUNING_NEEDS_SYSCTL=1
+            fi
             if [ -d /etc/sysctl.d ]; then
-              printf 'vm.swappiness=15\nvm.vfs_cache_pressure=50\n' | $SUDO tee /etc/sysctl.d/99-mood-tuning.conf >/dev/null 2>&1 || true
+              TUNING_CONF="/etc/sysctl.d/99-mood-tuning.conf"
+              TUNING_CONTENT="$(printf 'vm.swappiness=15\nvm.vfs_cache_pressure=50')"
+              if [ ! -f "$TUNING_CONF" ] || [ "$($SUDO cat "$TUNING_CONF" 2>/dev/null || true)" != "$TUNING_CONTENT" ]; then
+                printf '%s\n' "$TUNING_CONTENT" | $SUDO tee "$TUNING_CONF" >/dev/null 2>&1 || true
+                $SUDO chmod 644 "$TUNING_CONF" 2>/dev/null || true
+                TUNING_NEEDS_SYSCTL=1
+              fi
             elif [ -f /etc/sysctl.conf ]; then
               if grep -qE '^vm\.swappiness=' /etc/sysctl.conf; then
-                $SUDO sed -i 's/^vm\.swappiness=.*/vm.swappiness=15/' /etc/sysctl.conf
+                if ! grep -qE '^vm\.swappiness=15$' /etc/sysctl.conf; then
+                  $SUDO sed -i 's/^vm\.swappiness=.*/vm.swappiness=15/' /etc/sysctl.conf
+                  TUNING_NEEDS_SYSCTL=1
+                fi
               else
                 echo 'vm.swappiness=15' | $SUDO tee -a /etc/sysctl.conf >/dev/null
+                TUNING_NEEDS_SYSCTL=1
               fi
               if grep -qE '^vm\.vfs_cache_pressure=' /etc/sysctl.conf; then
-                $SUDO sed -i 's/^vm\.vfs_cache_pressure=.*/vm.vfs_cache_pressure=50/' /etc/sysctl.conf
+                if ! grep -qE '^vm\.vfs_cache_pressure=50$' /etc/sysctl.conf; then
+                  $SUDO sed -i 's/^vm\.vfs_cache_pressure=.*/vm.vfs_cache_pressure=50/' /etc/sysctl.conf
+                  TUNING_NEEDS_SYSCTL=1
+                fi
               else
                 echo 'vm.vfs_cache_pressure=50' | $SUDO tee -a /etc/sysctl.conf >/dev/null
+                TUNING_NEEDS_SYSCTL=1
               fi
+            fi
+            if [ "$TUNING_NEEDS_SYSCTL" -eq 1 ]; then
+              $SUDO sysctl -w vm.swappiness=15 vm.vfs_cache_pressure=50 >/dev/null 2>&1 || true
             fi
             free -h | grep -iE 'mem|swap' || true
 
             if [ "$FINAL_DISABLE_SYSTEM_SLEEP" = "true" ] && command -v systemctl >/dev/null 2>&1; then
-              $SUDO systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
+              if [ "$(systemctl is-enabled sleep.target 2>/dev/null || true)" != "masked" ]; then
+                $SUDO systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
+              fi
             fi
             if [ "$FINAL_IGNORE_LID_SWITCH" = "true" ] || { [ "$FINAL_IGNORE_LID_SWITCH" = "auto" ] && [ "$FINAL_AUTO_CONFIGURE_SERVER" = "true" ] && [ -d /proc/acpi/button/lid ]; }; then
               LID_CONF="/etc/systemd/logind.conf.d/99-dailyhub-ignore-lid.conf"
@@ -338,8 +362,6 @@ jobs:
 
             # 1. Instalar dependencias base, actualizar sistema, ffmpeg y yt-dlp autonomo
             if command -v apt-get >/dev/null 2>&1; then
-              for _i in 1 2 3 4 5 6 7 8 9 10; do $SUDO fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 3; done
-              $SUDO DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
               REQUIRED_PKGS=(git curl ca-certificates rclone unzip cron openssl python3 ffmpeg)
               if [ "$FINAL_ENABLE_UFW" = "true" ]; then
                 REQUIRED_PKGS+=(ufw)
@@ -360,6 +382,8 @@ jobs:
                 fi
               done
               if [ "${#MISSING_PKGS[@]}" -gt 0 ]; then
+                for _i in 1 2 3 4 5 6 7 8 9 10; do $SUDO fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 3; done
+                $SUDO DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
                 echo "📦 Instalando paquetes faltantes: ${MISSING_PKGS[*]}..."
                 $SUDO DEBIAN_FRONTEND=noninteractive apt-get update -y
                 $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=120 "${MISSING_PKGS[@]}"
@@ -376,14 +400,23 @@ jobs:
               fi
             fi
 
+            YTDLP_JUST_INSTALLED=0
             if [ ! -x /usr/local/bin/yt-dlp ]; then
               $SUDO curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
               $SUDO chmod a+rx /usr/local/bin/yt-dlp
+              YTDLP_JUST_INSTALLED=1
             fi
-            $SUDO /usr/local/bin/yt-dlp -U || true
+            if [ "$YTDLP_JUST_INSTALLED" -eq 1 ] || [ -n "$(find /usr/local/bin/yt-dlp -mtime +7 -print 2>/dev/null || true)" ]; then
+              if $SUDO /usr/local/bin/yt-dlp -U; then
+                $SUDO touch /usr/local/bin/yt-dlp 2>/dev/null || true
+              fi
+            fi
 
             if command -v systemctl >/dev/null 2>&1; then
-              $SUDO systemctl enable --now cron 2>/dev/null || $SUDO systemctl enable --now crond 2>/dev/null || true
+              if ! { systemctl is-enabled --quiet cron 2>/dev/null && systemctl is-active --quiet cron 2>/dev/null; } \
+                && ! { systemctl is-enabled --quiet crond 2>/dev/null && systemctl is-active --quiet crond 2>/dev/null; }; then
+                $SUDO systemctl enable --now cron 2>/dev/null || $SUDO systemctl enable --now crond 2>/dev/null || true
+              fi
             fi
 
             if ! command -v docker >/dev/null 2>&1; then
@@ -392,7 +425,9 @@ jobs:
               $SUDO usermod -aG docker "$USER" || true
             fi
             if command -v systemctl >/dev/null 2>&1; then
-              $SUDO systemctl enable docker && $SUDO systemctl start docker || true
+              if ! systemctl is-enabled --quiet docker 2>/dev/null || ! systemctl is-active --quiet docker 2>/dev/null; then
+                $SUDO systemctl enable docker && $SUDO systemctl start docker || true
+              fi
             fi
 
             DOCKER_CMD="docker"
@@ -414,7 +449,9 @@ jobs:
             fi
             git remote set-url origin "https://github.com/${GITHUB_REPO}.git"
             git fetch origin main
-            git checkout -f -B main origin/main
+            if [ "$(git symbolic-ref --short HEAD 2>/dev/null || true)" != "main" ]; then
+              git checkout -f -B main origin/main
+            fi
             git reset --hard origin/main
             # Aislamiento (Issue #84): los scripts de PC local (sincronizador.py / yt_lyrics_helper.py)
             # se versionan en Git pero JAMÁS se ejecutan en EC2. Se eliminan de la copia de trabajo del
@@ -424,11 +461,6 @@ jobs:
               printf '%s' "${RELEASE_HISTORY_B64}" | base64 -d > version-history.json
             fi
             if [ -n "${APP_VERSION:-}" ]; then
-              if command -v node >/dev/null 2>&1; then
-                node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=process.env.APP_VERSION;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
-              elif command -v python3 >/dev/null 2>&1; then
-                python3 -c "import json,os;p=json.load(open('package.json'));p['version']=os.environ['APP_VERSION'];json.dump(p,open('package.json','w'),indent=2)"
-              fi
               echo "Deploying version v${APP_VERSION}"
             fi
 
@@ -456,7 +488,11 @@ jobs:
             APP_GID="$(id -g)"
             mkdir -p data/journal data/ytdlp english-notes logs
             chmod 700 data data/journal data/ytdlp english-notes logs
-            $SUDO chown -R "${APP_UID}:${APP_GID}" data/ english-notes/ logs/ 2>/dev/null || true
+            for _vol_dir in data english-notes logs; do
+              if [ -n "$(find "$_vol_dir" \( ! -uid "$APP_UID" -o ! -gid "$APP_GID" \) -print -quit 2>/dev/null || true)" ]; then
+                $SUDO chown -R "${APP_UID}:${APP_GID}" "$_vol_dir" 2>/dev/null || true
+              fi
+            done
             chmod 600 data/journal/Diario.docx english-notes/English_Learning_Notebook.docx 2>/dev/null || true
             chmod 700 "$HOME" "$HOME/.ssh" "$HOME/.config" "$HOME/projects" "$HOME/projects/respaldos" 2>/dev/null || true
             chmod 600 "$HOME/.ssh/authorized_keys" 2>/dev/null || true
@@ -527,6 +563,7 @@ jobs:
               printf 'DB_PASS=%s\n' "$FINAL_DB_PASS"
               printf 'DB_NAME=%s\n' "$FINAL_DB_NAME"
               printf 'PORT=%s\n' "$FINAL_PORT"
+              printf 'APP_VERSION=%s\n' "${APP_VERSION:-}"
               printf 'TZ=%s\n' "$FINAL_TZ"
               printf 'APP_UID=%s\n' "$APP_UID"
               printf 'APP_GID=%s\n' "$APP_GID"
@@ -560,25 +597,43 @@ jobs:
             } > "$DEPLOY_ENV_FILE"
 
             # 4. Configurar rclone automáticamente (Drive 1 Clínico + Drive 2 Estudio opcional) con permisos 700/600 y verificar conectividad
+            RCLONE_CONF_CHANGED=0
             if [ -n "${RCLONE_CONF_B64:-}" ] || [ -n "${STUDY_RCLONE_CONF_B64:-}" ]; then
               mkdir -p "$HOME/.config/rclone"
               chmod 700 "$HOME/.config/rclone"
-              : > "$HOME/.config/rclone/rclone.conf"
+              RCLONE_CONF_PATH="$HOME/.config/rclone/rclone.conf"
+              RCLONE_CONF_TMP="$(umask 077 && mktemp "$ENV_TMP_DIR/.mood_rclone_conf.XXXXXX")"
+              : > "$RCLONE_CONF_TMP"
               if [ -n "${RCLONE_CONF_B64:-}" ]; then
-                printf '%s\n' "$RCLONE_CONF_B64" | tr -d ' \n\r' | base64 -d >> "$HOME/.config/rclone/rclone.conf"
+                printf '%s\n' "$RCLONE_CONF_B64" | tr -d ' \n\r' | base64 -d >> "$RCLONE_CONF_TMP"
               fi
               if [ -n "${STUDY_RCLONE_CONF_B64:-}" ]; then
-                printf '\n' >> "$HOME/.config/rclone/rclone.conf"
-                printf '%s\n' "$STUDY_RCLONE_CONF_B64" | tr -d ' \n\r' | base64 -d >> "$HOME/.config/rclone/rclone.conf"
+                printf '\n' >> "$RCLONE_CONF_TMP"
+                printf '%s\n' "$STUDY_RCLONE_CONF_B64" | tr -d ' \n\r' | base64 -d >> "$RCLONE_CONF_TMP"
               fi
-              chmod 600 "$HOME/.config/rclone/rclone.conf"
+              if [ ! -f "$RCLONE_CONF_PATH" ] || ! cmp -s "$RCLONE_CONF_TMP" "$RCLONE_CONF_PATH"; then
+                cp "$RCLONE_CONF_TMP" "$RCLONE_CONF_PATH"
+                RCLONE_CONF_CHANGED=1
+              fi
+              shred -u -z -n 1 "$RCLONE_CONF_TMP" 2>/dev/null || rm -f "$RCLONE_CONF_TMP"
+              chmod 600 "$RCLONE_CONF_PATH"
             fi
             unset RCLONE_CONF_B64 STUDY_RCLONE_CONF_B64
 
             if command -v rclone >/dev/null 2>&1 && [ -s "$HOME/.config/rclone/rclone.conf" ]; then
-              if rclone --config "$HOME/.config/rclone/rclone.conf" listremotes 2>/dev/null | grep -qx "${FINAL_RCLONE_REMOTE}:" \
-                && rclone --config "$HOME/.config/rclone/rclone.conf" mkdir "${FINAL_RCLONE_REMOTE}:${FINAL_RCLONE_BACKUP_DIR}" >/dev/null 2>&1; then
-                echo "✅ Google Drive remoto '${FINAL_RCLONE_REMOTE}:${FINAL_RCLONE_BACKUP_DIR}' verificado."
+              if rclone --config "$HOME/.config/rclone/rclone.conf" listremotes 2>/dev/null | grep -qx "${FINAL_RCLONE_REMOTE}:"; then
+                if [ "$FINAL_REQUIRE_DRIVE_BACKUP" = "true" ] || [ "$FINAL_RUN_POST_DEPLOY_VERIFY" != "true" ] || [ "$RCLONE_CONF_CHANGED" -eq 1 ]; then
+                  if rclone --config "$HOME/.config/rclone/rclone.conf" mkdir "${FINAL_RCLONE_REMOTE}:${FINAL_RCLONE_BACKUP_DIR}" >/dev/null 2>&1; then
+                    echo "✅ Google Drive remoto '${FINAL_RCLONE_REMOTE}:${FINAL_RCLONE_BACKUP_DIR}' verificado."
+                  else
+                    echo "⚠️ No se pudo verificar Google Drive (${FINAL_RCLONE_REMOTE}:${FINAL_RCLONE_BACKUP_DIR}). Revisa RCLONE_CONF_B64." >&2
+                    if [ "$FINAL_REQUIRE_DRIVE_BACKUP" = "true" ]; then
+                      exit 1
+                    fi
+                  fi
+                else
+                  echo "✅ Remoto rclone '${FINAL_RCLONE_REMOTE}:' configurado (verificación remota delegada a verify-ubuntu-local.sh)."
+                fi
               else
                 echo "⚠️ No se pudo verificar Google Drive (${FINAL_RCLONE_REMOTE}:${FINAL_RCLONE_BACKUP_DIR}). Revisa RCLONE_CONF_B64." >&2
                 if [ "$FINAL_REQUIRE_DRIVE_BACKUP" = "true" ]; then
@@ -593,7 +648,8 @@ jobs:
             chmod +x scripts/backup.sh scripts/restore.sh scripts/env-vault.sh scripts/verify-ubuntu-local.sh
 
             # 5. Levantar o actualizar los contenedores Docker leyendo el entorno desde RAM
-            $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" up -d --build
+            $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" build app
+            $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" up -d --no-build
 
             # 6. Si es una instancia nueva / BD vacía, restaurar automáticamente el último backup de Google Drive
             ENV_FILE_OVERRIDE="$DEPLOY_ENV_FILE" ./scripts/restore.sh --if-empty
@@ -617,7 +673,7 @@ jobs:
 
             # 7. Limpiar imágenes huérfanas y caché viejo de Docker para no llenar el disco de la t3.micro
             $DOCKER_CMD image prune -f >/dev/null 2>&1 || true
-            $DOCKER_CMD builder prune -f --filter "until=24h" >/dev/null 2>&1 || true
+            $DOCKER_CMD builder prune -f --filter "until=168h" >/dev/null 2>&1 || true
 
             # 8. Ajustar zona horaria del host y registrar respaldo automático diario (3:30 AM hora TZ)
             if command -v timedatectl >/dev/null 2>&1 && [ -n "${FINAL_TZ:-}" ]; then
@@ -661,7 +717,12 @@ jobs:
             FINAL_CRON_SCHEDULE="${BACKUP_CRON_SCHEDULE:-30 3 * * *}"
             CRON_JOB="${FINAL_CRON_SCHEDULE} $HOME/projects/mood-tracker/scripts/backup.sh >> $HOME/projects/respaldos/backup.log 2>&1"
             YTDLP_CRON_JOB="15 4 * * 0 (docker exec -u 0 mood_app yt-dlp -U || true) && (docker exec -u 0 mood_app2 yt-dlp -U || true) >> $HOME/projects/respaldos/ytdlp-update.log 2>&1"
-            (crontab -l 2>/dev/null | grep -v "scripts/backup.sh" | grep -v "yt-dlp -U" || true; printf '%s\n%s\n' "$CRON_JOB" "$YTDLP_CRON_JOB") | crontab -
+            CURRENT_CRONTAB="$(crontab -l 2>/dev/null || true)"
+            CURRENT_CRONTAB_NORM="$(printf '%s\n' "$CURRENT_CRONTAB" | sed '/^$/d')"
+            DESIRED_CRONTAB="$( { printf '%s\n' "$CURRENT_CRONTAB" | grep -v "scripts/backup.sh" | grep -v "yt-dlp -U" || true; printf '%s\n%s\n' "$CRON_JOB" "$YTDLP_CRON_JOB"; } | sed '/^$/d' )"
+            if [ "$CURRENT_CRONTAB_NORM" != "$DESIRED_CRONTAB" ]; then
+              printf '%s\n' "$DESIRED_CRONTAB" | crontab -
+            fi
 
             # 9. Configuración y endurecimiento automático de Ubuntu Server (idempotente)
             if [ "$FINAL_ENABLE_TAILSCALE_SERVE" = "true" ] && command -v tailscale >/dev/null 2>&1 && [ -n "$TS_DNS" ]; then
@@ -684,19 +745,45 @@ jobs:
               HAS_TS_IFACE=1
             fi
             if [ "$FINAL_ENABLE_UFW" = "true" ] && command -v ufw >/dev/null 2>&1 && { [ "$HAS_TS_IFACE" -eq 1 ] || [ "$FINAL_ENABLE_UFW_EXPLICIT" = "true" ]; }; then
-              echo "🛡️ Aplicando reglas de firewall UFW..."
-              $SUDO ufw default deny incoming >/dev/null 2>&1 || true
-              $SUDO ufw default allow outgoing >/dev/null 2>&1 || true
-              if [ "$HAS_TS_IFACE" -eq 1 ]; then
-                $SUDO ufw allow in on tailscale0 >/dev/null 2>&1 || true
+              UFW_STATUS="$($SUDO env LC_ALL=C ufw status verbose 2>/dev/null || true)"
+              UFW_NEEDS_UPDATE=0
+              if ! printf '%s\n' "$UFW_STATUS" | grep -qE '^Status:[[:space:]]+active' \
+                || ! printf '%s\n' "$UFW_STATUS" | grep -qE '^Default:.*deny \(incoming\).*allow \(outgoing\)'; then
+                UFW_NEEDS_UPDATE=1
+              fi
+              if [ "$HAS_TS_IFACE" -eq 1 ] && ! printf '%s\n' "$UFW_STATUS" | grep -qE 'tailscale0[[:space:]]+ALLOW IN'; then
+                UFW_NEEDS_UPDATE=1
+              fi
+              HAS_LAN_SSH_RULE=0
+              if printf '%s\n' "$UFW_STATUS" | grep -qE "^${FINAL_SSH_PORT}/tcp([[:space:]]|\(v6\)).*ALLOW IN"; then
+                HAS_LAN_SSH_RULE=1
               fi
               if [ "$FINAL_UFW_CLOSE_LAN_SSH" = "true" ] && [ "${DEPLOY_VIA_TAILSCALE:-false}" = "true" ] && [ "$HAS_TS_IFACE" -eq 1 ]; then
-                $SUDO ufw delete allow "${FINAL_SSH_PORT}/tcp" >/dev/null 2>&1 || true
-                echo "🔒 Puerto LAN ${FINAL_SSH_PORT}/tcp cerrado en UFW (SSH exclusivo vía tailscale0)."
+                if [ "$HAS_LAN_SSH_RULE" -eq 1 ]; then
+                  UFW_NEEDS_UPDATE=1
+                fi
               else
-                $SUDO ufw allow "${FINAL_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+                if [ "$HAS_LAN_SSH_RULE" -eq 0 ]; then
+                  UFW_NEEDS_UPDATE=1
+                fi
               fi
-              $SUDO ufw --force enable >/dev/null 2>&1 || true
+              if [ "$UFW_NEEDS_UPDATE" -eq 1 ]; then
+                echo "🛡️ Aplicando reglas de firewall UFW..."
+                $SUDO ufw default deny incoming >/dev/null 2>&1 || true
+                $SUDO ufw default allow outgoing >/dev/null 2>&1 || true
+                if [ "$HAS_TS_IFACE" -eq 1 ]; then
+                  $SUDO ufw allow in on tailscale0 >/dev/null 2>&1 || true
+                fi
+                if [ "$FINAL_UFW_CLOSE_LAN_SSH" = "true" ] && [ "${DEPLOY_VIA_TAILSCALE:-false}" = "true" ] && [ "$HAS_TS_IFACE" -eq 1 ]; then
+                  $SUDO ufw delete allow "${FINAL_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+                  echo "🔒 Puerto LAN ${FINAL_SSH_PORT}/tcp cerrado en UFW (SSH exclusivo vía tailscale0)."
+                else
+                  $SUDO ufw allow "${FINAL_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+                fi
+                $SUDO ufw --force enable >/dev/null 2>&1 || true
+              else
+                echo "✅ Firewall UFW ya configurado."
+              fi
             fi
 
             if [ "$FINAL_ENABLE_KERNEL_DOS_HARDENING" = "true" ] && [ -d /etc/sysctl.d ]; then
@@ -787,7 +874,9 @@ jobs:
                 fi
                 echo "✅ Fail2ban configurado para proteger SSH (puerto ${FINAL_SSH_PORT})."
               elif command -v systemctl >/dev/null 2>&1; then
-                $SUDO systemctl enable --now fail2ban >/dev/null 2>&1 || true
+                if ! systemctl is-enabled --quiet fail2ban 2>/dev/null || ! systemctl is-active --quiet fail2ban 2>/dev/null; then
+                  $SUDO systemctl enable --now fail2ban >/dev/null 2>&1 || true
+                fi
               fi
             fi
 
@@ -796,7 +885,11 @@ jobs:
                 $SUDO DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive unattended-upgrades >/dev/null 2>&1 || true
               fi
               if command -v systemctl >/dev/null 2>&1; then
-                $SUDO systemctl enable --now apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
+                for _apt_timer in apt-daily.timer apt-daily-upgrade.timer; do
+                  if ! systemctl is-enabled --quiet "$_apt_timer" 2>/dev/null || ! systemctl is-active --quiet "$_apt_timer" 2>/dev/null; then
+                    $SUDO systemctl enable --now "$_apt_timer" >/dev/null 2>&1 || true
+                  fi
+                done
               fi
             fi
 
@@ -819,7 +912,9 @@ jobs:
                 fi
                 echo "✅ Reglas auditd cargadas en $AUDIT_CONF."
               elif command -v systemctl >/dev/null 2>&1; then
-                $SUDO systemctl enable --now auditd >/dev/null 2>&1 || true
+                if ! systemctl is-enabled --quiet auditd 2>/dev/null || ! systemctl is-active --quiet auditd 2>/dev/null; then
+                  $SUDO systemctl enable --now auditd >/dev/null 2>&1 || true
+                fi
               fi
             fi
 

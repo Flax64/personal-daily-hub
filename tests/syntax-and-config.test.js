@@ -1652,4 +1652,63 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
         assert.ok(i18nJs.includes('🗑️ Delete Semester'), 'public/i18n.js debe incluir la traducción de 🗑️ Delete Semester');
         assert.ok(i18nJs.includes('Subject Key (MindBox):'), 'public/i18n.js debe conservar la traducción de Clave de materia (MindBox)');
     });
+
+    it('optimiza caché de Docker, elimina push directo en main protegido e idempotiza deploy.yml', () => {
+        const dockerfile = readText('Dockerfile');
+        const compose = readText('docker-compose.yml');
+        const deploy = readText('.github/workflows/deploy.yml');
+        const serverJs = readText('server.js');
+
+        // 1. Dockerfile: capa de sistema (apk/python/msoffcrypto/yt-dlp) antes de COPY package*.json y npm ci
+        const apkIdx = dockerfile.indexOf('RUN apk add --no-cache');
+        const msoffIdx = apkIdx > -1 ? dockerfile.indexOf('msoffcrypto-tool', apkIdx) : -1;
+        const copyPkgIdx = dockerfile.indexOf('COPY package*.json ./');
+        const npmCiIdx = dockerfile.indexOf('RUN npm ci --omit=dev');
+        assert.ok(apkIdx > -1 && msoffIdx > apkIdx, 'Dockerfile debe instalar paquetes Alpine y msoffcrypto-tool');
+        assert.ok(copyPkgIdx > msoffIdx && npmCiIdx > copyPkgIdx, 'Dockerfile debe ejecutar apk add y msoffcrypto-tool antes de COPY package*.json ./ y npm ci --omit=dev');
+
+        // 2. docker-compose.yml: build único en app, compartido vía image: personal-daily-hub-app:latest y APP_VERSION en app/app2
+        const buildMatches = compose.match(/^\s*build:\s*\.\s*$/gm) || [];
+        assert.equal(buildMatches.length, 1, 'docker-compose.yml solo debe definir build: . una vez (en el servicio app)');
+        const appBlockMatch = compose.match(/^\s{2}app:\r?\n([\s\S]*?)\r?\n\s{2}app2:/m);
+        const app2BlockMatch = compose.match(/^\s{2}app2:\r?\n([\s\S]*?)\r?\n\s{2}proxy:/m);
+        assert.ok(appBlockMatch && app2BlockMatch, 'docker-compose.yml debe definir servicios app y app2');
+        assert.match(appBlockMatch[1], /^\s*build:\s*\.\s*$/m, 'El servicio app debe definir build: .');
+        assert.equal(/^\s*build:\s*\./m.test(app2BlockMatch[1]), false, 'El servicio app2 no debe duplicar build: .');
+        assert.match(appBlockMatch[1], /image:\s*personal-daily-hub-app:latest/);
+        assert.match(app2BlockMatch[1], /image:\s*personal-daily-hub-app:latest/);
+        assert.match(appBlockMatch[1], /APP_VERSION=\$\{APP_VERSION:-\}/);
+        assert.match(app2BlockMatch[1], /APP_VERSION=\$\{APP_VERSION:-\}/);
+
+        // 3. server.js: respaldo con process.env.APP_VERSION sin depender de mutar package.json en disco
+        const versionFnMatch = serverJs.match(/function loadVersionMetadata\(\)\s*\{[\s\S]*?\r?\n\}/);
+        assert.ok(versionFnMatch, 'server.js debe definir loadVersionMetadata()');
+        assert.ok(versionFnMatch[0].includes('process.env.APP_VERSION'), 'loadVersionMetadata() debe usar process.env.APP_VERSION como respaldo');
+
+        // 4. deploy.yml: tag directo sobre main protegido, sin checkout en deploy, build único e idempotencia
+        assert.ok(deploy.includes("vars.RELEASE_PUSH_TO_MAIN || 'false'"), 'El job release debe soportar vars.RELEASE_PUSH_TO_MAIN con default false');
+        assert.equal(deploy.includes('Direct push to main skipped'), false, 'deploy.yml ya no debe emitir la advertencia GH013 de push directo a main');
+
+        const deployJobMatch = deploy.match(/^\s{2}deploy:\r?\n([\s\S]*)$/m);
+        assert.ok(deployJobMatch, 'deploy.yml debe definir el job deploy');
+        assert.equal(/uses:\s*actions\/checkout@/.test(deployJobMatch[1]), false, 'El job deploy no debe ejecutar actions/checkout innecesariamente');
+
+        assert.equal(/fs\.writeFileSync\(['"]package\.json['"]/.test(deploy) || /open\(['"]package\.json['"],\s*['"]w['"]/.test(deploy), false, 'deploy.yml no debe mutar package.json en disco antes de build');
+        assert.ok(deploy.includes("printf 'APP_VERSION=%s\\n'"), 'deploy.yml debe incluir APP_VERSION en DEPLOY_ENV_FILE');
+        assert.ok(deploy.includes('compose --env-file "$DEPLOY_ENV_FILE" build app'), 'deploy.yml debe construir la imagen una sola vez con compose build app');
+        assert.ok(deploy.includes('compose --env-file "$DEPLOY_ENV_FILE" up -d --no-build'), 'deploy.yml debe levantar servicios con up -d --no-build');
+        assert.equal(deploy.includes('up -d --build'), false, 'deploy.yml no debe usar up -d --build');
+        assert.ok(deploy.includes('--filter "until=168h"'), 'deploy.yml debe conservar caché de builder durante 168h');
+
+        for (const guardToken of [
+            'systemctl is-enabled sleep.target',
+            'find /usr/local/bin/yt-dlp -mtime +7',
+            'git symbolic-ref --short HEAD',
+            'cmp -s',
+            'ufw status verbose',
+            'Firewall UFW ya configurado.'
+        ]) {
+            assert.ok(deploy.includes(guardToken), `deploy.yml debe incluir validación idempotente: ${guardToken}`);
+        }
+    });
 });

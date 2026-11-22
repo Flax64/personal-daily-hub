@@ -7,11 +7,7 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-# Instalar solo dependencias de producción y limpiar caché para reducir imagen/almacenamiento
-COPY package*.json ./
-RUN npm ci --omit=dev && rm -rf /root/.npm
-
-# Instalar tzdata, rclone (respaldo y Drive Estudio opcional), Python 3, msoffcrypto-tool (cifrado local Diario.docx), ffmpeg, unzip, CA y yt-dlp autónomo
+# Instalar tzdata, rclone (respaldo y Drive Estudio opcional), Python 3, msoffcrypto-tool (cifrado local Diario.docx), ffmpeg, unzip, CA y yt-dlp autónomo (capa cacheada entre deploys)
 RUN apk add --no-cache tzdata python3 py3-cryptography py3-olefile py3-pip ca-certificates curl rclone unzip ffmpeg \
     && pip3 install --no-cache-dir --root-user-action=ignore --break-system-packages --no-deps msoffcrypto-tool \
     && python3 -c "import io, zipfile, msoffcrypto; from msoffcrypto.format.ooxml import OOXMLFile; buf = io.BytesIO(); z = zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED); z.writestr('[Content_Types].xml', '<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>'); z.writestr('word/document.xml', '<!-- ' + ('x' * 4300) + ' --><doc/>'); z.close(); buf.seek(0); enc = io.BytesIO(); OOXMLFile(buf).encrypt('BuildCheck123', enc); enc.seek(0); f2 = msoffcrypto.OfficeFile(enc); assert f2.is_encrypted(); f2.load_key(password='BuildCheck123', verify_password=True); dec = io.BytesIO(); f2.decrypt(dec); dec.seek(0); zr = zipfile.ZipFile(dec, 'r'); assert '[Content_Types].xml' in zr.namelist() and 'word/document.xml' in zr.namelist(); print('msoffcrypto OOXML round-trip OK')" \
@@ -20,6 +16,10 @@ RUN apk add --no-cache tzdata python3 py3-cryptography py3-olefile py3-pip ca-ce
     && chmod a+rx /usr/local/bin/yt-dlp \
     && /usr/local/bin/yt-dlp --version \
     && ffmpeg -version | head -n 1
+
+# Instalar solo dependencias de producción y limpiar caché para reducir imagen/almacenamiento (cacheada mientras no cambien package.json/package-lock.json)
+COPY package*.json ./
+RUN npm ci --omit=dev && rm -rf /root/.npm
 
 # Copiar únicamente el código necesario de la app (excluido el resto vía .dockerignore)
 COPY server.js version-history.json CHANGELOG.md ./
