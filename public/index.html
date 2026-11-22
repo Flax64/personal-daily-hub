@@ -984,6 +984,10 @@
                             aria-selected="false">🔗 Phrasal Verbs &amp; Expressions</button>
                         <button type="button" class="english-tab-btn" data-english-cat="notes" role="tab"
                             aria-selected="false">📝 My Notes &amp; Learnings</button>
+                        <button type="button" class="english-tab-btn" data-english-cat="hangul_practice" role="tab"
+                            aria-selected="false" title="Practica vocales, consonantes, batchim y armado de bloques en coreano">🇰🇷 Korean Symbols Practice</button>
+                        <button type="button" class="english-tab-btn" data-english-cat="alphabet" role="tab"
+                            aria-selected="false" title="Genera con IA el alfabeto, sonidos y reglas de composición de cada idioma y guárdalo en tu cuaderno">🔤 Alphabets &amp; Rules + AI</button>
                         <button type="button" class="english-tab-btn" data-english-cat="music" role="tab"
                             aria-selected="false">🎵 Learn with Music + AI</button>
                     </div>
@@ -1333,7 +1337,7 @@
                                         <span id="musicLyricsMetaBadge" class="badge-pill">Cuaderno Word</span>
                                     </div>
                                     <div class="music-lyrics-viewer-actions">
-                                        <select id="musicLyricsTrackLangFilter" class="select-input select-compact"
+                                        <select id="musicLyricsTrackLangFilter" class="select-input select-compact" hidden aria-hidden="true" style="display:none !important;"
                                             title="Alterna entre Todos, Original, Coreano, Inglés, Japonés, Híbrido JP-EN o Español">
                                             <option value="all">🌐 Todos los Apartados</option>
                                             <option value="original">🎵 Original (Mezcla Nativa)</option>
@@ -1412,6 +1416,141 @@
                                 <button type="submit" class="btn-submit" id="btnSendMusicWord" title="Guardar tus notas, pronunciación y vocabulario en tu cuaderno Word">💾 Guardar Estudio en Cuaderno Word</button>
                             </form>
                         </div>
+                    </div>
+
+                    <!-- Korean Symbols (Hangul) Interactive Practice Studio -->
+                    <div id="englishHangulPracticeStudio" class="english-practice-studio" hidden>
+                        <div class="lang-ai-head">
+                            <div>
+                                <h3>🇰🇷 Práctica de Símbolos Coreanos (Hangul Jamo, Batchim y Armado de Sílabas)</h3>
+                                <p class="muted-text">Explora las 40 letras del Hangul y las 7 reglas de consonante final (Batchim), combina bloques Unicode (초성 + 중성 + 종성), escucha su pronunciación y guarda el alfabeto completo en tus notas Word.</p>
+                            </div>
+                            <div class="practice-head-actions">
+                                <button type="button" class="btn-secondary btn-small" id="btnViewKoreanInNotebook" title="Abrir el visor del cuaderno Word filtrado en el apartado de Coreano">📖 Ver Apartado Coreano</button>
+                                <button type="button" class="btn-primary btn-small" id="btnSaveHangulToWord" title="Guardar el alfabeto coreano completo y reglas de composición en Notas y Cuaderno Word">💾 Guardar Alfabeto en Notas y Word</button>
+                            </div>
+                        </div>
+
+                        <div class="hangul-filter-row" id="hangulFilterRow" role="group" aria-label="Filter Korean symbols">
+                            <button type="button" class="agenda-filter-pill active" data-hangul-group="all">Todos (40 Jamo + Batchim)</button>
+                            <button type="button" class="agenda-filter-pill" data-hangul-group="basic_vowels">Vocales Básicas (10)</button>
+                            <button type="button" class="agenda-filter-pill" data-hangul-group="compound_vowels">Vocales Compuestas (11)</button>
+                            <button type="button" class="agenda-filter-pill" data-hangul-group="basic_consonants">Consonantes (14)</button>
+                            <button type="button" class="agenda-filter-pill" data-hangul-group="double_consonants">Dobles / Tensas (5)</button>
+                            <button type="button" class="agenda-filter-pill" data-hangul-group="batchim">Reglas Batchim (7 finales)</button>
+                        </div>
+
+                        <div id="hangulSymbolGrid" class="hangul-symbol-grid" aria-live="polite"></div>
+
+                        <div id="hangulSymbolDetailCard" class="hangul-detail-card">
+                            <div class="hangul-detail-glyph" id="hangulDetailGlyph">가</div>
+                            <div class="hangul-detail-info">
+                                <div class="hangul-detail-top">
+                                    <strong id="hangulDetailName">Selecciona un símbolo coreano para practicar</strong>
+                                    <button type="button" class="btn-secondary btn-small" id="btnHangulSpeakSymbol" title="Escuchar pronunciación coreana (ko-KR)">🔊 Escuchar</button>
+                                </div>
+                                <p id="hangulDetailMeta" class="muted-text"></p>
+                                <p id="hangulDetailTip" class="hangul-detail-tip"></p>
+                            </div>
+                        </div>
+
+                        <div class="hangul-studio-split">
+                            <section class="hangul-builder-card">
+                                <h4>🧱 Constructor de Sílabas Coreanas (초성 + 중성 + 종성)</h4>
+                                <p class="muted-text small-note">Las vocales verticales (ㅏ, ㅓ, ㅣ) se colocan a la derecha de la consonante; las horizontales (ㅗ, ㅜ, ㅡ) van debajo. El Batchim (종성) siempre cierra el bloque abajo.</p>
+                                <div class="hangul-builder-controls">
+                                    <div class="form-group">
+                                        <label for="hangulBuilderInitial">1. Consonante Inicial (초성)</label>
+                                        <select id="hangulBuilderInitial" class="select-input"></select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="hangulBuilderMedial">2. Vocal Medial (중성)</label>
+                                        <select id="hangulBuilderMedial" class="select-input"></select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="hangulBuilderFinal">3. Batchim Final (종성 · opcional)</label>
+                                        <select id="hangulBuilderFinal" class="select-input"></select>
+                                    </div>
+                                </div>
+                                <div class="hangul-builder-stage">
+                                    <div class="hangul-syllable-preview" id="hangulBuilderGlyph">한</div>
+                                    <div class="hangul-builder-meta">
+                                        <div class="hangul-builder-formula" id="hangulBuilderFormula">ㅎ (h) + ㅏ (a) + ㄴ (-n) = 한 [han]</div>
+                                        <div class="muted-text small-note" id="hangulBuilderGeometry">Bloque Horizontal + Batchim inferior (C + V arriba / F abajo)</div>
+                                        <div class="hangul-builder-btns">
+                                            <button type="button" class="btn-secondary btn-small" id="btnHangulSpeakBlock">🔊 Escuchar Bloque</button>
+                                            <button type="button" class="btn-secondary btn-small" id="btnHangulRandomBlock">🎲 Combinar Aleatorio</button>
+                                            <button type="button" class="btn-secondary btn-small" id="btnHangulCopyToVocab" title="Pasar esta sílaba o palabra al formulario para guardarla en tu glosario">↘ Usar en Glosario</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="hangul-quiz-card">
+                                <h4>🎯 Mini Quiz de Reconocimiento Hangul</h4>
+                                <p id="hangulQuizPrompt" class="hangul-quiz-prompt">¿Qué sonido tiene este símbolo?</p>
+                                <div id="hangulQuizOptions" class="hangul-quiz-options"></div>
+                                <div id="hangulQuizFeedback" class="muted-text small-note"></div>
+                                <div class="hangul-quiz-foot">
+                                    <span id="hangulQuizScoreBadge" class="lang-ai-badge">Aciertos: 0 / 0</span>
+                                    <button type="button" class="btn-secondary btn-small" id="btnHangulNewQuestion">Siguiente Pregunta →</button>
+                                </div>
+                            </section>
+                        </div>
+
+                        <div id="hangulPracticeStatusBanner" class="english-status-banner" hidden></div>
+                    </div>
+
+                    <!-- Languages Alphabets & Composition Rules + AI Studio -->
+                    <div id="englishAlphabetStudio" class="english-alphabet-studio" hidden>
+                        <div class="lang-ai-head">
+                            <div>
+                                <h3>🔤 Alfabetos, Fonética y Reglas de Composición por Idioma (+ IA)</h3>
+                                <p class="muted-text">Genera con Gemini IA (o guía estructurada local) cómo suena cada símbolo y cómo se combinan vocales, consonantes o caracteres para formar sílabas y palabras. Guárdalo en Notas y en el apartado de Alfabetos de tu Word.</p>
+                            </div>
+                            <div class="practice-head-actions">
+                                <button type="button" class="btn-secondary btn-small" id="btnViewAlphabetInNotebook" title="Ver los alfabetos y notas de este idioma en el cuaderno Word">📖 Ver en Cuaderno Word</button>
+                            </div>
+                        </div>
+
+                        <div class="alphabet-controls-grid">
+                            <div class="form-group">
+                                <label for="alphabetLangSelect">Idioma del Alfabeto</label>
+                                <select id="alphabetLangSelect" class="select-input">
+                                    <option value="ko">🇰🇷 Coreano (Hangul · 자모 y Composición)</option>
+                                    <option value="en">🇺🇸 Inglés (26 Letras, Vocales y Dígrafos)</option>
+                                    <option value="ja">🇯🇵 Japonés (Hiragana, Katakana y Kanji)</option>
+                                    <option value="en_ko">🎵 K-Pop Híbrido (Coreano + Inglés)</option>
+                                    <option value="en_ja">🎌 J-Pop Híbrido (Japonés + Inglés)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="alphabetAiEngineSelect">Motor de Generación</label>
+                                <select id="alphabetAiEngineSelect" class="select-input">
+                                    <option value="auto">Automático (Gemini IA o Guía Local)</option>
+                                    <option value="gemini">Google Gemini IA (Profundo)</option>
+                                    <option value="offline">Guía Estructurada Local (Instantánea)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="alphabetFocusInput">Enfoque o duda específica para la IA (opcional)</label>
+                            <input type="text" id="alphabetFocusInput" maxlength="250"
+                                placeholder="Ej. Explica cómo se enlazan los Batchim (연음) o las letras mudas del inglés...">
+                        </div>
+
+                        <div class="alphabet-actions-bar">
+                            <button type="button" class="btn-primary" id="btnGenerateAlphabetGuide" title="Generar tabla de sonidos y reglas de composición con IA">✨ Generar Alfabeto y Reglas</button>
+                            <button type="button" class="btn-secondary" id="btnSaveAlphabetToWord" title="Guardar la guía actual en el apartado de Notas y Alfabetos del Word" disabled>💾 Guardar en Notas y Cuaderno Word</button>
+                            <label class="ai-autosync-toggle" title="Guardar automáticamente en tu cuaderno Word al generar con IA">
+                                <input type="checkbox" id="chkAutoSaveAlphabetToWord" checked>
+                                <span>☁️ Auto-guardar al generar</span>
+                            </label>
+                        </div>
+
+                        <div id="alphabetStudioStatus" class="english-status-banner" hidden></div>
+                        <div id="alphabetGuideResultBox" class="alphabet-guide-result"></div>
                     </div>
                     </div>
                 </div>
@@ -3208,18 +3347,20 @@
             </div>
         </div>
 
-        <div class="lang-translator-dirs" id="floatTranslatorDirPills" role="group" aria-label="Quick Translation Direction">
-            <button type="button" class="lang-dir-pill active" data-dir="en_es">🇺🇸 → 🇪🇸 EN → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="ko_en">🇰🇷 → 🇺🇸 KO → EN</button>
-            <button type="button" class="lang-dir-pill" data-dir="ko_es">🇰🇷 → 🇪🇸 KO → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="ja_es">🇯🇵 → 🇪🇸 JP → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="ja_en">🇯🇵 → 🇺🇸 JP → EN</button>
-            <button type="button" class="lang-dir-pill" data-dir="en_ja">🎌 JP-EN → ES</button>
-            <button type="button" class="lang-dir-pill" data-dir="auto">🌐 Auto</button>
-            <button type="button" class="lang-dir-pill" data-dir="es_en">🇪🇸 → 🇺🇸 ES → EN</button>
-            <button type="button" class="lang-dir-pill" data-dir="es_ko">🇪🇸 → 🇰🇷 ES → KO</button>
-            <button type="button" class="lang-dir-pill" data-dir="es_ja">🇪🇸 → 🇯🇵 ES → JP</button>
+        <div class="gt-lang-bar" id="floatTranslatorGtBar">
+            <div class="gt-lang-group gt-source-group" role="tablist" aria-label="Source language">
+                <button type="button" class="gt-lang-tab active" data-gt-src="auto" title="Detect source language automatically">🌐 Detect</button>
+                <button type="button" class="gt-lang-tab" data-gt-src="ko" title="Translate from Korean">🇰🇷 Korean</button>
+                <button type="button" class="gt-lang-tab" data-gt-src="ja" title="Translate from Japanese">🇯🇵 Japanese</button>
+                <button type="button" class="gt-lang-tab" data-gt-src="en" title="Translate from English (always to Spanish)">🇺🇸 English</button>
+            </div>
+            <span class="gt-arrow-divider" aria-hidden="true">→</span>
+            <div class="gt-lang-group gt-target-group" role="tablist" aria-label="Target language (English or Spanish)">
+                <button type="button" class="gt-lang-tab active" data-gt-tgt="es" title="Translate to Spanish">🇪🇸 Spanish</button>
+                <button type="button" class="gt-lang-tab" data-gt-tgt="en" title="Translate to English">🇺🇸 English</button>
+            </div>
         </div>
+        <div id="floatTranslatorDetectedHint" class="gt-detected-hint" aria-live="polite"></div>
 
         <div class="translator-popup-toolbar">
             <button type="button" class="btn-secondary btn-small" id="btnFloatTranslatorPaste">📋 Paste &amp; Translate</button>
@@ -3231,17 +3372,14 @@
             <textarea id="floatTranslatorInput" class="english-textarea translator-extension-textarea" rows="4" maxlength="4000"
                 placeholder="Type or select text + Alt+T... Enter to translate (Shift+Enter for new line)"></textarea>
             <div class="lang-translator-actions">
-                <select id="floatTranslatorDirectionSelect" class="select-input select-compact" aria-label="Quick translation direction">
-                    <option value="en_es" selected>English → Spanish</option>
-                    <option value="ko_en">Korean → English</option>
+                <select id="floatTranslatorDirectionSelect" class="select-input select-compact" hidden aria-hidden="true" style="display:none !important;" aria-label="Quick translation direction">
+                    <option value="auto" selected>Auto Detect (EN/KO/JP)</option>
+                    <option value="en_es">English → Spanish</option>
                     <option value="ko_es">Korean → Spanish</option>
+                    <option value="ko_en">Korean → English</option>
                     <option value="ja_es">Japanese → Spanish</option>
                     <option value="ja_en">Japanese → English</option>
                     <option value="en_ja">Japanese + English (JP-EN) → Spanish</option>
-                    <option value="auto">Auto Detect (EN/KO/JP)</option>
-                    <option value="es_en">Spanish → English</option>
-                    <option value="es_ko">Spanish → Korean</option>
-                    <option value="es_ja">Spanish → Japanese</option>
                 </select>
                 <select id="floatTranslatorEngineSelect" class="select-input select-compact" aria-label="Quick translator engine" title="Elige el modo de traducción">
                     <option value="auto">Automático (Gemini / Local)</option>
@@ -3295,6 +3433,15 @@
                     <option value="phrasal_verb">3. Phrasal Verbs</option>
                     <option value="music">4. Canciones y Letras</option>
                     <option value="notes">5. Notas Manuales</option>
+                    <option value="alphabet">6. Alfabetos y Reglas</option>
+                </select>
+                <select id="studyViewerNotebookLangFilter" class="select-input" hidden aria-hidden="true" style="display:none !important;" aria-label="Notebook language section filter" title="Filtrar todo el cuaderno por apartado de idioma">
+                    <option value="all">🌍 Todos los Apartados por Idioma</option>
+                    <option value="en">🇺🇸 Inglés</option>
+                    <option value="ko">🇰🇷 Coreano</option>
+                    <option value="ja">🇯🇵 Japonés</option>
+                    <option value="en_ko">🎵 K-Pop (EN + KR)</option>
+                    <option value="en_ja">🎌 J-Pop (EN + JP)</option>
                 </select>
                 <select id="studyViewerArtistFilter" class="select-input" aria-label="Artist filter">
                     <option value="">Todos los artistas</option>
@@ -3305,8 +3452,8 @@
                 <select id="studyViewerSongFilter" class="select-input" aria-label="Song filter">
                     <option value="">Todas las canciones</option>
                 </select>
-                <select id="studyViewerLangFilter" class="select-input" aria-label="Language filter">
-                    <option value="all">🌐 Todos los Idiomas</option>
+                <select id="studyViewerLangFilter" class="select-input" hidden aria-hidden="true" style="display:none !important;" aria-label="Lyrics language filter" title="Idioma mostrado dentro de la letra de las canciones">
+                    <option value="all">🎵 Letra: Todos los Idiomas</option>
                     <option value="original">🎵 Original (Mezcla Nativa)</option>
                     <option value="ko">🇰🇷 Coreano (Solo Coreano)</option>
                     <option value="en">🇺🇸 Inglés</option>
@@ -3317,6 +3464,15 @@
                 <input type="search" id="studyViewerSearchInput" maxlength="120"
                     placeholder="Buscar palabra, canción, letra o nota...">
                 <button type="button" class="btn-secondary btn-small" id="btnRefreshStudyViewer" title="Recargar desde Word PC">🔄 Recargar</button>
+            </div>
+
+            <div class="study-viewer-lang-tabs" id="studyViewerLanguageApartments" role="tablist" aria-label="Apartados por idioma">
+                <button type="button" class="study-viewer-lang-pill active" data-nb-lang="all" role="tab" aria-selected="true">🌍 Todos</button>
+                <button type="button" class="study-viewer-lang-pill" data-nb-lang="en" role="tab" aria-selected="false">🇺🇸 Inglés</button>
+                <button type="button" class="study-viewer-lang-pill" data-nb-lang="ko" role="tab" aria-selected="false">🇰🇷 Coreano</button>
+                <button type="button" class="study-viewer-lang-pill" data-nb-lang="ja" role="tab" aria-selected="false">🇯🇵 Japonés</button>
+                <button type="button" class="study-viewer-lang-pill" data-nb-lang="en_ko" role="tab" aria-selected="false">🎵 K-Pop</button>
+                <button type="button" class="study-viewer-lang-pill" data-nb-lang="en_ja" role="tab" aria-selected="false">🎌 J-Pop</button>
             </div>
 
             <div id="studyViewerStatusBar" class="study-viewer-status muted-text">

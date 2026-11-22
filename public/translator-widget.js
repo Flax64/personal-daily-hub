@@ -56,64 +56,90 @@
         }
     }
 
-    function defaultResilientFetch(url, fetchOpts, { timeoutMs = 26000, externalSignal = null } = {}) {
-        const controller = typeof AbortController === 'function' ? new AbortController() : null;
-        let timedOut = false;
-        const timer = controller && timeoutMs > 0
-            ? setTimeout(() => {
-                timedOut = true;
-                controller.abort();
-            }, timeoutMs)
-            : null;
+    function defaultResilientFetch(url, fetchOpts, { timeoutMs = 50000, externalSignal = null, maxRetries = 1 } = {}) {
+        const runAttempt = (attempt) => {
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            let timedOut = false;
+            const timer = controller && timeoutMs > 0
+                ? setTimeout(() => {
+                    timedOut = true;
+                    controller.abort();
+                }, timeoutMs)
+                : null;
 
-        const onExternalAbort = () => {
-            if (controller) controller.abort();
-        };
-        if (externalSignal && typeof externalSignal.addEventListener === 'function') {
-            if (externalSignal.aborted) controller && controller.abort();
-            else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-        }
+            const onExternalAbort = () => {
+                if (controller) controller.abort();
+            };
+            if (externalSignal && typeof externalSignal.addEventListener === 'function') {
+                if (externalSignal.aborted) controller && controller.abort();
+                else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+            }
 
-        return fetch(url, {
-            ...fetchOpts,
-            signal: controller ? controller.signal : externalSignal || undefined
-        })
-            .then(async (res) => {
-                const rawText = await res.text();
-                if (!res.ok) {
-                    return {
-                        ok: false,
-                        aborted: false,
-                        status: res.status,
-                        data: null,
-                        isNetworkIssue: res.status >= 500 || res.status === 0,
-                        errorMessage: rawText && rawText.length < 220 && !/<[a-z][\s\S]*>/i.test(rawText)
-                            ? trServer(rawText)
-                            : tr(`Server error (HTTP ${res.status}). Please retry.`, `Error del servidor (HTTP ${res.status}). Reintenta.`)
-                    };
-                }
-                try {
-                    const parsed = rawText ? JSON.parse(rawText) : {};
-                    return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
-                } catch (_) {
-                    return {
-                        ok: false,
-                        aborted: false,
-                        status: res.status,
-                        data: null,
-                        isNetworkIssue: true,
-                        errorMessage: tr(
-                            'Incomplete response from server due to a possible network interruption.',
-                            'Respuesta incompleta del servidor por posible corte de red.'
-                        )
-                    };
-                }
+            return fetch(url, {
+                ...fetchOpts,
+                signal: controller ? controller.signal : externalSignal || undefined
             })
-            .catch((err) => {
-                if (err && err.name === 'AbortError' && !timedOut && externalSignal && externalSignal.aborted) {
-                    return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
-                }
-                if (timedOut) {
+                .then(async (res) => {
+                    const rawText = await res.text();
+                    if (!res.ok) {
+                        const retryableStatus = res.status === 408 || res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+                        if (retryableStatus && attempt < maxRetries && !(externalSignal && externalSignal.aborted)) {
+                            await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                            return runAttempt(attempt + 1);
+                        }
+                        return {
+                            ok: false,
+                            aborted: false,
+                            status: res.status,
+                            data: null,
+                            isNetworkIssue: res.status >= 500 || res.status === 0,
+                            errorMessage: rawText && rawText.length < 220 && !/<[a-z][\s\S]*>/i.test(rawText)
+                                ? trServer(rawText)
+                                : tr(`Server error (HTTP ${res.status}). Please retry.`, `Error del servidor (HTTP ${res.status}). Reintenta.`)
+                        };
+                    }
+                    try {
+                        const parsed = rawText ? JSON.parse(rawText) : {};
+                        return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
+                    } catch (_) {
+                        if (attempt < maxRetries && !(externalSignal && externalSignal.aborted)) {
+                            await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                            return runAttempt(attempt + 1);
+                        }
+                        return {
+                            ok: false,
+                            aborted: false,
+                            status: res.status,
+                            data: null,
+                            isNetworkIssue: true,
+                            errorMessage: tr(
+                                'Incomplete response from server due to a possible network interruption.',
+                                'Respuesta incompleta del servidor por posible corte de red.'
+                            )
+                        };
+                    }
+                })
+                .catch(async (err) => {
+                    if (err && err.name === 'AbortError' && !timedOut && externalSignal && externalSignal.aborted) {
+                        return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
+                    }
+                    if (attempt < maxRetries && !(externalSignal && externalSignal.aborted)) {
+                        await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                        return runAttempt(attempt + 1);
+                    }
+                    if (timedOut) {
+                        return {
+                            ok: false,
+                            aborted: false,
+                            status: 0,
+                            data: null,
+                            isNetworkIssue: true,
+                            errorMessage: tr(
+                                'Request timed out (slow network or temporary cut). Please retry.',
+                                'Tiempo de espera agotado (red lenta o corte temporal). Reintenta.'
+                            )
+                        };
+                    }
                     return {
                         ok: false,
                         aborted: false,
@@ -121,29 +147,19 @@
                         data: null,
                         isNetworkIssue: true,
                         errorMessage: tr(
-                            'Request timed out (slow network or temporary cut). Please retry.',
-                            'Tiempo de espera agotado (red lenta o corte temporal). Reintenta.'
+                            'No stable connection to the server. Check your Wi-Fi or mobile data and try again.',
+                            'Sin conexión estable con el servidor. Revisa tu Wi-Fi o datos móviles e intenta de nuevo.'
                         )
                     };
-                }
-                return {
-                    ok: false,
-                    aborted: false,
-                    status: 0,
-                    data: null,
-                    isNetworkIssue: true,
-                    errorMessage: tr(
-                        'No stable connection to the server. Check your Wi-Fi or mobile data and try again.',
-                        'Sin conexión estable con el servidor. Revisa tu Wi-Fi o datos móviles e intenta de nuevo.'
-                    )
-                };
-            })
-            .finally(() => {
-                if (timer) clearTimeout(timer);
-                if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
-                    externalSignal.removeEventListener('abort', onExternalAbort);
-                }
-            });
+                })
+                .finally(() => {
+                    if (timer) clearTimeout(timer);
+                    if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
+                        externalSignal.removeEventListener('abort', onExternalAbort);
+                    }
+                });
+        };
+        return runAttempt(0);
     }
 
     function defaultLoadingNode(message) {
@@ -195,7 +211,18 @@
             });
     }
 
-    function openPopupWindow({ text = '', dir = 'en_es', engine = 'auto', context = '' } = {}) {
+    function detectSourceScriptClient(text) {
+        const clean = String(text || '').trim();
+        if (!clean) return 'auto';
+        const hasHangul = /[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(clean);
+        const hasJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(clean);
+        if (hasHangul) return 'ko';
+        if (hasJa) return 'ja';
+        if (/[A-Za-z]/.test(clean)) return 'en';
+        return 'auto';
+    }
+
+    function openPopupWindow({ text = '', dir = 'auto', engine = 'auto', context = '' } = {}) {
         const params = new URLSearchParams();
         if (dir) params.set('dir', dir);
         if (engine) params.set('engine', engine);
@@ -220,76 +247,97 @@
         resultBox.hidden = false;
 
         const notify = typeof onToast === 'function' ? onToast : () => {};
+        const dir = String(data.direction || 'auto');
+        const targetLangCode = (dir === 'ko_en' || dir === 'ja_en' || dir === 'es_en') ? 'en' : 'es';
+        const srcLabelMap = {
+            ko: tr('🇰🇷 Korean', '🇰🇷 Coreano'),
+            ja: tr('🇯🇵 Japanese', '🇯🇵 Japonés'),
+            en: tr('🇺🇸 English', '🇺🇸 Inglés'),
+            es: tr('🇪🇸 Spanish', '🇪🇸 Español')
+        };
+        const srcCode = dir.split('_')[0] || detectSourceScriptClient(data.sourceText) || 'en';
+        const srcHuman = srcLabelMap[srcCode] || tr('Auto', 'Auto');
+        const tgtHuman = targetLangCode === 'en' ? tr('🇺🇸 English', '🇺🇸 Inglés') : tr('🇪🇸 Spanish', '🇪🇸 Español');
 
         const headRow = document.createElement('div');
         headRow.className = 'lang-translator-footer';
 
         const dirBadge = document.createElement('span');
         dirBadge.className = 'lang-ai-badge';
-        dirBadge.textContent = `${data.directionLabel || data.direction || tr('Translation', 'Traducción')}`;
+        dirBadge.setAttribute('data-no-i18n', 'true');
+        dirBadge.textContent = `${srcHuman} → ${tgtHuman}`;
 
         const engBadge = document.createElement('span');
         engBadge.className = 'lang-ai-badge';
         engBadge.textContent = data.engine === 'gemini'
             ? `🤖 Gemini (${data.model || 'gemini'})`
-            : tr('⚡ Instant Local Dictionary', '⚡ Diccionario Local Instantáneo');
+            : tr('⚡ Instant Local', '⚡ Local Instantáneo');
 
         headRow.append(dirBadge, engBadge);
         resultBox.appendChild(headRow);
 
-        const grid = document.createElement('div');
-        grid.className = 'lang-translator-result-grid';
+        // Google Translate-style clean primary translation box
+        const primaryBox = document.createElement('div');
+        primaryBox.className = 'gt-result-primary-box';
 
-        const mainCard = document.createElement('div');
-        mainCard.className = 'lang-translator-card';
-        const mainLbl = document.createElement('small');
-        mainLbl.className = 'muted-text';
-        mainLbl.textContent = data.partOfSpeech
-            ? tr(`Translation (${data.partOfSpeech})`, `Traducción (${data.partOfSpeech})`)
-            : tr('Translation', 'Traducción');
+        const tgtHdr = document.createElement('div');
+        tgtHdr.className = 'gt-result-target-hdr';
+        const tgtTitle = document.createElement('span');
+        tgtTitle.textContent = data.partOfSpeech
+            ? `${tgtHuman} · ${data.partOfSpeech}`
+            : tgtHuman;
+        tgtHdr.appendChild(tgtTitle);
+        primaryBox.appendChild(tgtHdr);
+
         const mainVal = document.createElement('div');
-        mainVal.className = 'lang-translator-main-value';
+        mainVal.className = 'gt-result-main-text';
         mainVal.setAttribute('data-no-i18n', 'true');
-        mainVal.textContent = data.translatedText || '';
-        mainCard.append(mainLbl, mainVal);
+        const primaryText = targetLangCode === 'en'
+            ? (data.translatedText || data.englishBridge || '')
+            : (data.translatedText || data.spanishMeaning || '');
+        mainVal.textContent = primaryText;
+        primaryBox.appendChild(mainVal);
+
         if (data.romanization) {
             const rom = document.createElement('div');
             rom.className = 'lang-translator-rom';
             rom.setAttribute('data-no-i18n', 'true');
-            rom.textContent = `${tr('Pronunciation / Romanization', 'Pronunciación / Romanización')}: ${data.romanization}`;
-            mainCard.appendChild(rom);
+            rom.textContent = `[${data.romanization}]`;
+            primaryBox.appendChild(rom);
         }
-        grid.appendChild(mainCard);
 
-        if (data.spanishMeaning || data.explanationEs || data.englishBridge) {
-            const esCard = document.createElement('div');
-            esCard.className = 'lang-translator-card';
-            const esLbl = document.createElement('small');
-            esLbl.className = 'muted-text';
-            esLbl.textContent = tr('Meaning & Explanation', 'Significado y explicación en Español');
-            const esVal = document.createElement('div');
-            esVal.className = 'lang-translator-main-value';
-            esVal.setAttribute('data-no-i18n', 'true');
-            esVal.textContent = data.spanishMeaning || data.translatedText || '';
-            esCard.append(esLbl, esVal);
+        resultBox.appendChild(primaryBox);
 
-            if (data.englishBridge && data.direction !== 'ko_en') {
-                const bridge = document.createElement('small');
-                bridge.setAttribute('data-no-i18n', 'true');
-                bridge.textContent = `${tr('English bridge', 'Puente en inglés')}: ${data.englishBridge}`;
-                esCard.appendChild(bridge);
+        // Clean secondary nuance/bridge details when helpful (never redundant when target already displays the same string)
+        const secNorm = String(data.spanishMeaning || '').trim();
+        const priNorm = String(primaryText || '').trim();
+        const showEsSub = secNorm && secNorm !== priNorm;
+        const showBridge = data.englishBridge && targetLangCode !== 'en' && String(data.englishBridge).trim() !== priNorm;
+        if (showEsSub || showBridge || data.explanationEs) {
+            const subBox = document.createElement('div');
+            subBox.className = 'lang-translator-card';
+            if (showEsSub) {
+                const esLine = document.createElement('div');
+                esLine.setAttribute('data-no-i18n', 'true');
+                esLine.style.fontWeight = '600';
+                esLine.textContent = `🇪🇸 ${secNorm}`;
+                subBox.appendChild(esLine);
+            }
+            if (showBridge) {
+                const brLine = document.createElement('small');
+                brLine.setAttribute('data-no-i18n', 'true');
+                brLine.textContent = `🇺🇸 ${tr('English', 'Inglés')}: ${data.englishBridge}`;
+                subBox.appendChild(brLine);
             }
             if (data.explanationEs) {
                 const exp = document.createElement('small');
                 exp.className = 'muted-text';
                 exp.setAttribute('data-no-i18n', 'true');
                 exp.textContent = data.explanationEs;
-                esCard.appendChild(exp);
+                subBox.appendChild(exp);
             }
-            grid.appendChild(esCard);
+            resultBox.appendChild(subBox);
         }
-
-        resultBox.appendChild(grid);
 
         if (data.literalMeaning) {
             const lit = document.createElement('small');
@@ -433,13 +481,126 @@
         let seqCounter = 0;
         let activeController = null;
 
-        const setDirection = (dir) => {
-            const chosen = String(dir || 'en_es');
-            if (dirSelect) dirSelect.value = chosen;
+        const sourceTabs = Array.from(panel.querySelectorAll('[data-gt-src]'));
+        const targetTabs = Array.from(panel.querySelectorAll('[data-gt-tgt]'));
+        const detectedHintEl = panel.querySelector('.gt-detected-hint');
+
+        const getDefaultTargetForUi = () => (currentUiLang() === 'en' ? 'en' : 'es');
+        let gtSource = 'auto'; // 'auto' | 'ko' | 'ja' | 'en'
+        let gtTarget = getDefaultTargetForUi(); // 'es' | 'en'
+        let userPickedTarget = null;
+
+        const syncGoogleBarState = () => {
+            const rawInput = inputEl && inputEl.value ? inputEl.value : '';
+            const detectedScript = detectSourceScriptClient(rawInput);
+            const effectiveSrc = gtSource === 'auto' ? detectedScript : gtSource;
+            const uiDefaultTgt = getDefaultTargetForUi();
+
+            // Regla clave del usuario:
+            // - Si el texto fuente es Inglés -> SIEMPRE traduce al Español ('en_es') y bloquea target Inglés.
+            // - Si el texto fuente es Coreano/Japonés/Auto -> target únicamente Español o Inglés (por defecto idioma del sistema).
+            const englishLocked = effectiveSrc === 'en';
+            const resolvedTarget = englishLocked ? 'es' : (userPickedTarget || uiDefaultTgt);
+            gtTarget = resolvedTarget;
+
+            let effectiveDir = 'auto';
+            if (englishLocked) effectiveDir = 'en_es';
+            else if (effectiveSrc === 'ko') effectiveDir = resolvedTarget === 'en' ? 'ko_en' : 'ko_es';
+            else if (effectiveSrc === 'ja') effectiveDir = resolvedTarget === 'en' ? 'ja_en' : 'ja_es';
+            else effectiveDir = resolvedTarget === 'en' ? 'auto' : 'auto';
+
+            if (dirSelect) {
+                if (effectiveDir === 'auto' && rawInput.trim()) {
+                    effectiveDir = detectedScript === 'ko'
+                        ? (resolvedTarget === 'en' ? 'ko_en' : 'ko_es')
+                        : (detectedScript === 'ja' ? (resolvedTarget === 'en' ? 'ja_en' : 'ja_es') : 'en_es');
+                }
+                dirSelect.value = effectiveDir;
+            }
             dirPills.forEach(p => {
-                p.classList.toggle('active', p.getAttribute('data-dir') === chosen);
+                p.classList.toggle('active', p.getAttribute('data-dir') === effectiveDir);
             });
+
+            sourceTabs.forEach(btn => {
+                const isActive = btn.getAttribute('data-gt-src') === gtSource;
+                btn.classList.toggle('active', isActive);
+                btn.setAttribute('aria-selected', String(isActive));
+            });
+
+            targetTabs.forEach(btn => {
+                const tCode = btn.getAttribute('data-gt-tgt');
+                const isDisabled = englishLocked && tCode === 'en';
+                const isActive = tCode === resolvedTarget;
+                btn.disabled = isDisabled;
+                btn.classList.toggle('is-locked', isDisabled);
+                btn.classList.toggle('active', isActive);
+                btn.setAttribute('aria-selected', String(isActive));
+            });
+
+            if (detectedHintEl) {
+                const srcHuman = {
+                    auto: tr('Auto-detect (KO / JP / EN)', 'Detección automática (KO / JP / EN)'),
+                    ko: tr('Korean', 'Coreano'),
+                    ja: tr('Japanese', 'Japonés'),
+                    en: tr('English', 'Inglés')
+                }[effectiveSrc] || tr('Auto', 'Auto');
+                const tgtHuman = resolvedTarget === 'en' ? tr('English', 'Inglés') : tr('Español', 'Español');
+                if (englishLocked) {
+                    detectedHintEl.textContent = tr(
+                        '🇺🇸 English detected → always translates to 🇪🇸 Spanish',
+                        '🇺🇸 Inglés detectado → siempre traduce a 🇪🇸 Español'
+                    );
+                } else if (effectiveSrc === 'ko' || effectiveSrc === 'ja') {
+                    detectedHintEl.textContent = `${srcHuman} → ${tgtHuman}`;
+                } else {
+                    detectedHintEl.textContent = tr(
+                        `System default: ${tgtHuman} (KO/JP → ${tgtHuman}, EN → Español)`,
+                        `Sistema (${tgtHuman}): KO/JP → ${tgtHuman}, Inglés → siempre Español`
+                    );
+                }
+            }
+            return effectiveDir;
         };
+
+        const setDirection = (dir) => {
+            const chosen = String(dir || 'auto');
+            if (chosen === 'auto') {
+                gtSource = 'auto';
+                userPickedTarget = null;
+            } else if (chosen === 'en_es') {
+                gtSource = 'en';
+                userPickedTarget = 'es';
+            } else if (chosen === 'ko_en' || chosen === 'ko_es') {
+                gtSource = 'ko';
+                userPickedTarget = chosen === 'ko_en' ? 'en' : 'es';
+            } else if (chosen === 'ja_en' || chosen === 'ja_es' || chosen === 'en_ja') {
+                gtSource = 'ja';
+                userPickedTarget = chosen === 'ja_en' ? 'en' : 'es';
+            } else {
+                gtSource = 'auto';
+                userPickedTarget = chosen.endsWith('_en') ? 'en' : 'es';
+            }
+            syncGoogleBarState();
+        };
+
+        sourceTabs.forEach(btn => {
+            btn.addEventListener('click', () => {
+                gtSource = btn.getAttribute('data-gt-src') || 'auto';
+                syncGoogleBarState();
+                if (inputEl && inputEl.value.trim()) triggerTranslate();
+                else if (inputEl) inputEl.focus();
+            });
+        });
+
+        targetTabs.forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (btn.disabled) return;
+                userPickedTarget = btn.getAttribute('data-gt-tgt') || getDefaultTargetForUi();
+                syncGoogleBarState();
+                if (inputEl && inputEl.value.trim()) triggerTranslate();
+                else if (inputEl) inputEl.focus();
+            });
+        });
 
         dirPills.forEach(pill => {
             pill.addEventListener('click', () => {
@@ -452,6 +613,14 @@
             dirSelect.addEventListener('change', () => setDirection(dirSelect.value));
         }
 
+        if (inputEl) {
+            inputEl.addEventListener('input', () => {
+                syncGoogleBarState();
+            });
+        }
+
+        syncGoogleBarState();
+
         const triggerTranslate = () => {
             if (!btnRun) return;
             const text = (inputEl && inputEl.value ? inputEl.value : '').trim();
@@ -463,7 +632,7 @@
                 if (inputEl) inputEl.focus();
                 return;
             }
-            const direction = (dirSelect && dirSelect.value) || 'en_es';
+            const direction = syncGoogleBarState() || (dirSelect && dirSelect.value) || 'auto';
             const mode = (engineSelect && engineSelect.value) || 'auto';
             const context = (contextEl && contextEl.value ? contextEl.value : '').trim();
 
@@ -484,7 +653,7 @@
                         'X-UI-Lang': currentUiLang()
                     },
                     body: JSON.stringify({ text, direction, mode, context })
-                }, { timeoutMs: 26000, externalSignal: activeController ? activeController.signal : null });
+                }, { timeoutMs: 50000, externalSignal: activeController ? activeController.signal : null });
 
                 if (resp.aborted || mySeq !== seqCounter) return;
 
@@ -521,12 +690,20 @@
 
         if (global.DailyHubI18n && typeof global.DailyHubI18n.onChange === 'function') {
             global.DailyHubI18n.onChange(() => {
+                userPickedTarget = null;
+                syncGoogleBarState();
                 if (lastTranslation && resultBox && !resultBox.hidden) {
-                    renderTranslationCard(resultBox, lastTranslation, {
-                        onSendToStudyForm: onSendToStudyForm ? () => onSendToStudyForm(lastTranslation) : null,
-                        onOpenAiSettings,
-                        onToast: notify
-                    });
+                    const hasTxt = Boolean(inputEl && inputEl.value && inputEl.value.trim());
+                    const detectedScr = detectSourceScriptClient(inputEl ? inputEl.value : '');
+                    if (hasTxt && (detectedScr === 'ko' || detectedScr === 'ja' || gtSource === 'ko' || gtSource === 'ja')) {
+                        triggerTranslate();
+                    } else {
+                        renderTranslationCard(resultBox, lastTranslation, {
+                            onSendToStudyForm: onSendToStudyForm ? () => onSendToStudyForm(lastTranslation) : null,
+                            onOpenAiSettings,
+                            onToast: notify
+                        });
+                    }
                 }
             });
         }

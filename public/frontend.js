@@ -454,79 +454,96 @@ function formatHumanNetworkError(status, rawText = '', err = null) {
     return tServer(cleanText.slice(0, 260));
 }
 
-async function resilientFetchJson(url, fetchOpts = {}, { timeoutMs = 26000, externalSignal = null } = {}) {
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    let timedOut = false;
-    const timer = controller && timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            controller.abort();
-        }, timeoutMs)
-        : null;
-    const onExternalAbort = () => {
-        if (controller) controller.abort();
-    };
-    if (externalSignal && typeof externalSignal.addEventListener === 'function') {
-        if (externalSignal.aborted) controller?.abort();
-        else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-    }
+async function resilientFetchJson(url, fetchOpts = {}, { timeoutMs = 55000, externalSignal = null, maxRetries = 1 } = {}) {
+    const attemptRequest = async (attempt) => {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let timedOut = false;
+        const timer = controller && timeoutMs > 0
+            ? setTimeout(() => {
+                timedOut = true;
+                controller.abort();
+            }, timeoutMs)
+            : null;
+        const onExternalAbort = () => {
+            if (controller) controller.abort();
+        };
+        if (externalSignal && typeof externalSignal.addEventListener === 'function') {
+            if (externalSignal.aborted) controller?.abort();
+            else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
 
-    try {
-        const mergedHeaders = new Headers(fetchOpts.headers || {});
-        if (!mergedHeaders.has('X-UI-Lang')) {
-            mergedHeaders.set('X-UI-Lang', i18nGetLang());
-        }
-        const res = await fetch(url, {
-            ...fetchOpts,
-            headers: mergedHeaders,
-            signal: controller ? controller.signal : externalSignal || undefined
-        });
-        const rawText = await res.text();
-        if (!res.ok) {
-            return {
-                ok: false,
-                aborted: false,
-                status: res.status,
-                data: null,
-                isNetworkIssue: res.status >= 500 || res.status === 0,
-                errorMessage: formatHumanNetworkError(res.status, rawText)
-            };
-        }
         try {
-            const parsed = rawText ? JSON.parse(rawText) : {};
-            return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
-        } catch (_) {
+            const mergedHeaders = new Headers(fetchOpts.headers || {});
+            if (!mergedHeaders.has('X-UI-Lang')) {
+                mergedHeaders.set('X-UI-Lang', i18nGetLang());
+            }
+            const res = await fetch(url, {
+                ...fetchOpts,
+                headers: mergedHeaders,
+                signal: controller ? controller.signal : externalSignal || undefined
+            });
+            const rawText = await res.text();
+            if (!res.ok) {
+                const retryableHttp = res.status === 408 || res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+                if (retryableHttp && attempt < maxRetries && !externalSignal?.aborted) {
+                    await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                    return attemptRequest(attempt + 1);
+                }
+                return {
+                    ok: false,
+                    aborted: false,
+                    status: res.status,
+                    data: null,
+                    isNetworkIssue: res.status >= 500 || res.status === 0,
+                    errorMessage: formatHumanNetworkError(res.status, rawText)
+                };
+            }
+            try {
+                const parsed = rawText ? JSON.parse(rawText) : {};
+                return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
+            } catch (_) {
+                if (attempt < maxRetries && !externalSignal?.aborted) {
+                    await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                    return attemptRequest(attempt + 1);
+                }
+                return {
+                    ok: false,
+                    aborted: false,
+                    status: res.status,
+                    data: null,
+                    isNetworkIssue: true,
+                    errorMessage: tUi(
+                        'Unexpected server response (possible network cut). Retry.',
+                        'Respuesta inesperada del servidor (posible corte de red). Reintenta.'
+                    )
+                };
+            }
+        } catch (err) {
+            if (isAbortError(err) && !timedOut && externalSignal?.aborted) {
+                return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
+            }
+            if (attempt < maxRetries && !externalSignal?.aborted) {
+                await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                return attemptRequest(attempt + 1);
+            }
+            const effectiveErr = timedOut ? Object.assign(new Error('Request timeout'), { name: 'TimeoutError' }) : err;
             return {
                 ok: false,
                 aborted: false,
-                status: res.status,
+                status: 0,
                 data: null,
                 isNetworkIssue: true,
-                errorMessage: tUi(
-                    'Unexpected server response (possible network cut). Retry.',
-                    'Respuesta inesperada del servidor (posible corte de red). Reintenta.'
-                )
+                errorMessage: formatHumanNetworkError(0, '', effectiveErr)
             };
+        } finally {
+            if (timer) clearTimeout(timer);
+            if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
+                externalSignal.removeEventListener('abort', onExternalAbort);
+            }
         }
-    } catch (err) {
-        if (isAbortError(err) && !timedOut && externalSignal?.aborted) {
-            return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
-        }
-        const effectiveErr = timedOut ? Object.assign(new Error('Request timeout'), { name: 'TimeoutError' }) : err;
-        return {
-            ok: false,
-            aborted: false,
-            status: 0,
-            data: null,
-            isNetworkIssue: true,
-            errorMessage: formatHumanNetworkError(0, '', effectiveErr)
-        };
-    } finally {
-        if (timer) clearTimeout(timer);
-        if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
-            externalSignal.removeEventListener('abort', onExternalAbort);
-        }
-    }
+    };
+
+    return attemptRequest(0);
 }
 
 function hangulToRomanizationClient(text = '') {
@@ -750,7 +767,8 @@ async function submitMutationRequest({
     signature = '',
     buildBody = null,
     parseJson = false,
-    timeoutMs = 20000
+    timeoutMs = 55000,
+    maxRetries = 2
 }) {
     let idempotencyKey = createIdempotencyKey();
     let bodyObj = buildBody ? buildBody() : null;
@@ -761,45 +779,62 @@ async function submitMutationRequest({
         bodyObj = sub.body;
     }
 
-    const headers = { 'X-Idempotency-Key': idempotencyKey };
-    const fetchOpts = { method, headers };
+    const executeAttempt = async (attempt) => {
+        const headers = { 'X-Idempotency-Key': idempotencyKey };
+        const fetchOpts = { method, headers };
 
-    if (bodyObj !== null && bodyObj !== undefined) {
-        headers['Content-Type'] = 'application/json';
-        fetchOpts.body = JSON.stringify(bodyObj);
-    }
+        if (bodyObj !== null && bodyObj !== undefined) {
+            headers['Content-Type'] = 'application/json';
+            fetchOpts.body = JSON.stringify(bodyObj);
+        }
 
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    let timedOut = false;
-    const timer = controller && timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            controller.abort();
-        }, timeoutMs)
-        : null;
-    if (controller) fetchOpts.signal = controller.signal;
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let timedOut = false;
+        const timer = controller && timeoutMs > 0
+            ? setTimeout(() => {
+                timedOut = true;
+                controller.abort();
+            }, timeoutMs)
+            : null;
+        if (controller) fetchOpts.signal = controller.signal;
 
-    try {
-        const res = await fetch(url, fetchOpts);
-        if (!res.ok) {
-            if (scopeKey && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
-                clearIdempotentSubmission(scopeKey);
+        try {
+            const res = await fetch(url, fetchOpts);
+            if (!res.ok) {
+                const errText = await res.text().catch(() => '');
+                const isInFlightDup = res.status === 409 && /already being processed|ya est[aá] siendo procesada/i.test(errText);
+                const retryableHttp = isInFlightDup || res.status === 408 || res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+                if (retryableHttp && attempt < maxRetries) {
+                    await new Promise((r) => setTimeout(r, 1100 * (attempt + 1)));
+                    return executeAttempt(attempt + 1);
+                }
+                if (scopeKey && !isInFlightDup && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+                    clearIdempotentSubmission(scopeKey);
+                }
+                throw new Error(formatHumanNetworkError(res.status, errText));
             }
-            const errText = await res.text().catch(() => '');
-            throw new Error(formatHumanNetworkError(res.status, errText));
-        }
 
-        clearIdempotentSubmission(scopeKey);
-        return parseJson ? res.json() : res.text();
-    } catch (err) {
-        if (timedOut || isAbortError(err) || /failed to fetch|networkerror|load failed/i.test(String(err?.message || ''))) {
-            const effectiveErr = timedOut ? Object.assign(new Error('Timeout'), { name: 'TimeoutError' }) : err;
-            throw new Error(formatHumanNetworkError(0, '', effectiveErr));
+            clearIdempotentSubmission(scopeKey);
+            return parseJson ? res.json() : res.text();
+        } catch (err) {
+            const isTransient = timedOut
+                || isAbortError(err)
+                || /failed to fetch|networkerror|load failed|timeout|tard[oó] demasiado|gateway/i.test(String(err?.message || ''));
+            if (isTransient && attempt < maxRetries) {
+                await new Promise((r) => setTimeout(r, 1100 * (attempt + 1)));
+                return executeAttempt(attempt + 1);
+            }
+            if (timedOut || isAbortError(err) || /failed to fetch|networkerror|load failed/i.test(String(err?.message || ''))) {
+                const effectiveErr = timedOut ? Object.assign(new Error('Timeout'), { name: 'TimeoutError' }) : err;
+                throw new Error(formatHumanNetworkError(0, '', effectiveErr));
+            }
+            throw err;
+        } finally {
+            if (timer) clearTimeout(timer);
         }
-        throw err;
-    } finally {
-        if (timer) clearTimeout(timer);
-    }
+    };
+
+    return executeAttempt(0);
 }
 
 const homeSummaryTracker = createRequestTracker();
@@ -3650,6 +3685,8 @@ if (englishForm) {
     const englishCard = document.querySelector('#view-english .english-card');
     const englishRecentBox = document.getElementById('englishRecentBox');
     const englishMusicStudio = document.getElementById('englishMusicStudio');
+    const englishHangulStudio = document.getElementById('englishHangulPracticeStudio');
+    const englishAlphabetStudio = document.getElementById('englishAlphabetStudio');
     const categoryInput = document.getElementById('englishCategoryInput');
     const studyLanguageInput = document.getElementById('studyLanguageInput');
     const studyLangPills = document.querySelectorAll('.study-lang-pill[data-study-lang]');
@@ -3694,6 +3731,32 @@ if (englishForm) {
         }
     };
 
+    function detectEntryScriptLanguageClient(primaryText = '', secondaryText = '', preferredCode = 'en_ko') {
+        const primary = String(primaryText || '').trim();
+        const combined = `${primary} ${String(secondaryText || '').trim()}`.trim();
+        const hasHangulPrimary = /[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(primary);
+        const hasJaPrimary = !hasHangulPrimary && /[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/.test(primary);
+        const hasHangulAny = /[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(combined);
+        const hasJaAny = /[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/.test(combined);
+        const strippedPrimary = primary.replace(/\[[^\]]*\]|\([^)]*\)/g, '');
+        const hasMultiLatinPrimary = /[A-Za-z]{2,}/.test(strippedPrimary);
+
+        if (hasHangulPrimary) {
+            return (preferredCode === 'en_ko' && hasMultiLatinPrimary) ? 'en_ko' : 'ko';
+        }
+        if (hasJaPrimary) {
+            return (preferredCode === 'en_ja' && hasMultiLatinPrimary) ? 'en_ja' : 'ja';
+        }
+        if (hasHangulAny) {
+            return (preferredCode === 'en_ko' && hasMultiLatinPrimary) ? 'en_ko' : 'ko';
+        }
+        if (hasJaAny) {
+            return (preferredCode === 'en_ja' && hasMultiLatinPrimary) ? 'en_ja' : 'ja';
+        }
+        if (preferredCode === 'ko' || preferredCode === 'ja') return preferredCode;
+        return 'en';
+    }
+
     function applyStudyLanguageUi(langCode, { syncMusicSelect = true } = {}) {
         const norm = ['en', 'ko', 'en_ko', 'ja', 'en_ja'].includes(langCode) ? langCode : 'en_ko';
         if (studyLanguageInput) studyLanguageInput.value = norm;
@@ -3705,6 +3768,13 @@ if (englishForm) {
         if (studyLangHint) studyLangHint.textContent = meta.hint;
         if (engWordLabel) engWordLabel.textContent = meta.wordLabel;
         if (engWordInput) engWordInput.placeholder = meta.wordPlaceholder;
+
+        const proofBadge = document.getElementById('englishProofingBadge');
+        if (proofBadge && (norm === 'ko' || norm === 'ja')) {
+            proofBadge.textContent = norm === 'ko'
+                ? tUi('🇰🇷 Hangul / Korean detected — will save to Korean section', '🇰🇷 Hangul / Coreano detectado — se guardará en el apartado Coreano')
+                : tUi('🇯🇵 Japanese script detected — will save to Japanese section', '🇯🇵 Japonés detectado — se guardará en el apartado Japonés');
+        }
 
         if (syncMusicSelect) {
             const musicLangSelect = document.getElementById('musicSongLanguage');
@@ -3724,6 +3794,24 @@ if (englishForm) {
     studyLangPills.forEach(btn => {
         btn.addEventListener('click', () => {
             applyStudyLanguageUi(btn.getAttribute('data-study-lang'));
+        });
+    });
+
+    // Auto-detect Korean / Japanese vs English while typing so Korean notes never land under English
+    ['engWord', 'engGrammarTitle', 'engGrammarNotes', 'engNoteTitle', 'engNoteBody', 'engPvVerb'].forEach((inpId) => {
+        const el = document.getElementById(inpId);
+        if (!el) return;
+        el.addEventListener('input', () => {
+            const val = el.value.trim();
+            if (!val) return;
+            const currentCode = studyLanguageInput?.value || 'en_ko';
+            if (/[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(val)) {
+                const target = detectEntryScriptLanguageClient(val, '', currentCode);
+                if (target !== currentCode) applyStudyLanguageUi(target, { syncMusicSelect: false });
+            } else if (/[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/.test(val)) {
+                const target = detectEntryScriptLanguageClient(val, '', currentCode);
+                if (target !== currentCode) applyStudyLanguageUi(target, { syncMusicSelect: false });
+            }
         });
     });
 
@@ -3749,6 +3837,8 @@ if (englishForm) {
                 } catch (_) {
                     if (/[\u3040-\u30FF]/.test(val) && typeof kanaToRomajiClient === 'function') {
                         engRomanizationInput.value = kanaToRomajiClient(val);
+                    } else if (/[\uAC00-\uD7A3]/.test(val)) {
+                        engRomanizationInput.value = hangulToRomanizationClient(val);
                     }
                 }
             }, 220);
@@ -3791,7 +3881,10 @@ if (englishForm) {
 
     function cambiarCategoriaEnglish(cat) {
         const isMusic = cat === 'music' && Boolean(englishMusicStudio);
-        const safeCat = isMusic ? 'music' : (sectionConfig[cat] ? cat : 'vocabulary');
+        const isHangul = cat === 'hangul_practice' && Boolean(englishHangulStudio);
+        const isAlphabet = cat === 'alphabet' && Boolean(englishAlphabetStudio);
+        const isStudioTab = isMusic || isHangul || isAlphabet;
+        const safeCat = isStudioTab ? cat : (sectionConfig[cat] ? cat : 'vocabulary');
         if (categoryInput) categoryInput.value = safeCat;
 
         tabButtons.forEach(btn => {
@@ -3800,13 +3893,15 @@ if (englishForm) {
             btn.setAttribute('aria-selected', String(active));
         });
 
-        englishForm.hidden = isMusic;
-        if (englishRecentBox) englishRecentBox.hidden = isMusic;
+        englishForm.hidden = isStudioTab;
+        if (englishRecentBox) englishRecentBox.hidden = isStudioTab;
         if (englishMusicStudio) englishMusicStudio.hidden = !isMusic;
-        if (englishCard) englishCard.classList.toggle('music-wide', isMusic);
+        if (englishHangulStudio) englishHangulStudio.hidden = !isHangul;
+        if (englishAlphabetStudio) englishAlphabetStudio.hidden = !isAlphabet;
+        if (englishCard) englishCard.classList.toggle('music-wide', isStudioTab);
 
         Object.entries(sectionConfig).forEach(([key, cfg]) => {
-            const isTarget = !isMusic && key === safeCat;
+            const isTarget = !isStudioTab && key === safeCat;
             const fs = document.getElementById(cfg.fieldsetId);
             if (fs) fs.hidden = !isTarget;
             cfg.requiredIds.forEach(id => {
@@ -3819,6 +3914,12 @@ if (englishForm) {
         if (isMusic && typeof ensureEnglishMusicCatalogLoaded === 'function') {
             ensureEnglishMusicCatalogLoaded();
         }
+        if (isHangul && typeof ensureHangulPracticeInitialized === 'function') {
+            ensureHangulPracticeInitialized();
+        }
+        if (isAlphabet && typeof ensureAlphabetStudioInitialized === 'function') {
+            ensureAlphabetStudioInitialized();
+        }
     }
 
     tabButtons.forEach(btn => {
@@ -3829,14 +3930,16 @@ if (englishForm) {
 
     function buildEnglishEntryPayload(category) {
         const val = (id) => (document.getElementById(id)?.value || '').trim();
-        const activeLangCode = studyLanguageInput ? studyLanguageInput.value : 'en_ko';
-        const languageLabel = STUDY_LANGUAGE_UI[activeLangCode]?.label || 'English + Korean (K-Pop)';
+        const selectedLangCode = studyLanguageInput ? studyLanguageInput.value : 'en_ko';
 
         if (category === 'vocabulary') {
+            const word = val('engWord');
+            const resolvedCode = detectEntryScriptLanguageClient(word, `${val('engVocabExample')} ${val('engVocabNotes')}`, selectedLangCode);
             return {
                 category: 'vocabulary',
-                language: languageLabel,
-                word: val('engWord'),
+                language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+                language_code: resolvedCode,
+                word,
                 romanization: val('engRomanization'),
                 part_of_speech: val('engPos'),
                 spanish: val('engSpanish'),
@@ -3846,29 +3949,42 @@ if (englishForm) {
         }
 
         if (category === 'grammar') {
+            const title = val('engGrammarTitle');
+            const notes = val('engGrammarNotes');
+            const example = val('engGrammarExample');
+            const resolvedCode = detectEntryScriptLanguageClient(title, `${notes} ${example}`, selectedLangCode);
             return {
                 category: 'grammar',
-                language: languageLabel,
-                title: val('engGrammarTitle'),
-                notes: val('engGrammarNotes'),
-                example: val('engGrammarExample')
+                language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+                language_code: resolvedCode,
+                title,
+                notes,
+                example
             };
         }
 
         if (category === 'notes') {
+            const title = val('engNoteTitle');
+            const notes = val('engNoteBody');
+            const example = val('engNoteExample');
+            const resolvedCode = detectEntryScriptLanguageClient(title, `${notes} ${example}`, selectedLangCode);
             return {
                 category: 'notes',
-                language: languageLabel,
-                title: val('engNoteTitle'),
-                notes: val('engNoteBody'),
-                example: val('engNoteExample')
+                language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+                language_code: resolvedCode,
+                title,
+                notes,
+                example
             };
         }
 
+        const verb = val('engPvVerb');
+        const resolvedCode = detectEntryScriptLanguageClient(verb, `${val('engPvExample')} ${val('engPvNotes')}`, selectedLangCode);
         return {
             category: 'phrasal_verb',
-            language: languageLabel,
-            verb: val('engPvVerb'),
+            language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+            language_code: resolvedCode,
+            verb,
             grammar_type: val('engPvType'),
             meaning_es: val('engPvMeaningEs'),
             meaning_en: val('engPvMeaningEn'),
@@ -4037,13 +4153,691 @@ if (englishForm) {
     cambiarCategoriaEnglish = function (cat) {
         origCambiarCategoria(cat);
         if (languageAiPanel) {
-            languageAiPanel.hidden = (cat === 'music');
+            languageAiPanel.hidden = (cat === 'music' || cat === 'hangul_practice' || cat === 'alphabet');
         }
     };
 
     cambiarCategoriaEnglish('vocabulary');
     applyStudyLanguageUi(studyLanguageInput ? studyLanguageInput.value : 'en_ko');
     initStudyNoteDrafts();
+
+    window.__switchEnglishStudioTab = cambiarCategoriaEnglish;
+    window.__applyStudyLanguageFromStudio = applyStudyLanguageUi;
+    initHangulPracticeStudio();
+    initAlphabetCompositionStudio();
+}
+
+function speakStudyText(text, bcp47Lang = 'ko-KR') {
+    const clean = String(text || '').trim();
+    if (!clean) return false;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof window.SpeechSynthesisUtterance !== 'function') {
+        showToast('info', tUi('Voice synthesis is not available in this browser.', 'La síntesis de voz no está disponible en este navegador.'));
+        return false;
+    }
+    try {
+        window.speechSynthesis.cancel();
+        const utt = new window.SpeechSynthesisUtterance(clean);
+        utt.lang = bcp47Lang;
+        utt.rate = 0.88;
+        const voices = typeof window.speechSynthesis.getVoices === 'function' ? window.speechSynthesis.getVoices() : [];
+        const prefix = String(bcp47Lang || 'ko').split('-')[0].toLowerCase();
+        const match = voices.find((v) => String(v.lang || '').toLowerCase().startsWith(prefix));
+        if (match) utt.voice = match;
+        window.speechSynthesis.speak(utt);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+let hangulPracticeInitialized = false;
+function ensureHangulPracticeInitialized() {
+    if (!hangulPracticeInitialized) initHangulPracticeStudio();
+}
+
+function initHangulPracticeStudio() {
+    const root = document.getElementById('englishHangulPracticeStudio');
+    if (!root || hangulPracticeInitialized) return;
+    hangulPracticeInitialized = true;
+
+    const HANGUL_SYMBOLS = [
+        // Vocales básicas (10)
+        { char: 'ㅏ', group: 'basic_vowels', rom: 'a', nameEs: 'Vocal vertical A', soundEs: 'Como "a" abierta en "casa". Trazo vertical derecho.', tipEs: 'Se ubica a la derecha de la consonante inicial (ej. 가 = ga).', speak: '아' },
+        { char: 'ㅑ', group: 'basic_vowels', rom: 'ya', nameEs: 'Vocal vertical YA', soundEs: 'Como "ya" en "yate". Doble trazo corto hacia la derecha.', tipEs: 'El segundo trazo corto siempre añade un sonido "y-" inicial.', speak: '야' },
+        { char: 'ㅓ', group: 'basic_vowels', rom: 'eo', nameEs: 'Vocal vertical EO', soundEs: 'Entre "o" y "a" relajada (boca abierta sin redondear labios).', tipEs: 'Trazo corto hacia la izquierda. Muy común (서, 어, 너).', speak: '어' },
+        { char: 'ㅕ', group: 'basic_vowels', rom: 'yeo', nameEs: 'Vocal vertical YEO', soundEs: 'Igual que "ㅓ" precedida de "y" suave (yeo).', tipEs: 'Usada en palabras frecuentes como 여자 (yeoja = mujer).', speak: '여' },
+        { char: 'ㅗ', group: 'basic_vowels', rom: 'o', nameEs: 'Vocal horizontal O', soundEs: 'Como "o" clara con labios redondeados.', tipEs: 'Trazo arriba de la línea horizontal; va debajo de la consonante (고 = go).', speak: '오' },
+        { char: 'ㅛ', group: 'basic_vowels', rom: 'yo', nameEs: 'Vocal horizontal YO', soundEs: 'Como "yo" en "yoyo". Dos trazos verticales arriba.', tipEs: 'Siempre va debajo de la consonante inicial (요 = yo).', speak: '요' },
+        { char: 'ㅜ', group: 'basic_vowels', rom: 'u', nameEs: 'Vocal horizontal U', soundEs: 'Como "u" en "luna" con labios hacia adelante.', tipEs: 'Trazo corto apuntando hacia abajo; va debajo de la consonante (구 = gu).', speak: '우' },
+        { char: 'ㅠ', group: 'basic_vowels', rom: 'yu', nameEs: 'Vocal horizontal YU', soundEs: 'Como "yu" en "yuca".', tipEs: 'Va debajo de la consonante inicial (유 = yu).', speak: '유' },
+        { char: 'ㅡ', group: 'basic_vowels', rom: 'eu', nameEs: 'Vocal horizontal EU', soundEs: 'Sonrisa plana diciendo "u" sin redondear los labios.', tipEs: 'Línea horizontal pura debajo de la consonante (그 = geu).', speak: '으' },
+        { char: 'ㅣ', group: 'basic_vowels', rom: 'i', nameEs: 'Vocal vertical I', soundEs: 'Como "i" en "isla".', tipEs: 'Línea vertical pura a la derecha de la consonante (이 = i).', speak: '이' },
+        // Vocales compuestas (11)
+        { char: 'ㅐ', group: 'compound_vowels', rom: 'ae', nameEs: 'Vocal compuesta AE', soundEs: 'Como "e" abierta en español.', tipEs: 'Combinación de ㅏ + ㅣ (en el habla moderna suena muy parecido a ㅔ).', speak: '애' },
+        { char: 'ㅒ', group: 'compound_vowels', rom: 'yae', nameEs: 'Vocal compuesta YAE', soundEs: 'Como "ye" abierta.', tipEs: 'Poco frecuente (예: 얘기 = charla/historia).', speak: '얘' },
+        { char: 'ㅔ', group: 'compound_vowels', rom: 'e', nameEs: 'Vocal compuesta E', soundEs: 'Como "e" clara en "mesa".', tipEs: 'Usada en partículas de lugar (에, 에서).', speak: '에' },
+        { char: 'ㅖ', group: 'compound_vowels', rom: 'ye', nameEs: 'Vocal compuesta YE', soundEs: 'Como "ye" en "yegua".', tipEs: 'En 네/예 ("sí") y 세계 (mundo).', speak: '예' },
+        { char: 'ㅘ', group: 'compound_vowels', rom: 'wa', nameEs: 'Diptongo WA', soundEs: 'ㅗ + ㅏ = "wa" rápida ("guagua").', tipEs: 'Va envolviendo por debajo y a la derecha (와 = wa).', speak: '와' },
+        { char: 'ㅙ', group: 'compound_vowels', rom: 'wae', nameEs: 'Diptongo WAE', soundEs: 'ㅗ + ㅐ = "we" / "wae".', tipEs: 'Ejemplo clásico: 왜? (wae? = ¿por qué?).', speak: '왜' },
+        { char: 'ㅚ', group: 'compound_vowels', rom: 'oe', nameEs: 'Diptongo OE / WE', soundEs: 'En coreano moderno se pronuncia "we".', tipEs: 'Ej.: 외국 (weguk = país extranjero).', speak: '외' },
+        { char: 'ㅝ', group: 'compound_vowels', rom: 'wo', nameEs: 'Diptongo WO', soundEs: 'ㅜ + ㅓ = "wo" en "won".', tipEs: 'En 고마워 (gomawo = gracias).', speak: '워' },
+        { char: 'ㅞ', group: 'compound_vowels', rom: 'we', nameEs: 'Diptongo WE', soundEs: 'ㅜ + ㅔ = "we".', tipEs: 'Usado en préstamos como 웨딩 (wedding).', speak: '웨' },
+        { char: 'ㅟ', group: 'compound_vowels', rom: 'wi', nameEs: 'Diptongo WI', soundEs: 'ㅜ + ㅣ = "wi" en "wifi".', tipEs: 'Ejemplo: 위 (arriba) o 쉬다 (descansar).', speak: '위' },
+        { char: 'ㅢ', group: 'compound_vowels', rom: 'ui', nameEs: 'Diptongo UI / EUI', soundEs: 'ㅡ deslizada rápidamente a ㅣ ("eui").', tipEs: 'Como partícula posesiva 의 se pronuncia "e"; en 의사 (médico) "eu-i".', speak: '의' },
+        // Consonantes básicas (14)
+        { char: 'ㄱ', group: 'basic_consonants', rom: 'g / k', nameEs: 'Giyeok (기역)', soundEs: 'Al inicio suave entre g/k; entre vocales suena "g"; al final "k" cerrada.', tipEs: 'Forma de lengua tocando el paladar posterior.', speak: '가' },
+        { char: 'ㄴ', group: 'basic_consonants', rom: 'n', nameEs: 'Nieun (니은)', soundEs: 'Igual que "n" en español.', tipEs: 'Representa la punta de la lengua tocando detrás de los dientes superiores.', speak: '나' },
+        { char: 'ㄷ', group: 'basic_consonants', rom: 'd / t', nameEs: 'Digeut (디귿)', soundEs: 'Al inicio entre d/t suave; entre vocales "d"; como batchim suena "t" seca.', tipEs: 'Ejemplo: 다 (da = todo).', speak: '다' },
+        { char: 'ㄹ', group: 'basic_consonants', rom: 'r / l', nameEs: 'Rieul (리을)', soundEs: 'R suave entre vocales (como "pero"); L clara al final o cuando va doble ㄹㄹ.', tipEs: 'Ejemplo: 사랑 (sarang) vs 물 (mul).', speak: '라' },
+        { char: 'ㅁ', group: 'basic_consonants', rom: 'm', nameEs: 'Mieum (미음)', soundEs: 'Igual que "m" en "mamá".', tipEs: 'Cuadrado = labios cerrados formando una boca.', speak: '마' },
+        { char: 'ㅂ', group: 'basic_consonants', rom: 'b / p', nameEs: 'Bieup (비읍)', soundEs: 'Al inicio entre b/p suave; entre vocales "b"; al final "p" cerrada.', tipEs: 'Ejemplo: 바다 (bada = mar), 밥 (bap = arroz).', speak: '바' },
+        { char: 'ㅅ', group: 'basic_consonants', rom: 's / sh', nameEs: 'Siot (시옷)', soundEs: '"S" suave normalmente; ante ㅣ/ㅑ/ㅕ/ㅛ/ㅠ suena casi como "sh". Al final suena "t".', tipEs: '시 (shi) / 사랑 (sarang).', speak: '사' },
+        { char: 'ㅇ', group: 'basic_consonants', rom: '- / ng', nameEs: 'Ieung (이응)', soundEs: 'SILENCIOSA al inicio de sílaba (solo sostiene la vocal); suena "-ng" al final (Batchim).', tipEs: 'Regla clave: ninguna sílaba Hangul empieza con vocal sola; usa ㅇ + vocal (아).', speak: '아' },
+        { char: 'ㅈ', group: 'basic_consonants', rom: 'j', nameEs: 'Jieut (지읒)', soundEs: 'Similar a "y/j" en inglés suave; sin vibración fuerte.', tipEs: 'Entre vocales se sonoriza suavemente (가자 = gaja).', speak: '자' },
+        { char: 'ㅊ', group: 'basic_consonants', rom: 'ch', nameEs: 'Chieut (치읓)', soundEs: '"Ch" ASPIRADA con aire fuerte ("chico" + soplo de aire).', tipEs: 'El trazo superior extra indica aspiración respecto a ㅈ.', speak: '차' },
+        { char: 'ㅋ', group: 'basic_consonants', rom: 'k', nameEs: 'Kieuk (키읔)', soundEs: '"K" ASPIRADA con golpe de aire.', tipEs: 'Derivada de ㄱ con una barra extra de aspiración (커피 = keopi).', speak: '카' },
+        { char: 'ㅌ', group: 'basic_consonants', rom: 't', nameEs: 'Tieut (티읕)', soundEs: '"T" ASPIRADA con golpe de aire.', tipEs: 'Derivada de ㄷ con barra media extra.', speak: '타' },
+        { char: 'ㅍ', group: 'basic_consonants', rom: 'p', nameEs: 'Pieup (피읖)', soundEs: '"P" ASPIRADA con golpe de aire.', tipEs: 'Ejemplo: 피아노 (piano).', speak: '파' },
+        { char: 'ㅎ', group: 'basic_consonants', rom: 'h', nameEs: 'Hieut (히읗)', soundEs: '"H" aspirada suave (como "h" inglesa en "hello").', tipEs: 'Al combinarse como Batchim con ㄱ/ㄷ/ㅂ/ㅈ las vuelve aspiradas (좋다 -> 조타).', speak: '하' },
+        // Consonantes dobles / tensas (5)
+        { char: 'ㄲ', group: 'double_consonants', rom: 'kk', nameEs: 'Ssang-giyeok (쌍기역)', soundEs: '"K" tensa sin aire (contracción firme de garganta).', tipEs: 'No sueltes aire; corta el sonido en seco antes de la vocal.', speak: '까' },
+        { char: 'ㄸ', group: 'double_consonants', rom: 'tt', nameEs: 'Ssang-digeut (쌍디귿)', soundEs: '"T" tensa pura sin aire.', tipEs: 'Ejemplo: 때 (ttae = momento/ocasión).', speak: '따' },
+        { char: 'ㅃ', group: 'double_consonants', rom: 'pp', nameEs: 'Ssang-bieup (쌍비읍)', soundEs: '"P" tensa sin aire.', tipEs: 'Ejemplo: 오빠 (oppa) / 예쁘다 (yeppeuda = bonito).', speak: '빠' },
+        { char: 'ㅆ', group: 'double_consonants', rom: 'ss', nameEs: 'Ssang-siot (쌍시옷)', soundEs: '"S" intensa y sostenida.', tipEs: 'En verbos en pasado siempre aparece como batchim ㅆ (했어요).', speak: '싸' },
+        { char: 'ㅉ', group: 'double_consonants', rom: 'jj', nameEs: 'Ssang-jieut (쌍지읒)', soundEs: '"Ch/J" tensa comprimida sin aire.', tipEs: 'Ejemplo: 진짜 (jinjja = de verdad).', speak: '짜' },
+        // 7 Reglas Batchim (consonante final)
+        { char: '받침 ㄱ', group: 'batchim', rom: '-k (ㄱ,ㅋ,ㄲ)', nameEs: 'Batchim Grupo K', soundEs: 'Se cierra con "k" muda sin exhalar al final de sílaba.', tipEs: 'Ej.: 책 (chaek = libro), 부엌 (bueok = cocina). Si sigue vocal, se enlaza.', speak: '책' },
+        { char: '받침 ㄴ', group: 'batchim', rom: '-n (ㄴ)', nameEs: 'Batchim N', soundEs: 'Terminación nasal "-n" sostenida.', tipEs: 'Ej.: 눈 (nun = ojo / nieve), 산 (san = montaña).', speak: '산' },
+        { char: '받침 ㄷ', group: 'batchim', rom: '-t (ㄷ,ㅅ,ㅆ,ㅈ,ㅊ,ㅌ,ㅎ)', nameEs: 'Batchim Grupo T (7 en 1)', soundEs: 'Todas estas letras al cerrar sílaba suenan como "t" bloqueada (sin soltar aire).', tipEs: 'Ej.: 꽃 [kkot] = flor, 있다 [itda] = haber. Con vocal siguiente recupera su sonido original!', speak: '꽃' },
+        { char: '받침 ㄹ', group: 'batchim', rom: '-l (ㄹ)', nameEs: 'Batchim L', soundEs: 'Al final de sílaba suena siempre como "L" suave.', tipEs: 'Ej.: 달 (dal = luna), 물 (mul = agua).', speak: '물' },
+        { char: '받침 ㅁ', group: 'batchim', rom: '-m (ㅁ)', nameEs: 'Batchim M', soundEs: 'Cierra completamente los labios con "-m".', tipEs: 'Ej.: 마음 (maeum = corazón/mente), 봄 (bom = primavera).', speak: '밤' },
+        { char: '받침 ㅂ', group: 'batchim', rom: '-p (ㅂ,ㅍ)', nameEs: 'Batchim Grupo P', soundEs: 'Cierre labial seco "-p" sin aire.', tipEs: 'Ej.: 집 (jip = casa), 앞 (ap = frente).', speak: '집' },
+        { char: '받침 ㅇ', group: 'batchim', rom: '-ng (ㅇ)', nameEs: 'Batchim NG', soundEs: 'Sonido nasal posterior "-ng" (como en "song").', tipEs: 'Ej.: 방 (bang = habitación), 사랑 (sarang = amor).', speak: '사랑' }
+    ];
+
+    const gridEl = document.getElementById('hangulSymbolGrid');
+    const filterBtns = root.querySelectorAll('.hangul-filter-row [data-hangul-group]');
+    const detailGlyph = document.getElementById('hangulDetailGlyph');
+    const detailName = document.getElementById('hangulDetailName');
+    const detailMeta = document.getElementById('hangulDetailMeta');
+    const detailTip = document.getElementById('hangulDetailTip');
+    const btnSpeakSym = document.getElementById('btnHangulSpeakSymbol');
+    const statusBanner = document.getElementById('hangulPracticeStatusBanner');
+
+    let currentGroup = 'all';
+    let selectedSymbol = HANGUL_SYMBOLS[0];
+
+    function showSymbolDetail(sym, { speak = false } = {}) {
+        selectedSymbol = sym;
+        if (detailGlyph) detailGlyph.textContent = sym.char;
+        if (detailName) detailName.textContent = `${sym.char} — ${sym.nameEs} [${sym.rom}]`;
+        if (detailMeta) detailMeta.textContent = `🔊 ${sym.soundEs}`;
+        if (detailTip) detailTip.textContent = `📐 ${sym.tipEs}`;
+        if (gridEl) {
+            gridEl.querySelectorAll('.hangul-symbol-card').forEach((card) => {
+                card.classList.toggle('active', card.dataset.char === sym.char);
+            });
+        }
+        if (speak) speakStudyText(sym.speak || sym.char, 'ko-KR');
+    }
+
+    function renderSymbolGrid(group = 'all') {
+        if (!gridEl) return;
+        currentGroup = group;
+        const filtered = group === 'all' ? HANGUL_SYMBOLS : HANGUL_SYMBOLS.filter((s) => s.group === group);
+        gridEl.replaceChildren();
+        filtered.forEach((sym) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'hangul-symbol-card' + (selectedSymbol && selectedSymbol.char === sym.char ? ' active' : '');
+            btn.dataset.char = sym.char;
+
+            const ch = document.createElement('span');
+            ch.className = 'hangul-symbol-char';
+            ch.textContent = sym.char;
+
+            const rm = document.createElement('span');
+            rm.className = 'hangul-symbol-rom';
+            rm.textContent = `[${sym.rom}]`;
+
+            btn.append(ch, rm);
+            btn.addEventListener('click', () => showSymbolDetail(sym, { speak: true }));
+            gridEl.appendChild(btn);
+        });
+    }
+
+    filterBtns.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            filterBtns.forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderSymbolGrid(btn.getAttribute('data-hangul-group') || 'all');
+        });
+    });
+
+    btnSpeakSym?.addEventListener('click', () => {
+        if (selectedSymbol) speakStudyText(selectedSymbol.speak || selectedSymbol.char, 'ko-KR');
+    });
+
+    renderSymbolGrid('all');
+    showSymbolDetail(HANGUL_SYMBOLS[0]);
+
+    // Syllable block builder (Unicode AC00..D7A3)
+    const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+    const CHO_ROM = ['g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp', 's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h'];
+    const JUNG = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ'];
+    const JUNG_ROM = ['a', 'ae', 'ya', 'yae', 'eo', 'e', 'yeo', 'ye', 'o', 'wa', 'wae', 'oe', 'yo', 'u', 'wo', 'we', 'wi', 'yu', 'eu', 'ui', 'i'];
+    const JONG = ['', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+    const JONG_ROM = ['', 'k', 'k', 'k', 'n', 'n', 'n', 't', 'l', 'lk', 'lm', 'lb', 'ls', 'lt', 'lp', 'lh', 'm', 'p', 'p', 't', 't', 'ng', 't', 't', 'k', 't', 'p', 't'];
+    const HORIZ_VOWELS = new Set([8, 12, 13, 17, 18]);
+    const MIXED_VOWELS = new Set([9, 10, 11, 14, 15, 16, 19]);
+
+    const selInit = document.getElementById('hangulBuilderInitial');
+    const selMed = document.getElementById('hangulBuilderMedial');
+    const selFin = document.getElementById('hangulBuilderFinal');
+    const previewGlyph = document.getElementById('hangulBuilderGlyph');
+    const previewFormula = document.getElementById('hangulBuilderFormula');
+    const previewGeom = document.getElementById('hangulBuilderGeometry');
+
+    if (selInit && selMed && selFin) {
+        selInit.replaceChildren();
+        CHO.forEach((c, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = `${c} (${CHO_ROM[idx] || 'silencio'})`;
+            if (c === 'ㅎ') opt.selected = true;
+            selInit.appendChild(opt);
+        });
+        selMed.replaceChildren();
+        JUNG.forEach((v, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = `${v} (${JUNG_ROM[idx]})`;
+            if (v === 'ㅏ') opt.selected = true;
+            selMed.appendChild(opt);
+        });
+        selFin.replaceChildren();
+        JONG.forEach((f, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = idx === 0 ? 'Sin Batchim (abierta)' : `${f} (-${JONG_ROM[idx]})`;
+            if (f === 'ㄴ') opt.selected = true;
+            selFin.appendChild(opt);
+        });
+
+        const updateBuilder = () => {
+            const i = Number(selInit.value || 0);
+            const m = Number(selMed.value || 0);
+            const f = Number(selFin.value || 0);
+            const ch = String.fromCharCode(0xAC00 + (i * 21 + m) * 28 + f);
+            const rom = `${CHO_ROM[i] || ''}${JUNG_ROM[m] || ''}${JONG_ROM[f] || ''}`;
+            if (previewGlyph) previewGlyph.textContent = ch;
+            if (previewFormula) {
+                const finPart = f > 0 ? ` + ${JONG[f]} (-${JONG_ROM[f]})` : '';
+                previewFormula.textContent = `${CHO[i]} (${CHO_ROM[i] || 'ø'}) + ${JUNG[m]} (${JUNG_ROM[m]})${finPart} = ${ch} [${rom}]`;
+            }
+            if (previewGeom) {
+                const layoutDesc = HORIZ_VOWELS.has(m)
+                    ? tUi('Vertical layout: Initial C on TOP + Vowel BOTTOM', 'Disposición Vertical: Consonante ARRIBA + Vocal ABAJO')
+                    : (MIXED_VOWELS.has(m)
+                        ? tUi('L-wrap compound: C top-left, Vowel wraps below & right', 'Envolvente Mixta: C arriba-izq, Vocal rodea abajo y derecha')
+                        : tUi('Side-by-side: Initial C LEFT + Vowel RIGHT', 'Lado a Lado: Consonante IZQUIERDA + Vocal DERECHA'));
+                const batchimDesc = f > 0
+                    ? tUi(' + Final Batchim closing underneath', ' + Batchim cerrando abajo')
+                    : '';
+                previewGeom.textContent = layoutDesc + batchimDesc;
+            }
+        };
+
+        [selInit, selMed, selFin].forEach((sel) => sel.addEventListener('change', updateBuilder));
+        updateBuilder();
+
+        document.getElementById('btnHangulSpeakBlock')?.addEventListener('click', () => {
+            if (previewGlyph?.textContent) speakStudyText(previewGlyph.textContent, 'ko-KR');
+        });
+        document.getElementById('btnHangulRandomBlock')?.addEventListener('click', () => {
+            selInit.value = String(Math.floor(Math.random() * CHO.length));
+            selMed.value = String(Math.floor(Math.random() * JUNG.length));
+            selFin.value = Math.random() < 0.45 ? '0' : String(1 + Math.floor(Math.random() * (JONG.length - 1)));
+            updateBuilder();
+            speakStudyText(previewGlyph?.textContent || '', 'ko-KR');
+        });
+        document.getElementById('btnHangulCopyToVocab')?.addEventListener('click', () => {
+            const ch = previewGlyph?.textContent || '';
+            if (!ch) return;
+            window.__applyStudyLanguageFromStudio?.('ko', { syncMusicSelect: false });
+            window.__switchEnglishStudioTab?.('vocabulary');
+            const wordEl = document.getElementById('engWord');
+            const romEl = document.getElementById('engRomanization');
+            if (wordEl) {
+                wordEl.value = ch;
+                wordEl.dispatchEvent(new Event('input'));
+            }
+            if (romEl) romEl.value = hangulToRomanizationClient(ch);
+            showToast('ok', tUi(`Copied "${ch}" to glossary form.`, `"${ch}" copiado al formulario de vocabulario.`));
+        });
+    }
+
+    // Mini Recognition Quiz
+    const quizPool = HANGUL_SYMBOLS.filter((s) => s.group !== 'batchim');
+    const qPrompt = document.getElementById('hangulQuizPrompt');
+    const qOpts = document.getElementById('hangulQuizOptions');
+    const qFeedback = document.getElementById('hangulQuizFeedback');
+    const qScore = document.getElementById('hangulQuizScoreBadge');
+    let quizHits = 0;
+    let quizTotal = 0;
+    let quizLocked = false;
+
+    const loadQuizQuestion = () => {
+        if (!qPrompt || !qOpts) return;
+        quizLocked = false;
+        const target = quizPool[Math.floor(Math.random() * quizPool.length)];
+        const distractors = quizPool
+            .filter((x) => x.char !== target.char && x.rom !== target.rom)
+            .sort(() => Math.random() - 0.5)
+            .slice(0, 3);
+        const options = [target, ...distractors].sort(() => Math.random() - 0.5);
+
+        qPrompt.textContent = tUi(`Which sound corresponds to "${target.char}" (${target.nameEs})?`, `¿Qué sonido corresponde a "${target.char}" (${target.nameEs})?`);
+        if (qFeedback) qFeedback.textContent = tUi('Tap the matching romanization/sound.', 'Toca la romanización correcta.');
+        qOpts.replaceChildren();
+        options.forEach((optItem) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'hangul-quiz-opt';
+            btn.textContent = `[${optItem.rom}]`;
+            btn.addEventListener('click', () => {
+                if (quizLocked) return;
+                quizLocked = true;
+                quizTotal += 1;
+                const ok = optItem.char === target.char;
+                if (ok) {
+                    quizHits += 1;
+                    btn.classList.add('is-correct');
+                    if (qFeedback) qFeedback.textContent = `✅ ${target.char} = [${target.rom}] — ${target.soundEs}`;
+                } else {
+                    btn.classList.add('is-wrong');
+                    qOpts.querySelectorAll('.hangul-quiz-opt').forEach((b) => {
+                        if (b.textContent === `[${target.rom}]`) b.classList.add('is-correct');
+                    });
+                    if (qFeedback) qFeedback.textContent = `❌ Era "${target.char}" = [${target.rom}]. ${target.tipEs}`;
+                }
+                if (qScore) qScore.textContent = tUi(`Score: ${quizHits} / ${quizTotal}`, `Aciertos: ${quizHits} / ${quizTotal}`);
+                speakStudyText(target.speak || target.char, 'ko-KR');
+            });
+            qOpts.appendChild(btn);
+        });
+    };
+    document.getElementById('btnHangulNewQuestion')?.addEventListener('click', loadQuizQuestion);
+    loadQuizQuestion();
+
+    // Save Korean Alphabet & Rules directly to Notes & Section 6 in Word
+    const btnSaveHangul = document.getElementById('btnSaveHangulToWord');
+    btnSaveHangul?.addEventListener('click', async () => {
+        const llaveTexto = await solicitarLlaveE2EEAsync();
+        if (!llaveTexto) return;
+
+        runWithButtonLock(btnSaveHangul, async () => {
+            try {
+                const guideRes = await resilientFetchJson('/api/language/alphabet-guide', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language: 'ko', mode: 'auto' })
+                }, { timeoutMs: 55000 });
+                const payloads = guideRes.ok && guideRes.data?.wordPayloads ? guideRes.data.wordPayloads : null;
+                const alphabetEntry = payloads?.alphabetEntry || {
+                    category: 'alphabet',
+                    language: '🇰🇷 Korean (한국어)',
+                    language_code: 'ko',
+                    title: 'Alfabeto Coreano Hangul (자모) y Reglas de Composición',
+                    alphabet_overview: 'Sistema fonético de 14 consonantes básicas, 5 dobles, 10 vocales básicas, 11 compuestas y 7 grupos Batchim.',
+                    symbols_table: HANGUL_SYMBOLS.map((s) => `${s.char} [${s.rom}]: ${s.soundEs}`).join('\n'),
+                    composition_rules: '1. C + Vocal Vertical (ㅏ,ㅓ,ㅣ): lado a lado (가).\n2. C + Vocal Horizontal (ㅗ,ㅜ,ㅡ): arriba/abajo (고).\n3. Batchim (종성): consonante final siempre cierra debajo (한, 사랑).',
+                    example: '한글 [han-geul] · 사랑해 [sa-rang-hae] · 가자 [ga-ja]',
+                    notes: 'Guardado desde Práctica de Símbolos Coreanos.'
+                };
+                const notesEntry = payloads?.notesEntry || {
+                    category: 'notes',
+                    language: '🇰🇷 Korean (한국어)',
+                    language_code: 'ko',
+                    title: '🇰🇷 Alfabeto Coreano (Hangul) — Reglas Rápidas en Mis Notas',
+                    notes: `${alphabetEntry.symbols_table}\n\nReglas de composición:\n${alphabetEntry.composition_rules}`,
+                    example: alphabetEntry.example
+                };
+
+                await submitMutationRequest({
+                    url: '/api/send-english',
+                    method: 'POST',
+                    scopeKey: 'english:hangul:alphabet',
+                    signature: `alphabet-ko:${Date.now()}`,
+                    buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(alphabetEntry), llaveTexto) })
+                });
+                await submitMutationRequest({
+                    url: '/api/send-english',
+                    method: 'POST',
+                    scopeKey: 'english:hangul:notes',
+                    signature: `notes-ko:${Date.now()}`,
+                    buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(notesEntry), llaveTexto) })
+                });
+
+                if (statusBanner) {
+                    statusBanner.hidden = false;
+                    statusBanner.className = 'english-status-banner ok';
+                    statusBanner.textContent = tUi(
+                        'Korean alphabet & composition rules saved into Notes and Section 6 (Korean section) of your Word notebook.',
+                        'Alfabeto coreano y reglas de composición guardados en Notas y en el Apartado Coreano de tu cuaderno Word.'
+                    );
+                }
+                showToast('ok', tUi('Korean alphabet saved to Notes & Word!', '¡Alfabeto coreano guardado en Notas y Word!'));
+            } catch (err) {
+                if (statusBanner) {
+                    statusBanner.hidden = false;
+                    statusBanner.className = 'english-status-banner err';
+                    statusBanner.textContent = err.message;
+                }
+                showToast('err', err.message);
+            }
+        }, { loadingText: tUi('Saving...', 'Guardando...') });
+    });
+
+    document.getElementById('btnViewKoreanInNotebook')?.addEventListener('click', () => {
+        if (typeof window.openStudyNotebookViewer === 'function') {
+            window.openStudyNotebookViewer({ defaultLanguage: 'ko' });
+        } else {
+            document.getElementById('btnOpenStudyViewer')?.click();
+        }
+    });
+}
+
+let alphabetStudioInitialized = false;
+function ensureAlphabetStudioInitialized() {
+    if (!alphabetStudioInitialized) initAlphabetCompositionStudio();
+}
+
+function initAlphabetCompositionStudio() {
+    const root = document.getElementById('englishAlphabetStudio');
+    if (!root || alphabetStudioInitialized) return;
+    alphabetStudioInitialized = true;
+
+    const langSelect = document.getElementById('alphabetLangSelect');
+    const modeSelect = document.getElementById('alphabetAiEngineSelect');
+    const focusInput = document.getElementById('alphabetFocusInput');
+    const btnGen = document.getElementById('btnGenerateAlphabetGuide');
+    const btnSave = document.getElementById('btnSaveAlphabetToWord');
+    const btnView = document.getElementById('btnViewAlphabetInNotebook');
+    const chkAutoSave = document.getElementById('chkAutoSaveAlphabetToWord');
+    const statusBanner = document.getElementById('alphabetStudioStatus');
+    const resultBox = document.getElementById('alphabetGuideResultBox');
+
+    let lastGuidePayload = null;
+
+    const speakLangCodeFor = (code) => {
+        if (code === 'ko' || code === 'en_ko') return 'ko-KR';
+        if (code === 'ja' || code === 'en_ja') return 'ja-JP';
+        return 'en-US';
+    };
+
+    function setStatus(type, msg) {
+        if (!statusBanner) return;
+        statusBanner.hidden = !msg;
+        statusBanner.className = `english-status-banner ${type || ''}`;
+        statusBanner.textContent = msg || '';
+    }
+
+    function renderGuide(data) {
+        if (!resultBox) return;
+        const g = data?.guide || data || {};
+        resultBox.replaceChildren();
+
+        const summary = document.createElement('div');
+        summary.className = 'ai-summary-box';
+        const badge = data?.usedGemini ? `🤖 ${data.model || 'Gemini'}` : '⚡ Guía Estructurada';
+        summary.textContent = `${badge} · ${g.title || ''} — ${g.overview || ''}`;
+        resultBox.appendChild(summary);
+
+        if (data?.aiAnswer || g?.aiAnswer) {
+            const aiNote = document.createElement('p');
+            aiNote.className = 'study-viewer-meta';
+            aiNote.textContent = `✨ ${data?.aiAnswer || g?.aiAnswer}`;
+            resultBox.appendChild(aiNote);
+        }
+
+        if (Array.isArray(g.symbols) && g.symbols.length) {
+            const symTitle = document.createElement('h4');
+            symTitle.textContent = tUi('🔤 Symbols, Sounds & Examples', '🔤 Símbolos, Sonidos y Ejemplos');
+            resultBox.appendChild(symTitle);
+
+            const grid = document.createElement('div');
+            grid.className = 'alphabet-symbols-grid';
+            const speakBcp = speakLangCodeFor(data.languageCode || langSelect?.value || 'ko');
+
+            g.symbols.forEach((s) => {
+                const tile = document.createElement('div');
+                tile.className = 'alphabet-symbol-tile';
+
+                const head = document.createElement('div');
+                head.className = 'alphabet-symbol-head';
+
+                const strong = document.createElement('strong');
+                const symLabel = s.symbol || '';
+                const subLabel = s.romanization ? `[${s.romanization}]` : (s.name || '');
+                strong.textContent = subLabel ? `${symLabel}` : symLabel;
+
+                const btnSpk = document.createElement('button');
+                btnSpk.type = 'button';
+                btnSpk.className = 'btn-secondary btn-small';
+                btnSpk.textContent = '🔊';
+                btnSpk.addEventListener('click', () => speakStudyText(s.speakText || s.example || s.symbol || '', speakBcp));
+
+                head.append(strong, btnSpk);
+
+                const nameP = document.createElement('div');
+                nameP.className = 'small-note';
+                nameP.style.fontWeight = '600';
+                nameP.textContent = subLabel;
+
+                const soundP = document.createElement('div');
+                soundP.className = 'small-note';
+                soundP.textContent = s.sound || s.soundEs || '';
+
+                const ruleP = document.createElement('div');
+                ruleP.className = 'muted-text small-note';
+                ruleP.textContent = [s.formation || s.compositionRule, s.example ? `Ej.: ${s.example}` : ''].filter(Boolean).join(' · ');
+
+                tile.append(head);
+                if (subLabel) tile.appendChild(nameP);
+                tile.append(soundP, ruleP);
+                grid.appendChild(tile);
+            });
+            resultBox.appendChild(grid);
+        }
+
+        if (Array.isArray(g.compositionRules) && g.compositionRules.length) {
+            const rulesTitle = document.createElement('h4');
+            rulesTitle.textContent = tUi('🧩 Composition & Formation Rules', '🧩 Reglas de Composición y Formación');
+            const ol = document.createElement('ol');
+            ol.className = 'alphabet-rules-list';
+            g.compositionRules.forEach((r) => {
+                const li = document.createElement('li');
+                if (r && typeof r === 'object') {
+                    const hdr = document.createElement('strong');
+                    hdr.textContent = [r.rule, r.pattern ? `[${r.pattern}]` : ''].filter(Boolean).join(' ');
+                    const body = document.createElement('div');
+                    body.className = 'muted-text small-note';
+                    body.textContent = [r.explanation, r.examples ? `Ej.: ${r.examples}` : ''].filter(Boolean).join(' · ');
+                    li.append(hdr, body);
+                } else {
+                    li.textContent = String(r || '');
+                }
+                ol.appendChild(li);
+            });
+            resultBox.append(rulesTitle, ol);
+        }
+
+        if (Array.isArray(g.soundTips) && g.soundTips.length) {
+            const tipsTitle = document.createElement('h4');
+            tipsTitle.textContent = tUi('🗣️ Pronunciation Tips', '🗣️ Consejos de Pronunciación');
+            const ul = document.createElement('ul');
+            ul.className = 'alphabet-rules-list';
+            g.soundTips.forEach((t) => {
+                const li = document.createElement('li');
+                li.textContent = String(t || '');
+                ul.appendChild(li);
+            });
+            resultBox.append(tipsTitle, ul);
+        }
+
+        if (Array.isArray(g.practiceExercises) && g.practiceExercises.length) {
+            const exTitle = document.createElement('h4');
+            exTitle.textContent = tUi('📝 Guided Practice', '📝 Práctica Guiada');
+            const ulEx = document.createElement('ul');
+            ulEx.className = 'alphabet-rules-list';
+            g.practiceExercises.forEach((p) => {
+                const li = document.createElement('li');
+                if (p && typeof p === 'object') {
+                    const pr = document.createElement('strong');
+                    pr.textContent = p.prompt || '';
+                    const ans = document.createElement('div');
+                    ans.className = 'muted-text small-note';
+                    ans.textContent = p.answer ? `✔️ ${p.answer}` : '';
+                    li.append(pr, ans);
+                } else {
+                    li.textContent = String(p || '');
+                }
+                ulEx.appendChild(li);
+            });
+            resultBox.append(exTitle, ulEx);
+        }
+    }
+
+    async function saveGuideToWord(dataPayload, { interactiveKeyPrompt = true } = {}) {
+        const payloads = dataPayload?.wordPayloads;
+        if (!payloads) return false;
+        const llaveTexto = interactiveKeyPrompt
+            ? await solicitarLlaveE2EEAsync()
+            : obtenerLlaveE2EE();
+        if (!llaveTexto) return false;
+
+        if (payloads.alphabetEntry) {
+            await submitMutationRequest({
+                url: '/api/send-english',
+                method: 'POST',
+                scopeKey: `english:alphabet:${payloads.alphabetEntry.language_code || 'ko'}`,
+                signature: `${payloads.alphabetEntry.title}:${payloads.alphabetEntry.symbols_table?.length || 0}`,
+                buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(payloads.alphabetEntry), llaveTexto) })
+            });
+        }
+        if (payloads.notesEntry) {
+            await submitMutationRequest({
+                url: '/api/send-english',
+                method: 'POST',
+                scopeKey: `english:alphabet_note:${payloads.notesEntry.language_code || 'ko'}`,
+                signature: `${payloads.notesEntry.title}:${payloads.notesEntry.notes?.length || 0}`,
+                buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(payloads.notesEntry), llaveTexto) })
+            });
+        }
+        return true;
+    }
+
+    async function loadOfflinePreview(langCode) {
+        const res = await resilientFetchJson(
+            `/api/language/alphabet-guide?language=${encodeURIComponent(langCode || 'ko')}`,
+            { method: 'GET' },
+            { timeoutMs: 25000 }
+        );
+        if (res.ok && res.data?.guide) {
+            lastGuidePayload = null;
+            renderGuide({ ...res.data, usedGemini: false });
+        }
+    }
+
+    btnGen?.addEventListener('click', () => {
+        const language = langSelect?.value || 'ko';
+        const mode = modeSelect?.value || 'auto';
+        const customFocus = (focusInput?.value || '').trim();
+
+        runWithButtonLock(btnGen, async () => {
+            setStatus('', '');
+            if (resultBox) resultBox.replaceChildren(createLoadingBanner(tUi('Generating alphabet & composition rules with AI...', 'Generando alfabeto y reglas de composición con IA...'), 'sm'));
+
+            const resp = await resilientFetchJson('/api/language/alphabet-guide', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ language, mode, customFocus })
+            }, { timeoutMs: 55000 });
+
+            if (!resp.ok || !resp.data) {
+                setStatus('err', resp.errorMessage || tUi('Could not generate alphabet guide.', 'No se pudo generar la guía del alfabeto.'));
+                await loadOfflinePreview(language);
+                return;
+            }
+
+            lastGuidePayload = resp.data;
+            renderGuide({
+                ...resp.data,
+                guide: {
+                    title: resp.data.title,
+                    overview: resp.data.overview,
+                    symbols: resp.data.symbols,
+                    compositionRules: resp.data.compositionRules,
+                    soundTips: resp.data.soundTips,
+                    practiceExercises: resp.data.practiceExercises
+                }
+            });
+            if (btnSave) btnSave.disabled = false;
+
+            if (chkAutoSave?.checked) {
+                try {
+                    const saved = await saveGuideToWord(lastGuidePayload, { interactiveKeyPrompt: false });
+                    if (saved) {
+                        setStatus('ok', tUi(
+                            `Saved into Notes & Section 6 (${resp.data.languageSectionLabel || resp.data.language}) in your Word notebook.`,
+                            `Guardado en Notas y en la Sección 6 (${resp.data.languageSectionLabel || resp.data.language}) de tu cuaderno Word.`
+                        ));
+                        showToast('ok', tUi('Alphabet guide saved to Word & Notes!', '¡Guía de alfabeto guardada en Word y Notas!'));
+                    } else {
+                        setStatus('ok', tUi(
+                            'Guide generated! Click "Save to Notes & Word Notebook" to enter your E2EE key and save it.',
+                            '¡Guía generada! Pulsa "Guardar en Notas y Cuaderno Word" para guardar con tu llave privada.'
+                        ));
+                    }
+                } catch (err) {
+                    setStatus('err', err.message);
+                }
+            }
+        }, { loadingText: tUi('Generating...', 'Generando...') });
+    });
+
+    btnSave?.addEventListener('click', () => {
+        if (!lastGuidePayload) return;
+        runWithButtonLock(btnSave, async () => {
+            try {
+                const saved = await saveGuideToWord(lastGuidePayload, { interactiveKeyPrompt: true });
+                if (saved) {
+                    setStatus('ok', tUi('Alphabet & composition rules saved to Notes and Word notebook!', '¡Alfabeto y reglas de composición guardados en Notas y Cuaderno Word!'));
+                    showToast('ok', tUi('Saved to Word notebook!', '¡Guardado en el cuaderno Word!'));
+                }
+            } catch (err) {
+                setStatus('err', err.message);
+                showToast('err', err.message);
+            }
+        }, { loadingText: tUi('Saving...', 'Guardando...') });
+    });
+
+    btnView?.addEventListener('click', () => {
+        const lang = langSelect?.value || 'ko';
+        if (typeof window.openStudyNotebookViewer === 'function') {
+            window.openStudyNotebookViewer({ defaultLanguage: lang });
+        } else {
+            document.getElementById('btnOpenStudyViewer')?.click();
+        }
+    });
+
+    langSelect?.addEventListener('change', () => {
+        if (btnSave) btnSave.disabled = true;
+        loadOfflinePreview(langSelect.value);
+    });
+
+    loadOfflinePreview(langSelect?.value || 'ko');
 }
 
 let cachedLanguageMemory = { terms: [], grammarNotes: [], songs: [], customContext: '' };
@@ -4303,7 +5097,7 @@ function initLanguageAiStudio() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: query, question: query, language, mode, songTitle, artistName })
-            }, { timeoutMs: 28000, externalSignal: signal });
+            }, { timeoutMs: 55000, externalSignal: signal });
 
             if (resp.aborted || !langAiTracker.isCurrent(seq)) return;
 
@@ -4476,7 +5270,7 @@ function initLanguageAiStudio() {
                     artistName,
                     mode
                 })
-            }, { timeoutMs: 28000, externalSignal: signal });
+            }, { timeoutMs: 55000, externalSignal: signal });
 
             if (resp.aborted || !musicAiTracker.isCurrent(seq)) return;
 
@@ -4678,7 +5472,7 @@ function initLanguageAiStudio() {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({})
-                        }, { timeoutMs: 25000 });
+                        }, { timeoutMs: 50000 });
                         if (!pRes.ok || !pRes.data?.practice) {
                             showToast('err', pRes.errorMessage || 'No se pudo generar la práctica.');
                             return;
@@ -4829,7 +5623,7 @@ function initLanguageAiStudio() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ targetText, spokenText, language: langCode })
-            }, { timeoutMs: 18000 });
+            }, { timeoutMs: 35000 });
 
             if (evalRes.ok && evalRes.data && resultBox) {
                 const d = evalRes.data;
@@ -6212,7 +7006,7 @@ function _isolateHangulLinesClient(linesArr) {
 }
 
 function _isSectionHeaderLineClient(line) {
-    return /^(?:===\s*\[[^\]]+\]\s*===|\[(?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|EN|JA|JP|JP-EN|EN-JP|ES|SUB|UND)(?:[-_][A-Za-z0-9]+)*(?:\s*[—\-]\s*[^\]]*)?\])$/i.test(String(line || '').trim());
+    return /^(?:===\s*\[[^\]]+\]\s*===|\[(?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|KOREAN|COREANO|EN|ENG|ENGLISH|JA|JP|JAPANESE|JP-EN|EN-JP|ES|ESP|SPANISH|ESPA[ÑN]OL|SUB|UND)(?:[-_][A-Za-z0-9]+)*(?:\s*[—\-]\s*[^\]]*)?\]|(?:Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:]\s*(?:Traducci[oó]n|Translation|Subt[ií]tulos|Subtitles|IA|AI|Local|Romaji|Romanizaci[oó]n)[^\n]*)?)$/i.test(String(line || '').trim());
 }
 
 function _isRomanizationBracketLineClient(line) {
@@ -6402,11 +7196,11 @@ function parseAndDivideLyricsByLanguage(rawLyrics = '', structuredTracks = null)
     const clean = String(rawLyrics || '').replace(/\r\n/g, '\n').trim();
     if (!clean) return [];
 
-    const headerPattern = /(?:^|\n)(?:===\s*\[([^\]]+)\]\s*===|\[((?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|EN|JA|JP|JP-EN|EN-JP|ES|ZH|FR|PT|DE|IT|RU|SUB|UND)(?:[-_][A-Za-z0-9]+)*(?:\s*[—\-][^\]]*)?)\])\s*\n/gi;
+    const headerPattern = /(?:^|\n)(?:===\s*\[([^\]]+)\]\s*===|\[((?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|KOREAN|COREANO|EN|ENG|ENGLISH|JA|JP|JAPANESE|JP-EN|EN-JP|ES|ESP|SPANISH|ESPA[ÑN]OL|ZH|FR|PT|DE|IT|RU|SUB|UND)(?:[-_][A-Za-z0-9]+)*(?:\s*[—\-][^\]]*)?)\]|((?:Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:]\s*(?:Traducci[oó]n|Translation|Subt[ií]tulos|Subtitles|IA|AI|Local|Romaji|Romanizaci[oó]n)[^\n]*)?))\s*\n/gi;
     const matches = [];
     let m;
     while ((m = headerPattern.exec(clean)) !== null) {
-        const rawTag = String(m[1] || m[2] || '').trim().toUpperCase();
+        const rawTag = String(m[1] || m[2] || m[3] || '').trim().toUpperCase();
         matches.push({
             rawTag,
             headerStart: m.index,
@@ -6429,10 +7223,10 @@ function parseAndDivideLyricsByLanguage(rawLyrics = '', structuredTracks = null)
         if (rawTag.startsWith('JA') || rawTag.startsWith('JP') || rawTag.includes('JAPON')) {
             return SECTION_META.ja;
         }
-        if (rawTag.startsWith('EN') || rawTag.includes('INGL')) {
+        if (rawTag.startsWith('EN') || rawTag.includes('INGL') || rawTag.includes('ENGLISH')) {
             return SECTION_META.en;
         }
-        if (rawTag.startsWith('ES') || rawTag.includes('ESPAÑOL') || rawTag.includes('TRADUCCI')) {
+        if (rawTag.startsWith('ES') || rawTag.includes('ESPAÑOL') || rawTag.includes('ESPANOL') || rawTag.includes('SPANISH') || rawTag.includes('TRADUCCI')) {
             return SECTION_META.es;
         }
         return { code: 'original', tabLabel: '🎵 Original', title: `🎵 ${rawTag || 'Original'}` };
@@ -8750,21 +9544,21 @@ if (englishMusicStudioRoot) {
 
     function extractExistingSpanishLyricsSection(rawLyrics) {
         const clean = String(rawLyrics || '').replace(/\r\n/g, '\n');
-        const ytMatch = clean.match(/(?:^|\n)\[ES(?:[-_][^\]]+)?\]\s*\n([\s\S]*?)(?=\n(?:\[(?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|EN|JA|JP|JP-EN|EN-JP|ES|ZH|FR|PT|DE|IT|RU|SUB)(?:[-_][A-Za-z0-9]+)*(?:\s*[—-][^\]]*)?\]|===\s*\[)|$)/i);
+        const ytMatch = clean.match(/(?:^|\n)(?:\[ES(?:[-_][^\]]+)?\]|Spanish(?:\s*[—\-]\s*Traducción\s+Subtítulos)?)\s*\n([\s\S]*?)(?=\n(?:\[(?:ORIGINAL|ORIG|FULL|MULTI|MIX|WORD|KO|KR|EN|JA|JP|JP-EN|EN-JP|ES|ZH|FR|PT|DE|IT|RU|SUB)(?:[-_][A-Za-z0-9]+)*(?:\s*[—-][^\]]*)?\]|===\s*\[|(?:Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:][^\n]*)?\s*$)|$)/im);
         if (ytMatch && ytMatch[1] && ytMatch[1].trim().length >= 8) {
             return { kind: 'youtube-es', text: ytMatch[1].trim() };
         }
-        const aiMatch = clean.match(/(?:^|\n)===\s*\[ES\s*[—-]\s*Traducción[^\]]*\]\s*===\s*\n([\s\S]*?)(?=\n===\s*\[|$)/i);
+        const aiMatch = clean.match(/(?:^|\n)(?:===\s*\[ES\s*[—-]\s*Traducción[^\]]*\]\s*===|Spanish\s*[—\-]\s*Traducción[^\n]*)\s*\n([\s\S]*?)(?=\n(?:===\s*\[|(?:Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:][^\n]*)?\s*$)|$)/im);
         if (aiMatch && aiMatch[1] && aiMatch[1].trim().length >= 8) {
             return { kind: 'ai-es', text: aiMatch[1].trim() };
         }
         return null;
     }
 
-    function mergeSpanishLyricsSection(rawLyrics, spanishText, headerLabel = '=== [ES — Traducción IA] ===') {
+    function mergeSpanishLyricsSection(rawLyrics, spanishText, headerLabel = 'Spanish — Traducción IA') {
         const base = String(rawLyrics || '')
             .replace(/\r\n/g, '\n')
-            .replace(/(?:^|\n)===\s*\[ES\s*[—-]\s*Traducción[^\]]*\]\s*===\s*\n[\s\S]*?(?=\n===\s*\[|$)/gi, '\n')
+            .replace(/(?:^|\n)(?:===\s*\[ES\s*[—-]\s*Traducción[^\]]*\]\s*===|Spanish(?:\s*[—\-]\s*Traducción[^\n]*)?)\s*\n[\s\S]*?(?=\n(?:===\s*\[|(?:Original|Korean|English|Japanese|Spanish)(?:\s*[—\-:][^\n]*)?\s*$)|$)/gi, '\n')
             .trim();
         const esClean = String(spanishText || '').trim();
         if (!esClean) return base;
@@ -13047,15 +13841,48 @@ function bindProofingSuite({ fields, badgeId, fixAllBtnId, listId }) {
     const evaluateSuite = () => {
         currentIssues = [];
         let hasText = false;
+        let combinedText = '';
         fields.forEach(f => {
             const el = document.getElementById(f.id);
             if (!el) return;
-            if (String(el.value || '').trim()) hasText = true;
+            const val = String(el.value || '');
+            if (val.trim()) {
+                hasText = true;
+                combinedText += ` ${val}`;
+            }
+            if (/[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\u3040-\u309F\u30A0-\u30FF]/.test(val)) {
+                return;
+            }
             const found = analyzeEnglishTextWordStyle(el.value, el, f.label);
             currentIssues.push(...found);
         });
 
         listEl.innerHTML = '';
+
+        if (badgeId === 'englishProofingBadge') {
+            const extraInputs = ['engWord', 'engGrammarTitle', 'engGrammarNotes', 'engNoteTitle', 'engNoteBody']
+                .map((id) => document.getElementById(id)?.value || '')
+                .join(' ');
+            const fullLangCheck = `${combinedText} ${extraInputs}`;
+            if (/[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(fullLangCheck)) {
+                badgeEl.className = 'proofing-status-badge is-ok';
+                badgeEl.textContent = tUi(
+                    '🇰🇷 Hangul / Korean detected — will save to Korean section',
+                    '🇰🇷 Hangul / Coreano detectado — se guardará en el apartado Coreano'
+                );
+                if (fixAllBtn) fixAllBtn.hidden = true;
+                return;
+            }
+            if (/[\u3040-\u309F\u30A0-\u30FF]/.test(fullLangCheck)) {
+                badgeEl.className = 'proofing-status-badge is-ok';
+                badgeEl.textContent = tUi(
+                    '🇯🇵 Japanese script detected — will save to Japanese section',
+                    '🇯🇵 Japonés detectado — se guardará en el apartado Japonés'
+                );
+                if (fixAllBtn) fixAllBtn.hidden = true;
+                return;
+            }
+        }
 
         if (!hasText) {
             badgeEl.className = 'proofing-status-badge is-ok';
@@ -13132,9 +13959,9 @@ function initWordStyleProofing() {
 
     bindProofingSuite({
         fields: [
-            { id: 'palabra', get label() { return tUi('Word', 'Palabra'); } },
-            { id: 'significado', get label() { return tUi('Meaning', 'Significado'); } },
-            { id: 'ejemplo', get label() { return tUi('Example', 'Ejemplo'); } }
+            { id: 'engWord', get label() { return tUi('Word', 'Palabra'); } },
+            { id: 'engSpanish', get label() { return tUi('Meaning', 'Significado'); } },
+            { id: 'engVocabExample', get label() { return tUi('Example', 'Ejemplo'); } }
         ],
         badgeId: 'englishProofingBadge',
         fixAllBtnId: 'btnEnglishFixAll',
@@ -15496,6 +16323,8 @@ function initStudyNotebookViewer() {
     const btnClose = document.getElementById('btnCloseStudyNotebookModal');
     const btnRefresh = document.getElementById('btnRefreshStudyViewer');
     const sectionSel = document.getElementById('studyViewerSectionFilter');
+    const nbLangSel = document.getElementById('studyViewerNotebookLangFilter');
+    const langAptBar = document.getElementById('studyViewerLanguageApartments');
     const artistSel = document.getElementById('studyViewerArtistFilter');
     const albumSel = document.getElementById('studyViewerAlbumFilter');
     const songSel = document.getElementById('studyViewerSongFilter');
@@ -15513,7 +16342,8 @@ function initStudyNotebookViewer() {
         offsetStack: [0],
         nextOffset: null,
         loading: false,
-        lastResult: null
+        lastResult: null,
+        nbLanguage: 'all'
     };
 
     const getSectionLabels = () => ({
@@ -15521,8 +16351,48 @@ function initStudyNotebookViewer() {
         grammar: tUi('2. Grammar', '2. Gramática'),
         phrasal_verb: tUi('3. Phrasal Verbs', '3. Phrasal Verbs'),
         music: tUi('4. Music & Lyrics', '4. Música y Letras'),
-        notes: tUi('5. Manual Notes', '5. Notas Manuales')
+        notes: tUi('5. Manual Notes', '5. Notas Manuales'),
+        alphabet: tUi('6. Alphabets & Rules', '6. Alfabetos y Reglas')
     });
+
+    const getLangApartmentMeta = (code = 'en') => {
+        const map = {
+            en: { label: tUi('🇺🇸 English Section', '🇺🇸 Apartado Inglés'), short: '🇺🇸 EN' },
+            ko: { label: tUi('🇰🇷 Korean Section (한국어)', '🇰🇷 Apartado Coreano (한국어)'), short: '🇰🇷 KO' },
+            ja: { label: tUi('🇯🇵 Japanese Section (日本語)', '🇯🇵 Apartado Japonés (日本語)'), short: '🇯🇵 JP' },
+            en_ko: { label: tUi('🎵 K-Pop Section (EN + KR)', '🎵 Apartado K-Pop (EN + KR)'), short: '🎵 K-Pop' },
+            en_ja: { label: tUi('🎌 J-Pop Section (EN + JP)', '🎌 Apartado J-Pop (EN + JP)'), short: '🎌 J-Pop' }
+        };
+        return map[code] || map.en;
+    };
+
+    function syncLanguageApartmentUi(activeCode = 'all', countsByLang = null) {
+        const safeCode = ['all', 'en', 'ko', 'ja', 'en_ko', 'en_ja'].includes(activeCode) ? activeCode : 'all';
+        viewerState.nbLanguage = safeCode;
+        if (nbLangSel && nbLangSel.value !== safeCode) nbLangSel.value = safeCode;
+        if (langAptBar) {
+            const baseNames = {
+                all: tUi('🌍 All', '🌍 Todos'),
+                en: tUi('🇺🇸 English', '🇺🇸 Inglés'),
+                ko: tUi('🇰🇷 Korean', '🇰🇷 Coreano'),
+                ja: tUi('🇯🇵 Japanese', '🇯🇵 Japonés'),
+                en_ko: '🎵 K-Pop',
+                en_ja: '🎌 J-Pop'
+            };
+            langAptBar.querySelectorAll('.study-viewer-lang-pill[data-nb-lang]').forEach((pill) => {
+                const code = pill.getAttribute('data-nb-lang') || 'all';
+                const isActive = code === safeCode;
+                pill.classList.toggle('active', isActive);
+                pill.setAttribute('aria-selected', String(isActive));
+                const base = baseNames[code] || code;
+                if (countsByLang && typeof countsByLang[code] === 'number') {
+                    pill.textContent = `${base} (${countsByLang[code]})`;
+                } else {
+                    pill.textContent = base;
+                }
+            });
+        }
+    }
 
     const getFieldLabels = () => ({
         focus_summary: tUi('Focus', 'Enfoque'),
@@ -15563,6 +16433,90 @@ function initStudyNotebookViewer() {
         });
     }
 
+    function buildEntryCard(entry, SECTION_LABELS, FIELD_LABELS) {
+        const card = document.createElement('article');
+        card.className = 'study-viewer-card';
+
+        const head = document.createElement('div');
+        head.className = 'study-viewer-card-head';
+
+        const title = document.createElement('h4');
+        title.textContent = entry.heading || entry.song || entry.title || tUi('Entry', 'Entrada');
+
+        const badgesWrap = document.createElement('div');
+        badgesWrap.className = 'study-viewer-card-badges';
+
+        const langBadge = document.createElement('span');
+        langBadge.className = 'study-viewer-lang-badge';
+        langBadge.textContent = getLangApartmentMeta(entry.languageCode || 'en').short;
+
+        const badge = document.createElement('span');
+        badge.className = 'english-badge';
+        badge.textContent = SECTION_LABELS[entry.section] || entry.section || tUi('Note', 'Nota');
+
+        badgesWrap.append(langBadge, badge);
+        head.append(title, badgesWrap);
+        card.appendChild(head);
+
+        if (entry.section === 'music') {
+            const metaLine = [entry.artist, entry.album, entry.language].filter(Boolean).join(' · ');
+            if (metaLine) {
+                const metaP = document.createElement('p');
+                metaP.className = 'study-viewer-meta muted-text';
+                metaP.textContent = metaLine;
+                card.appendChild(metaP);
+            }
+            const fields = entry.fields || {};
+            Object.entries(fields).forEach(([k, val]) => {
+                if (!val || SKIP_DETAIL_FIELDS.has(k)) return;
+                const block = document.createElement('details');
+                block.className = 'study-viewer-field';
+                if (k === 'lyrics_study' || k === 'focus_summary') block.open = true;
+
+                const sum = document.createElement('summary');
+                sum.textContent = FIELD_LABELS[k] || k;
+
+                block.appendChild(sum);
+                if (k === 'lyrics_study') {
+                    const lyricsBox = document.createElement('div');
+                    lyricsBox.className = 'lyrics-readonly-full-view';
+                    let activeCardLang = langSel?.value || 'all';
+                    const rerenderCardLyrics = (nextLang) => {
+                        activeCardLang = nextLang;
+                        renderLyricsSectionsIntoContainer(lyricsBox, String(val), activeCardLang, {
+                            onTabSelect: rerenderCardLyrics
+                        });
+                    };
+                    rerenderCardLyrics(activeCardLang);
+                    block.appendChild(lyricsBox);
+                } else {
+                    const pre = document.createElement('pre');
+                    pre.className = 'study-viewer-pre';
+                    pre.textContent = String(val);
+                    block.appendChild(pre);
+                }
+                card.appendChild(block);
+            });
+        } else {
+            const lines = Array.isArray(entry.lines) && entry.lines.length
+                ? entry.lines
+                : (entry.text ? [entry.text] : []);
+            if (lines.length) {
+                const pre = document.createElement('pre');
+                pre.className = 'study-viewer-pre';
+                pre.textContent = lines.join('\n');
+                card.appendChild(pre);
+            }
+            if (entry.added) {
+                const addedEl = document.createElement('p');
+                addedEl.className = 'study-viewer-meta muted-text';
+                addedEl.textContent = `${tUi('Added', 'Agregado')}: ${entry.added}`;
+                card.appendChild(addedEl);
+            }
+        }
+        return card;
+    }
+
     function renderEntries(data) {
         viewerState.lastResult = data || null;
         bodyEl.textContent = '';
@@ -15579,81 +16533,35 @@ function initStudyNotebookViewer() {
         }
         const SECTION_LABELS = getSectionLabels();
         const FIELD_LABELS = getFieldLabels();
+        const GROUP_ORDER = ['en', 'ko', 'ja', 'en_ko', 'en_ja'];
 
-        entries.forEach((entry) => {
-            const card = document.createElement('article');
-            card.className = 'study-viewer-card';
+        const buckets = new Map();
+        entries.forEach((e) => {
+            const code = GROUP_ORDER.includes(e.languageCode) ? e.languageCode : 'en';
+            if (!buckets.has(code)) buckets.set(code, []);
+            buckets.get(code).push(e);
+        });
 
-            const head = document.createElement('div');
-            head.className = 'study-viewer-card-head';
+        GROUP_ORDER.forEach((code) => {
+            const groupEntries = buckets.get(code);
+            if (!groupEntries || !groupEntries.length) return;
+            const grpWrap = document.createElement('section');
+            grpWrap.className = 'study-viewer-lang-group';
 
-            const title = document.createElement('h4');
-            title.textContent = entry.heading || entry.song || entry.title || tUi('Entry', 'Entrada');
+            const grpHead = document.createElement('div');
+            grpHead.className = 'study-viewer-lang-group-head';
+            const grpTitle = document.createElement('span');
+            grpTitle.textContent = getLangApartmentMeta(code).label;
+            const grpCount = document.createElement('span');
+            grpCount.className = 'muted-text small-note';
+            grpCount.textContent = `${groupEntries.length}`;
+            grpHead.append(grpTitle, grpCount);
+            grpWrap.appendChild(grpHead);
 
-            const badge = document.createElement('span');
-            badge.className = 'english-badge';
-            badge.textContent = SECTION_LABELS[entry.section] || entry.section || tUi('Note', 'Nota');
-
-            head.append(title, badge);
-            card.appendChild(head);
-
-            if (entry.section === 'music') {
-                const metaLine = [entry.artist, entry.album, entry.language].filter(Boolean).join(' · ');
-                if (metaLine) {
-                    const metaP = document.createElement('p');
-                    metaP.className = 'study-viewer-meta muted-text';
-                    metaP.textContent = metaLine;
-                    card.appendChild(metaP);
-                }
-                const fields = entry.fields || {};
-                Object.entries(fields).forEach(([k, val]) => {
-                    if (!val || SKIP_DETAIL_FIELDS.has(k)) return;
-                    const block = document.createElement('details');
-                    block.className = 'study-viewer-field';
-                    if (k === 'lyrics_study' || k === 'focus_summary') block.open = true;
-
-                    const sum = document.createElement('summary');
-                    sum.textContent = FIELD_LABELS[k] || k;
-
-                    block.appendChild(sum);
-                    if (k === 'lyrics_study') {
-                        const lyricsBox = document.createElement('div');
-                        lyricsBox.className = 'lyrics-readonly-full-view';
-                        let activeCardLang = langSel?.value || 'all';
-                        const rerenderCardLyrics = (nextLang) => {
-                            activeCardLang = nextLang;
-                            renderLyricsSectionsIntoContainer(lyricsBox, String(val), activeCardLang, {
-                                onTabSelect: rerenderCardLyrics
-                            });
-                        };
-                        rerenderCardLyrics(activeCardLang);
-                        block.appendChild(lyricsBox);
-                    } else {
-                        const pre = document.createElement('pre');
-                        pre.className = 'study-viewer-pre';
-                        pre.textContent = String(val);
-                        block.appendChild(pre);
-                    }
-                    card.appendChild(block);
-                });
-            } else {
-                const lines = Array.isArray(entry.lines) && entry.lines.length
-                    ? entry.lines
-                    : (entry.text ? [entry.text] : []);
-                if (lines.length) {
-                    const pre = document.createElement('pre');
-                    pre.className = 'study-viewer-pre';
-                    pre.textContent = lines.join('\n');
-                    card.appendChild(pre);
-                }
-                if (entry.added) {
-                    const addedEl = document.createElement('p');
-                    addedEl.className = 'study-viewer-meta muted-text';
-                    addedEl.textContent = `${tUi('Added', 'Agregado')}: ${entry.added}`;
-                    card.appendChild(addedEl);
-                }
-            }
-            bodyEl.appendChild(card);
+            groupEntries.forEach((entry) => {
+                grpWrap.appendChild(buildEntryCard(entry, SECTION_LABELS, FIELD_LABELS));
+            });
+            bodyEl.appendChild(grpWrap);
         });
     }
 
@@ -15665,17 +16573,17 @@ function initStudyNotebookViewer() {
             method: 'POST',
             buildBody: () => ({
                 encryptedRequest: encriptarTextoE2EE(JSON.stringify(payload), llaveTexto),
-                timeoutMs: 30000
+                timeoutMs: 35000
             }),
             parseJson: true,
-            timeoutMs: 12000
+            timeoutMs: 25000
         });
         if (!createResp?.jobId) return null;
         for (let i = 0; i < 3; i++) {
             const pollResp = await resilientFetchJson(
-                `/api/english/music/pc-jobs/${encodeURIComponent(createResp.jobId)}?waitMs=12000`,
+                `/api/english/music/pc-jobs/${encodeURIComponent(createResp.jobId)}?waitMs=15000`,
                 { method: 'GET' },
-                { timeoutMs: 16000 }
+                { timeoutMs: 28000 }
             );
             if (pollResp.ok && pollResp.data?.status === 'completed' && pollResp.data.encryptedResult) {
                 return JSON.parse(desencriptarTextoE2EE(pollResp.data.encryptedResult, llaveTexto));
@@ -15691,6 +16599,7 @@ function initStudyNotebookViewer() {
         if (statusBar) statusBar.textContent = tUi('Loading Word notebook (read-only)...', 'Cargando cuaderno Word (solo lectura)...');
         try {
             const sectionVal = sectionSel?.value || 'all';
+            const nbLangVal = nbLangSel?.value || viewerState.nbLanguage || 'all';
             const artistVal = artistSel?.value || '';
             const albumVal = albumSel?.value || '';
             const songVal = songSel?.value || '';
@@ -15698,6 +16607,7 @@ function initStudyNotebookViewer() {
 
             const params = new URLSearchParams();
             if (sectionVal && sectionVal !== 'all') params.set('section', sectionVal);
+            if (nbLangVal && nbLangVal !== 'all') params.set('language', nbLangVal);
             if (artistVal) params.set('artist', artistVal);
             if (albumVal) params.set('album', albumVal);
             if (songVal) params.set('song', songVal);
@@ -15712,7 +16622,7 @@ function initStudyNotebookViewer() {
                 const serverResp = await resilientFetchJson(
                     `/api/english/study-notebook?${params.toString()}`,
                     { method: 'GET' },
-                    { timeoutMs: 14000 }
+                    { timeoutMs: 30000 }
                 );
                 if (serverResp.ok && serverResp.data?.ok && serverResp.data.available) {
                     result = serverResp.data;
@@ -15731,6 +16641,7 @@ function initStudyNotebookViewer() {
                 const pcPayload = {
                     action: 'read_study_notebook',
                     section: sectionVal,
+                    language: nbLangVal,
                     artist: artistVal,
                     album: albumVal,
                     song: songVal,
@@ -15741,7 +16652,7 @@ function initStudyNotebookViewer() {
                     const serverRefresh = await resilientFetchJson(
                         `/api/english/study-notebook?${params.toString()}`,
                         { method: 'GET' },
-                        { timeoutMs: 18000 }
+                        { timeoutMs: 35000 }
                     );
                     if (serverRefresh.ok && serverRefresh.data?.ok && serverRefresh.data.available) {
                         result = serverRefresh.data;
@@ -15782,13 +16693,14 @@ function initStudyNotebookViewer() {
             populateSelectOptions(artistSel, result.facets?.artists || [], tUi('All artists', 'Todos los artistas'));
             populateSelectOptions(albumSel, result.facets?.albums || [], tUi('All albums', 'Todos los álbumes'));
             populateSelectOptions(songSel, result.facets?.songs || [], tUi('All songs', 'Todas las canciones'));
+            syncLanguageApartmentUi(nbLangVal, result.countsByLanguage || null);
             renderEntries(result);
 
             const counts = result.counts || {};
             if (statusBar) {
                 statusBar.textContent = tUi(
-                    `${sourceLabel} · Showing ${result.entries?.length || 0} of ${result.total || 0} results · Vocab: ${counts.vocabulary || 0} · Grammar: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Songs: ${counts.music || 0} · Notes: ${counts.notes || 0}`,
-                    `${sourceLabel} · Mostrando ${result.entries?.length || 0} de ${result.total || 0} resultados · Vocab: ${counts.vocabulary || 0} · Gramática: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Canciones: ${counts.music || 0} · Notas: ${counts.notes || 0}`
+                    `${sourceLabel} · Showing ${result.entries?.length || 0} of ${result.total || 0} results · Vocab: ${counts.vocabulary || 0} · Grammar: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Songs: ${counts.music || 0} · Notes: ${counts.notes || 0} · Alphabets: ${counts.alphabet || 0}`,
+                    `${sourceLabel} · Mostrando ${result.entries?.length || 0} de ${result.total || 0} resultados · Vocab: ${counts.vocabulary || 0} · Gramática: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Canciones: ${counts.music || 0} · Notas: ${counts.notes || 0} · Alfabetos: ${counts.alphabet || 0}`
                 );
             }
             if (pagBar) {
@@ -15806,15 +16718,19 @@ function initStudyNotebookViewer() {
         }
     }
 
-    function openModal({ defaultSection = null } = {}) {
+    function openModal({ defaultSection = null, defaultLanguage = null } = {}) {
         if (defaultSection && sectionSel) {
             sectionSel.value = defaultSection;
+        }
+        if (defaultLanguage) {
+            syncLanguageApartmentUi(defaultLanguage, viewerState.lastResult?.countsByLanguage || null);
         }
         modal.hidden = false;
         viewerState.offsetStack = [0];
         viewerState.nextOffset = null;
         loadStudyPage(0);
     }
+    window.openStudyNotebookViewer = openModal;
 
     function closeModal() {
         modal.hidden = true;
@@ -15837,6 +16753,17 @@ function initStudyNotebookViewer() {
     };
     btnRefresh?.addEventListener('click', () => resetAndReload(true));
     sectionSel?.addEventListener('change', () => resetAndReload(false));
+    nbLangSel?.addEventListener('change', () => {
+        syncLanguageApartmentUi(nbLangSel.value, viewerState.lastResult?.countsByLanguage || null);
+        resetAndReload(false);
+    });
+    langAptBar?.querySelectorAll('.study-viewer-lang-pill[data-nb-lang]').forEach((pill) => {
+        pill.addEventListener('click', () => {
+            const nextLang = pill.getAttribute('data-nb-lang') || 'all';
+            syncLanguageApartmentUi(nextLang, viewerState.lastResult?.countsByLanguage || null);
+            resetAndReload(false);
+        });
+    });
     artistSel?.addEventListener('change', () => resetAndReload(false));
     albumSel?.addEventListener('change', () => resetAndReload(false));
     songSel?.addEventListener('change', () => resetAndReload(false));
