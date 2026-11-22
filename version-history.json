@@ -1,8 +1,34 @@
 {
   "standard": "SemVer 2.0.0 + Conventional Commits",
-  "currentVersion": "1.17.0",
-  "updatedAt": "2026-11-18T06:40:49.383Z",
+  "currentVersion": "1.22.0",
+  "updatedAt": "2026-11-22T22:08:55.417Z",
   "releases": [
+    {
+      "version": "1.22.0",
+      "tag": "v1.22.0",
+      "bumpType": "minor",
+      "previousVersion": "1.21.3",
+      "releasedAt": "2026-11-22T22:08:55.417Z",
+      "commitSha": "7e77926",
+      "trigger": "push",
+      "summary": "feat(planner): start semesters empty, remove MindBox preset button, and add delete semester action",
+      "counts": {
+        "breaking": 0,
+        "features": 1,
+        "fixes": 1,
+        "maintenance": 0
+      },
+      "changes": {
+        "breaking": [],
+        "features": [
+          "feat(planner): start semesters empty, remove MindBox preset button, and add delete semester action (9fc4993)"
+        ],
+        "fixes": [
+          "refactor(planner): remove MindBox 9th semester preset button and banner from UI (f016300)"
+        ],
+        "maintenance": []
+      }
+    },
     {
       "version": "1.17.0",
       "tag": "v1.17.0",
