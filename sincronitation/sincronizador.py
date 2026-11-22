@@ -3501,34 +3501,58 @@ def _ooxml_cargar_estilos_mapa(zf):
     root = ET.fromstring(zf.read("word/styles.xml"))
     val_attr = _ooxml_w_tag("val")
     id_attr = _ooxml_w_tag("styleId")
+    type_attr = _ooxml_w_tag("type")
     for style in root.findall(f".//{_ooxml_w_tag('style')}"):
         sid = style.attrib.get(id_attr, "")
         if not sid:
             continue
+        stype = style.attrib.get(type_attr, "paragraph").strip().lower()
         name_el = style.find(_ooxml_w_tag("name"))
         name_val = (
             (name_el.attrib.get(val_attr, "") if name_el is not None else "")
             .strip()
             .lower()
         )
-        if name_val in ("heading 1", "heading 2", "heading 3"):
-            lvl = int(name_val.rsplit(" ", 1)[1])
-            levels[sid] = lvl
-            ids[f"heading_{lvl}"] = sid
+        low = f"{sid} {name_val}".lower()
+        if "hyperlink" in low:
+            if stype == "character":
+                ids["hyperlink"] = sid
             continue
-        if name_val in ("toc 1", "toc 2", "toc 3"):
-            lvl = int(name_val.rsplit(" ", 1)[1])
+        if re.search(r"\b(?:heading\s*1|t[ií]tulo\s*1)\b", low):
+            levels[sid] = 1
+            if stype == "paragraph":
+                ids["heading_1"] = sid
+            continue
+        if re.search(r"\b(?:heading\s*2|t[ií]tulo\s*2)\b", low):
+            levels[sid] = 2
+            if stype == "paragraph":
+                ids["heading_2"] = sid
+            continue
+        if re.search(r"\b(?:heading\s*3|t[ií]tulo\s*3)\b", low):
+            levels[sid] = 3
+            if stype == "paragraph":
+                ids["heading_3"] = sid
+            continue
+        if re.search(r"\btoc\s*1\b", low) or sid.lower() == "toc1":
             levels[sid] = 0
-            ids[f"toc_{lvl}"] = sid
+            if stype == "paragraph":
+                ids["toc_1"] = sid
             continue
-        if name_val.startswith("toc"):
+        if re.search(r"\btoc\s*2\b", low) or sid.lower() == "toc2":
             levels[sid] = 0
+            if stype == "paragraph":
+                ids["toc_2"] = sid
             continue
-        if name_val == "hyperlink":
-            ids["hyperlink"] = sid
+        if re.search(r"\btoc\s*3\b", low) or sid.lower() == "toc3":
+            levels[sid] = 0
+            if stype == "paragraph":
+                ids["toc_3"] = sid
+            continue
+        if name_val.startswith("toc") or sid.lower().startswith("tdc"):
+            levels[sid] = 0
             continue
         lvl_el = style.find(f"{_ooxml_w_tag('pPr')}/{_ooxml_w_tag('outlineLvl')}")
-        if lvl_el is not None:
+        if lvl_el is not None and stype == "paragraph":
             raw_lvl = lvl_el.attrib.get(val_attr, "")
             if raw_lvl in ("0", "1", "2"):
                 levels[sid] = int(raw_lvl) + 1
@@ -4217,6 +4241,19 @@ def _ooxml_reconstruir_toc_con_enlaces(body, style_levels, estilo_ids):
         if old_el in body:
             body.remove(old_el)
 
+    while True:
+        mid_children = list(body)
+        m_start, m_end = _ooxml_encontrar_rango_toc(mid_children)
+        if m_start is None:
+            break
+        if m_start > 0 and _ooxml_es_titulo_toc_ingles(mid_children[m_start - 1]):
+            body.remove(mid_children[m_start - 1])
+            corrupted_removed += 1
+        for m_el in mid_children[m_start:m_end]:
+            if m_el in body:
+                body.remove(m_el)
+                corrupted_removed += 1
+
     children = list(body)
     sect_idx = _ooxml_indice_sectpr(body)
     first_h1_after = next(
@@ -4601,13 +4638,215 @@ def _ooxml_establecer_estilo_y_outline(p_elem, style_id, outline_level):
     ppr.append(_ooxml_w_el("outlineLvl", val=int(outline_level)))
 
 
-def _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids):
-    """Repara álbumes/canciones existentes que perdieron Heading 2/3 o outlineLvl para que aparezcan en el índice."""
+_OOXML_KNOWN_ENTRY_FIELD_PREFIXES = (
+    "language:",
+    "language section:",
+    "expression:",
+    "english:",
+    "romanization:",
+    "part of speech:",
+    "meaning:",
+    "spanish:",
+    "example:",
+    "examples:",
+    "notes:",
+    "extra study notes:",
+    "phrasal verb:",
+    "pattern:",
+    "spanish meaning:",
+    "english definition:",
+    "alphabet overview:",
+    "alphabet & symbols:",
+    "composition rules:",
+    "practice & quiz:",
+    "added:",
+    "song:",
+    "track #:",
+    "artists / collabs:",
+    "album / release:",
+    "release date:",
+    "playlist / list:",
+    "youtube music:",
+    "study focus:",
+    "stanzas breakdown",
+    "stanza breakdown",
+    "lyrics & meaning breakdown:",
+    "vocabulary & expressions:",
+    "pronunciation & connected speech:",
+)
+_OOXML_ENTRY_START_FIELD_PREFIXES = (
+    "language:",
+    "language section:",
+    "expression:",
+    "english:",
+    "phrasal verb:",
+    "alphabet overview:",
+)
+
+
+def _ooxml_elemento_tiene_contenido_no_textual(el):
+    if el.tag == _ooxml_w_tag("tbl"):
+        return True
+    return any(
+        n.tag.split("}")[-1].lower() in {"drawing", "pict", "object", "imagedata"}
+        for n in el.iter()
+    )
+
+
+def _ooxml_migrar_estilos_heading_invalidos_y_promover_h1(body, style_levels, estilo_ids):
     p_tag = _ooxml_w_tag("p")
+    val_attr = _ooxml_w_tag("val")
     children = list(body)
     toc_range = _ooxml_encontrar_rango_toc(children)
     t_start, t_end = toc_range if toc_range[0] is not None else (-1, -1)
     sect_idx = _ooxml_indice_sectpr(body)
+    canon_h1_titles = {_normalizar_clave_texto(v) for v in SECCIONES_INGLES.values()}
+    changed = False
+
+    for idx in range(sect_idx):
+        if t_start <= idx < t_end:
+            continue
+        child = children[idx]
+        if child.tag != p_tag:
+            continue
+        if _ooxml_es_elemento_residuo_toc_ingles(child, estilo_ids) or _ooxml_es_titulo_toc_ingles(child):
+            continue
+        lvl = _nivel_parrafo_ooxml(child, style_levels)
+        if lvl in (1, 2, 3):
+            target_sid = estilo_ids.get(f"heading_{lvl}") or f"Heading{lvl}"
+            ppr = child.find(_ooxml_w_tag("pPr"))
+            pstyle = ppr.find(_ooxml_w_tag("pStyle")) if ppr is not None else None
+            cur_sid = pstyle.attrib.get(val_attr, "") if pstyle is not None else ""
+            has_out = ppr is not None and ppr.find(_ooxml_w_tag("outlineLvl")) is not None
+            if cur_sid != target_sid or not has_out:
+                _ooxml_establecer_estilo_y_outline(child, target_sid, lvl - 1)
+                changed = True
+        else:
+            norm_txt = _normalizar_clave_texto(_texto_parrafo_ooxml(child))
+            if norm_txt in canon_h1_titles:
+                _ooxml_establecer_estilo_y_outline(child, estilo_ids.get("heading_1") or "Heading1", 0)
+                changed = True
+    return changed
+
+
+def _ooxml_fusionar_secciones_h1_duplicadas(body, style_levels):
+    p_tag = _ooxml_w_tag("p")
+    merged_any = False
+
+    for cat in SECCIONES_INGLES:
+        pref = _PREFIJOS_SECCION_INGLES[cat]
+        while True:
+            children = list(body)
+            toc_range = _ooxml_encontrar_rango_toc(children)
+            t_start, t_end = toc_range if toc_range[0] is not None else (-1, -1)
+            sect_idx = _ooxml_indice_sectpr(body)
+            matches = [
+                idx
+                for idx in range(sect_idx)
+                if not (t_start <= idx < t_end)
+                and children[idx].tag == p_tag
+                and _nivel_parrafo_ooxml(children[idx], style_levels) == 1
+                and _texto_parrafo_ooxml(children[idx]).lower().startswith(pref)
+            ]
+            if len(matches) <= 1:
+                break
+
+            merged_any = True
+            primary_h1_el = children[matches[0]]
+            dup_h1 = matches[-1]
+            dup_end = sect_idx
+            for idx in range(dup_h1 + 1, sect_idx):
+                if t_start <= idx < t_end:
+                    continue
+                if children[idx].tag == p_tag and _nivel_parrafo_ooxml(children[idx], style_levels) == 1:
+                    dup_end = idx
+                    break
+
+            dup_body = list(children[dup_h1 + 1 : dup_end])
+            for el in children[dup_h1 : dup_end]:
+                if el in body:
+                    body.remove(el)
+
+            has_real_content = any(
+                (el.tag == p_tag and bool(_texto_parrafo_ooxml(el))) or _ooxml_elemento_tiene_contenido_no_textual(el)
+                for el in dup_body
+            )
+            if not has_real_content:
+                continue
+
+            while dup_body and dup_body[0].tag == p_tag and not _texto_parrafo_ooxml(dup_body[0]) and not _ooxml_elemento_tiene_contenido_no_textual(dup_body[0]):
+                dup_body.pop(0)
+            if not dup_body:
+                continue
+
+            children_after = list(body)
+            sect_after = _ooxml_indice_sectpr(body)
+            toc_after = _ooxml_encontrar_rango_toc(children_after)
+            ta_start, ta_end = toc_after if toc_after[0] is not None else (-1, -1)
+            primary_pos = children_after.index(primary_h1_el)
+            primary_end = sect_after
+            for idx in range(primary_pos + 1, sect_after):
+                if ta_start <= idx < ta_end:
+                    continue
+                if children_after[idx].tag == p_tag and _nivel_parrafo_ooxml(children_after[idx], style_levels) == 1:
+                    primary_end = idx
+                    break
+
+            insert_at = primary_end
+            if insert_at > primary_pos + 1:
+                prev_el = children_after[insert_at - 1]
+                if prev_el.tag != p_tag or _texto_parrafo_ooxml(prev_el) or _ooxml_elemento_tiene_contenido_no_textual(prev_el):
+                    body.insert(insert_at, _ooxml_w_el("p"))
+                    insert_at += 1
+            for offset, el in enumerate(dup_body):
+                body.insert(insert_at + offset, el)
+            last_el = dup_body[-1]
+            if last_el.tag != p_tag or _texto_parrafo_ooxml(last_el) or _ooxml_elemento_tiene_contenido_no_textual(last_el):
+                body.insert(insert_at + len(dup_body), _ooxml_w_el("p"))
+
+    return merged_any
+
+
+def _ooxml_reparar_encabezados_entradas_huerfanos(body, style_levels, estilo_ids):
+    p_tag = _ooxml_w_tag("p")
+    children = list(body)
+    toc_range = _ooxml_encontrar_rango_toc(children)
+    changed = False
+    h2_sid = estilo_ids.get("heading_2") or "Heading2"
+
+    for cat in ("vocabulary", "grammar", "phrasal_verb", "notes", "alphabet"):
+        sec_start, sec_end, items = _ooxml_buscar_rango_seccion(body, style_levels, cat, toc_range)
+        if sec_start is None:
+            continue
+        for idx in range(sec_start + 1, sec_end):
+            child = children[idx]
+            if child.tag != p_tag:
+                continue
+            lvl, txt = items[idx]
+            if not txt or lvl in (1, 2, 3):
+                continue
+            if txt.lower().startswith(_OOXML_KNOWN_ENTRY_FIELD_PREFIXES):
+                continue
+            next_txt = ""
+            for j in range(idx + 1, min(sec_end, idx + 3)):
+                if items[j][1]:
+                    next_txt = items[j][1]
+                    break
+            if next_txt.lower().startswith(_OOXML_ENTRY_START_FIELD_PREFIXES):
+                _ooxml_establecer_estilo_y_outline(child, h2_sid, 1)
+                changed = True
+    return changed
+
+
+def _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids):
+    """Repara álbumes/canciones existentes que perdieron Heading 2/3 o outlineLvl para que aparezcan en el índice."""
+    p_tag = _ooxml_w_tag("p")
+    val_attr = _ooxml_w_tag("val")
+    children = list(body)
+    toc_range = _ooxml_encontrar_rango_toc(children)
+    t_start, t_end = toc_range if toc_range[0] is not None else (-1, -1)
+    sect_idx = _ooxml_indice_sectpr(body)
+    changed = False
 
     for idx in range(sect_idx):
         if t_start <= idx < t_end:
@@ -4619,15 +4858,18 @@ def _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids):
         if lvl in (1, 2, 3):
             sid = estilo_ids.get(f"heading_{lvl}") or f"Heading{lvl}"
             ppr = child.find(_ooxml_w_tag("pPr"))
-            if ppr is None or ppr.find(_ooxml_w_tag("outlineLvl")) is None:
+            pstyle = ppr.find(_ooxml_w_tag("pStyle")) if ppr is not None else None
+            cur_sid = pstyle.attrib.get(val_attr, "") if pstyle is not None else ""
+            if ppr is None or cur_sid != sid or ppr.find(_ooxml_w_tag("outlineLvl")) is None:
                 _ooxml_establecer_estilo_y_outline(child, sid, lvl - 1)
+                changed = True
 
     sec_start, sec_end, items = _ooxml_buscar_rango_seccion(body, style_levels, "music", toc_range)
     if sec_start is None:
-        return
+        return changed
 
     re_album_like = re.compile(
-        r"^(?:Playlist:|Singles\s*&\s*Standalone\b|.+\((?:Album|Mini Album|EP|Single|Collab Single|Mixtape|OST|Soundtrack|Compilation)[^)]*\)$)",
+        r"^(?:Playlist:|Singles\s*&\s*Standalone\b|.+\((?:Album|Mini[\s-]*Album|EP|Single|Digital[\s-]*Single|Collab[\s-]*Single|Mixtape|OST(?:\s*/\s*Soundtrack)?|Soundtrack|Compilation|Repackage|Special[\s-]*Album|Live[\s-]*Album|Deluxe)[^)]*\)$)",
         re.IGNORECASE,
     )
     children = list(body)
@@ -4645,17 +4887,21 @@ def _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids):
                 break
         if next_txt.startswith("Song:"):
             _ooxml_establecer_estilo_y_outline(child, estilo_ids["heading_3"], 2)
+            changed = True
             for k in range(idx - 1, sec_start, -1):
                 prev_lvl, prev_txt = items[k]
                 if not prev_txt:
                     continue
                 if prev_lvl in (None, 0) and re_album_like.match(prev_txt):
                     _ooxml_establecer_estilo_y_outline(children[k], estilo_ids["heading_2"], 1)
+                    changed = True
                 break
         elif re_album_like.match(txt):
             has_song_after = any(items[j][1].startswith("Song:") for j in range(idx + 1, min(sec_end, idx + 6)))
             if has_song_after:
                 _ooxml_establecer_estilo_y_outline(child, estilo_ids["heading_2"], 1)
+                changed = True
+    return changed
 
 
 def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
@@ -4674,8 +4920,12 @@ def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
     if body is None:
         raise ET.ParseError("word/document.xml sin elemento w:body")
 
+    repaired_headings = _ooxml_migrar_estilos_heading_invalidos_y_promover_h1(body, style_levels, estilo_ids)
+    merged_dups = _ooxml_fusionar_secciones_h1_duplicadas(body, style_levels)
     _ooxml_asegurar_secciones_y_final(body, style_levels, estilo_ids)
-    _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
+    repaired_entries = _ooxml_reparar_encabezados_entradas_huerfanos(body, style_levels, estilo_ids)
+    repaired_music = _ooxml_reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
+    had_structural_repairs = repaired_headings or merged_dups or repaired_entries or repaired_music
 
     if (entry.get("category") or "").strip().lower() == "music":
         toc_range = _ooxml_encontrar_rango_toc(list(body))
@@ -4807,7 +5057,7 @@ def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
             body, style_levels, spec["category"], toc_range
         )
         if _ooxml_bloque_duplicado(body, items, sec_start, sec_end, spec):
-            if not _ooxml_tiene_residuos_toc_corrupta(body, style_levels, estilo_ids):
+            if not had_structural_repairs and not _ooxml_tiene_residuos_toc_corrupta(body, style_levels, estilo_ids):
                 logging.info(
                     f"English Notebook: entrada duplicada omitida [{spec['category']}]: {spec['heading']}"
                 )
