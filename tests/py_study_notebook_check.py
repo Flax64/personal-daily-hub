@@ -559,6 +559,78 @@ def check_toc_regression_and_self_heal(tmp):
     assert len(st_sync["toc_style_paras"]) == len(st_sync["body_headings"]), st_sync
     sync_read = s.leer_cuaderno_estudio_word({"limit": 50}, ruta_docx=corrupt_sync_path)
     assert sync_read["ok"] and sync_read["counts"]["vocabulary"] == 3 and sync_read["counts"]["music"] == 1, sync_read
+
+    # 3) Regresión real Google Docs / Word español: Ttulo1Car..3 (character), Tablanormal (table), TDC1..3,
+    # secciones 1..6 sin pStyle (pStyle=none) con estrofas separadas por párrafos vacíos + bloque duplicado al final.
+    real_styles = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}">'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>'
+        '<w:style w:type="table" w:styleId="Tablanormal"><w:name w:val="Normal Table"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/></w:style>'
+        '<w:style w:type="character" w:styleId="Ttulo1Car"><w:name w:val="Título 1 Car"/></w:style>'
+        '<w:style w:type="character" w:styleId="Ttulo2Car"><w:name w:val="Título 2 Car"/></w:style>'
+        '<w:style w:type="character" w:styleId="Ttulo3Car"><w:name w:val="Título 3 Car"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="TDC1"><w:name w:val="toc 1"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="TDC2"><w:name w:val="toc 2"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="TDC3"><w:name w:val="toc 3"/></w:style>'
+        '<w:style w:type="character" w:styleId="Hipervnculo"><w:name w:val="Hyperlink"/></w:style>'
+        '</w:styles>'
+    )
+    real_doc = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}"><w:body>'
+        '<w:p><w:r><w:t>Table of Contents</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="TDC1"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1. Glossary &amp; New Words 1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="TDC1"/></w:pPr><w:r><w:t>4. Songs &amp; Music Study 1</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>1. Glossary &amp; New Words</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>tiptoeing over — Caminar de puntitas</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Language: English</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Expression: tiptoeing over</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Added: 2026-11-22 02:37</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>2. Grammar &amp; Usage Notes</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>3. Phrasal Verbs</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>4. Songs &amp; Music Study</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Drip (Album, 2024)</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>DRIP — BABYMONSTER</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Song: DRIP</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Artists / Collabs: BABYMONSTER</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Lyrics &amp; Meaning Breakdown:</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>English</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Verse 1 line</w:t></w:r></w:p>'
+        '<w:p/>'
+        '<w:p><w:r><w:t>Verse 2 line</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>5. My Notes &amp; Learnings</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>6. Alphabets &amp; Composition Rules</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo1Car"/></w:pPr><w:r><w:t>1. Glossary &amp; New Words</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo1Car"/></w:pPr><w:r><w:t>2. Grammar &amp; Usage Notes</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo1Car"/></w:pPr><w:r><w:t>3. Phrasal Verbs</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo1Car"/></w:pPr><w:r><w:t>4. Songs &amp; Music Study</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo2Car"/></w:pPr><w:r><w:t>Someone to Hold (from the Netflix Film "Steps") (Album, 2026)</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo3Car"/></w:pPr><w:r><w:t>Someone to Hold (from the Netflix Film "Steps") — JENNIE</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Song: Someone to Hold (from the Netflix Film "Steps")</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>Artists / Collabs: JENNIE</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo1Car"/></w:pPr><w:r><w:t>5. My Notes &amp; Learnings</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Ttulo1Car"/></w:pPr><w:r><w:t>6. Alphabets &amp; Composition Rules</w:t></w:r></w:p>'
+        '<w:sectPr/></w:body></w:document>'
+    )
+    real_buf = io.BytesIO()
+    with zipfile.ZipFile(real_buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        zout.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        zout.writestr("word/styles.xml", real_styles)
+        zout.writestr("word/document.xml", real_doc)
+
+    real_repaired, real_stats = dw.repair_english_docx_bytes(real_buf.getvalue())
+    assert real_stats["sectionsIntact"] is True and real_stats["sectionsCount"] == 6, real_stats
+    assert real_stats["counts"]["vocabulary"] == 1 and real_stats["counts"]["music"] == 2, real_stats
+    st_real = inspect_toc_structure(real_repaired)
+    assert st_real["toc_titles"] == 1 and st_real["toc_instr_count"] == 1, st_real
+    assert st_real["outer_toc_closed"] == 1 and st_real["depth"] == 0, st_real
+    assert len(st_real["body_headings"]) == 11, st_real["body_headings"]  # 6 H1 + 1 vocab H2 + 2 album H2 + 2 song H3
+    assert len(st_real["toc_hyperlinks"]) == 11, st_real
+    real_xml = zipfile.ZipFile(io.BytesIO(real_repaired), "r").read("word/document.xml").decode("utf-8")
+    assert "Ttulo1Car" not in real_xml and "Ttulo2Car" not in real_xml and "Ttulo3Car" not in real_xml and "Tablanormal" not in real_xml
+    assert "<w:p/>" in real_xml or "<w:p />" in real_xml  # conserva saltos de estrofa
     print("TOC SELF-HEAL OK")
 
 
