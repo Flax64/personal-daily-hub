@@ -1,8 +1,32 @@
 {
   "standard": "SemVer 2.0.0 + Conventional Commits",
-  "currentVersion": "1.17.0",
-  "updatedAt": "2026-11-18T06:40:49.383Z",
+  "currentVersion": "1.21.0",
+  "updatedAt": "2026-11-22T21:00:24.422Z",
   "releases": [
+    {
+      "version": "1.21.0",
+      "tag": "v1.21.0",
+      "bumpType": "minor",
+      "previousVersion": "1.20.0",
+      "releasedAt": "2026-11-22T21:00:24.422Z",
+      "commitSha": "5c930a4",
+      "trigger": "push",
+      "summary": "feat(ui): upgrade module icons, simplify floating translator with sticky close, and improve mobile UX",
+      "counts": {
+        "breaking": 0,
+        "features": 1,
+        "fixes": 0,
+        "maintenance": 0
+      },
+      "changes": {
+        "breaking": [],
+        "features": [
+          "feat(ui): upgrade module icons, simplify floating translator with sticky close, and improve mobile UX (0b3ca8b)"
+        ],
+        "fixes": [],
+        "maintenance": []
+      }
+    },
     {
       "version": "1.17.0",
       "tag": "v1.17.0",

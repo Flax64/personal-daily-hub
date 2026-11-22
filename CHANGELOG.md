@@ -1,11 +1,17 @@
 # Historial de Versiones / Changelog
 
-> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.17.0**
+> Estándar aplicado: **SemVer 2.0.0 + Conventional Commits** · Versión actual desplegada: **v1.21.0**
 >
 > Reglas automáticas en cada despliegue a `main`:
 > - **MAJOR (`+1.0.0`)**: Cambios incompatibles (`BREAKING CHANGE:` o `<tipo>!:`).
 > - **MINOR (`+0.1.0`)**: Nuevas funcionalidades compatibles (`feat:` / `feat(alcance):`).
 > - **PATCH (`+0.0.1`)**: Corrección de errores (`fix:`), seguridad, documentación o mantenimiento.
+
+## [v1.21.0] - 2026-11-22 (MINOR) · `5c930a4`
+**feat(ui): upgrade module icons, simplify floating translator with sticky close, and improve mobile UX**
+
+### ✨ Features / Nuevas Funciones
+- feat(ui): upgrade module icons, simplify floating translator with sticky close, and improve mobile UX (0b3ca8b)
 
 ## [v1.17.0] - 2026-11-18 (MINOR) · `593ce77`
 **feat: ntfy**
