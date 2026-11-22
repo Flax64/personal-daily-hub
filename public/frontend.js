@@ -10746,7 +10746,6 @@ function ensureAcademicPlannerLoaded() {
             if (data && data.planner) {
                 academicPlannerState = data.planner;
                 if (data.campusDirectory) academicPlannerDirectory = data.campusDirectory;
-                if (data.mindboxPreset) academicPlannerMindboxPreset = data.mindboxPreset;
                 renderAgendaCourseFilterOptions();
                 if (typeof renderAgendaBoard === 'function') renderAgendaBoard();
                 if (agendaModal && !agendaModal.hidden && typeof syncAgendaMateriaFieldUI === 'function') {
@@ -14670,7 +14669,6 @@ function initWordStyleProofing() {
 // ==========================================
 let academicPlannerState = null;
 let academicPlannerDirectory = null;
-let academicPlannerMindboxPreset = null;
 let academicPlannerCommutePreview = null;
 
 function setPlannerBanner(type, message) {
@@ -14889,8 +14887,8 @@ function renderPlannerSemesterUI() {
         const empty = document.createElement('div');
         empty.className = 'agenda-empty';
         empty.textContent = tUi(
-            'No classes in this semester yet. Click "+ Add Class" or "Load MindBox 9th Sem Preset".',
-            'Aún no hay materias en este semestre. Presiona "+ Agregar Clase" o "Cargar Plantilla MindBox 9°".'
+            'No classes in this semester yet. Click "+ Add Class" to add your first course.',
+            'Aún no hay materias en este semestre. Presiona "+ Agregar Clase" para añadir tu primera materia.'
         );
         coursesList.appendChild(empty);
         return;
@@ -16641,7 +16639,6 @@ function cargarPlannerVista() {
         .then(data => {
             academicPlannerState = data.planner || {};
             academicPlannerDirectory = data.campusDirectory || null;
-            academicPlannerMindboxPreset = data.mindboxPreset || null;
             renderItsCroquisDirectory(academicPlannerDirectory);
             renderPlannerSemesterUI();
             renderPlannerVacationsUI();
@@ -16711,31 +16708,6 @@ function initAcademicPlannerHandlers() {
             resetPlannerCourseForm();
             renderPlannerSemesterUI();
             setPlannerBanner('info', tUi('Created new semester. Customize its dates and click "Save All..." at the bottom.', 'Nuevo semestre creado. Personaliza sus fechas y presiona "Guardar Todo..." abajo.'));
-        });
-    }
-
-    const btnLoadPreset = document.getElementById('btnLoadMindboxPreset');
-    if (btnLoadPreset) {
-        btnLoadPreset.addEventListener('click', () => {
-            const applyPreset = (presetCourses) => {
-                const activeSem = getActiveSemesterObj();
-                if (!activeSem || !Array.isArray(presetCourses)) return;
-                activeSem.courses = presetCourses.map(c => ({ ...c }));
-                resetPlannerCourseForm();
-                renderPlannerSemesterUI();
-                setPlannerBanner('ok', tUi('Loaded your 5 MindBox 9th-semester ITS courses! Click "Save All..." at the bottom to persist.', '¡Cargadas tus 5 materias MindBox 9° semestre ITS! Presiona "Guardar Todo..." abajo para guardarlas.'));
-            };
-            if (Array.isArray(academicPlannerMindboxPreset) && academicPlannerMindboxPreset.length) {
-                applyPreset(academicPlannerMindboxPreset);
-                return;
-            }
-            fetch('/api/planner', { cache: 'no-store' })
-                .then(r => r.json())
-                .then(data => {
-                    academicPlannerMindboxPreset = data.mindboxPreset || [];
-                    applyPreset(academicPlannerMindboxPreset);
-                })
-                .catch(() => { });
         });
     }
 

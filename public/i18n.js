@@ -762,7 +762,6 @@
         ['Active Semester Control (Instituto Tecnológico de Saltillo)', 'Control de Semestre Activo (Instituto Tecnológico de Saltillo)'],
         ['Track courses per semester. Class alerts pause automatically outside semester dates or during registered vacations.', 'Controla tus materias por semestre. Las alertas de clase se pausan automáticamente fuera del semestre o en vacaciones registradas.'],
         ['+ Add Semester', '+ Agregar Semestre'],
-        ['⚡ Load MindBox 9th Sem Preset', '⚡ Cargar Plantilla MindBox 9no Sem'],
         ['Selected Semester:', 'Semestre seleccionado:'],
         ['Semester Name:', 'Nombre del semestre:'],
         ['Term Code:', 'Clave del periodo:'],
