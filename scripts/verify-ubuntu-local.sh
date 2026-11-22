@@ -253,9 +253,9 @@ if command -v curl >/dev/null 2>&1; then
 
     HTML_BODY="$(curl -fsS --max-time 8 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
     if [ -n "$HTML_BODY" ]; then
-        if printf '%s' "$HTML_BODY" | grep -q 'cdnjs.cloudflare.com'; then
+        if grep -q 'cdnjs.cloudflare.com' <<<"$HTML_BODY"; then
             fail "La página principal sigue referenciando cdnjs.cloudflare.com."
-        elif printf '%s' "$HTML_BODY" | grep -q 'vendor/crypto-js.min.js'; then
+        elif grep -q 'vendor/crypto-js.min.js' <<<"$HTML_BODY"; then
             pass "HTML sirve crypto-js localmente (vendor/crypto-js.min.js) sin CDN externo."
         else
             warn "No se detectó referencia a vendor/crypto-js.min.js en /."

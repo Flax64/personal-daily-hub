@@ -4181,10 +4181,6 @@ if (englishForm) {
 
     window.__switchEnglishStudioTab = cambiarCategoriaEnglish;
     window.__applyStudyLanguageFromStudio = applyStudyLanguageUi;
-    initHangulPracticeStudio();
-    initKoreanReadonlyNotesStudio();
-    initKoreanComparatorStudio();
-    initAlphabetCompositionStudio();
 }
 
 function speakStudyText(text, bcp47Lang = 'ko-KR') {
@@ -4210,7 +4206,7 @@ function speakStudyText(text, bcp47Lang = 'ko-KR') {
     }
 }
 
-let hangulPracticeInitialized = false;
+var hangulPracticeInitialized = false;
 function ensureHangulPracticeInitialized() {
     if (!hangulPracticeInitialized) initHangulPracticeStudio();
 }
@@ -4568,8 +4564,8 @@ function initHangulPracticeStudio() {
     });
 }
 
-let koreanReadonlyNotesInitialized = false;
-let cachedKoreanDrivePayload = null;
+var koreanReadonlyNotesInitialized = false;
+var cachedKoreanDrivePayload = null;
 function ensureKoreanReadonlyNotesInitialized() {
     if (!koreanReadonlyNotesInitialized) initKoreanReadonlyNotesStudio();
     if (!cachedKoreanDrivePayload && typeof window.__loadKoreanReadonlyDriveNotes === 'function') {
@@ -4886,9 +4882,14 @@ function initKoreanReadonlyNotesStudio() {
     });
 }
 
-let koreanComparatorInitialized = false;
+var koreanComparatorInitialized = false;
 function ensureKoreanComparatorInitialized() {
-    if (!koreanComparatorInitialized) initKoreanComparatorStudio();
+    if (!koreanComparatorInitialized) {
+        initKoreanComparatorStudio();
+        if (typeof window.__setKoreanComparatorInputs === 'function') {
+            window.__setKoreanComparatorInputs('ㅓ', 'ㅗ');
+        }
+    }
 }
 
 function initKoreanComparatorStudio() {
@@ -5140,13 +5141,16 @@ function initKoreanComparatorStudio() {
     document.getElementById('btnBackToKoreanReadonlyNotes')?.addEventListener('click', () => {
         window.__switchEnglishStudioTab?.('korean_readonly_notes');
     });
-
-    setInputsAndCompare('ㅓ', 'ㅗ');
 }
 
-let alphabetStudioInitialized = false;
+var alphabetStudioInitialized = false;
 function ensureAlphabetStudioInitialized() {
-    if (!alphabetStudioInitialized) initAlphabetCompositionStudio();
+    if (!alphabetStudioInitialized) {
+        initAlphabetCompositionStudio();
+        if (typeof window.__loadAlphabetOfflinePreview === 'function') {
+            window.__loadAlphabetOfflinePreview(document.getElementById('alphabetLangSelect')?.value || 'ko');
+        }
+    }
 }
 
 function initAlphabetCompositionStudio() {
@@ -5433,7 +5437,7 @@ function initAlphabetCompositionStudio() {
         loadOfflinePreview(langSelect.value);
     });
 
-    loadOfflinePreview(langSelect?.value || 'ko');
+    window.__loadAlphabetOfflinePreview = loadOfflinePreview;
 }
 
 let cachedLanguageMemory = { terms: [], grammarNotes: [], songs: [], customContext: '' };
