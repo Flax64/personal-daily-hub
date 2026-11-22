@@ -10549,6 +10549,43 @@ input[type="password"] {
     pointer-events: none;
 }
 
+.map-picker-layer-toggle {
+    position: absolute;
+    bottom: 8px;
+    left: 10px;
+    z-index: 5;
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.42);
+    background: rgba(15, 23, 42, 0.86);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.map-picker-layer-btn {
+    border: none;
+    border-radius: 7px;
+    padding: 4px 9px;
+    background: transparent;
+    color: #cbd5e1;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    line-height: 1.25;
+    transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.map-picker-layer-btn:hover {
+    background: rgba(59, 130, 246, 0.25);
+    color: #f8fafc;
+}
+
+.map-picker-layer-btn.is-active {
+    background: #2563eb;
+    color: #ffffff;
+}
+
 .map-picker-summary-card {
     margin-top: 10px;
     padding: 10px 12px;

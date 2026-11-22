@@ -5241,4 +5241,129 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.ok(csp.includes("script-src 'self'") && csp.includes("connect-src 'self'"));
         assert.ok(csp.includes('https://tile.openstreetmap.org'));
     });
+
+    it('proxy GET /api/planner/map-tile valida auth/coordenadas, aplica fallback 403->osm y cache LRU en memoria', async () => {
+        // 1. Requiere sesión autenticada
+        const unauthRes = await request({ port, reqPath: '/api/planner/map-tile/15/7191/13946.png' });
+        assert.strictEqual(unauthRes.status, 401);
+
+        // 2. Coordenadas fuera de rango o malformadas -> 400 Bad Request
+        for (const badPath of [
+            '/api/planner/map-tile/99/0/0.png',
+            '/api/planner/map-tile/9/1/1.png',
+            '/api/planner/map-tile/15/-1/100.png',
+            '/api/planner/map-tile/15/999999/100.png',
+            '/api/planner/map-tile/15/abc/100.png'
+        ]) {
+            const badRes = await request({ port, reqPath: badPath, headers: { Cookie: adminCookie } });
+            assert.strictEqual(badRes.status, 400, `Se esperaba 400 para ${badPath}`);
+        }
+
+        // 3. Sin ALLOW_TEST_MAP_TILES en entorno de prueba devuelve 502 offline limpio
+        const offlineRes = await request({
+            port,
+            reqPath: '/api/planner/map-tile/15/7191/13946.png',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(offlineRes.status, 502);
+
+        // 4. Con ALLOW_TEST_MAP_TILES=true: 403 en CARTO -> fallback a OSM (200) -> hit-mem en cache
+        const fakePng = Buffer.concat([
+            Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            Buffer.from('DAILY_HUB_TEST_TILE_PNG_DATA_PADDING_64_BYTES_OK_0123456789ABCDEF')
+        ]);
+        const fakeSatJpg = Buffer.concat([
+            Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]),
+            Buffer.from('DAILY_HUB_TEST_SAT_JPEG_DATA_PADDING_64_BYTES_OK_0123456789ABCDEF')
+        ]);
+        const origFetch = global.fetch;
+        const origAllow = process.env.ALLOW_TEST_MAP_TILES;
+        const fetchedUrls = [];
+        const fetchedUserAgents = [];
+        process.env.ALLOW_TEST_MAP_TILES = 'true';
+        global.fetch = async (url, opts = {}) => {
+            const urlStr = String(url);
+            fetchedUrls.push(urlStr);
+            fetchedUserAgents.push(opts?.headers?.['User-Agent'] || '');
+            if (urlStr.includes('basemaps.cartocdn.com')) {
+                return {
+                    ok: false,
+                    status: 403,
+                    headers: new Map([['content-type', 'text/plain']]),
+                    arrayBuffer: async () => Buffer.from('blocked')
+                };
+            }
+            if (urlStr.includes('tile.openstreetmap.org')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Map([['content-type', 'image/png']]),
+                    arrayBuffer: async () => fakePng
+                };
+            }
+            if (urlStr.includes('World_Imagery/MapServer/tile/15/13946/7192')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Map([['content-type', 'image/jpeg']]),
+                    arrayBuffer: async () => fakeSatJpg
+                };
+            }
+            return {
+                ok: false,
+                status: 500,
+                headers: new Map([['content-type', 'text/plain']]),
+                arrayBuffer: async () => Buffer.from('error')
+            };
+        };
+
+        try {
+            const fallbackRes = await new Promise((resolve, reject) => {
+                const req = http.request(
+                    { hostname: '127.0.0.1', port, path: '/api/planner/map-tile/15/7191/13946.png', method: 'GET', headers: { Cookie: adminCookie } },
+                    (res) => {
+                        const chunks = [];
+                        res.on('data', (c) => chunks.push(c));
+                        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, raw: Buffer.concat(chunks) }));
+                    }
+                );
+                req.on('error', reject);
+                req.end();
+            });
+            assert.strictEqual(fallbackRes.status, 200);
+            assert.strictEqual(fallbackRes.headers['content-type'], 'image/png');
+            assert.strictEqual(fallbackRes.headers['x-map-tile-provider'], 'osm');
+            assert.strictEqual(fallbackRes.headers['x-map-tile-cache'], 'miss');
+            assert.ok(fallbackRes.raw.equals(fakePng));
+            assert.strictEqual(fetchedUrls.length, 2);
+            assert.ok(fetchedUrls[0].includes('basemaps.cartocdn.com/rastertiles/voyager/15/7191/13946.png'));
+            assert.ok(fetchedUrls[1].includes('tile.openstreetmap.org/15/7191/13946.png'));
+            assert.ok(fetchedUserAgents.every((ua) => ua.includes('PersonalDailyHub/')));
+
+            // Segundo hit idéntico debe responder desde caché LRU sin volver a llamar a fetch
+            const cachedRes = await request({
+                port,
+                reqPath: '/api/planner/map-tile/15/7191/13946.png',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(cachedRes.status, 200);
+            assert.strictEqual(cachedRes.headers['x-map-tile-cache'], 'hit-mem');
+            assert.strictEqual(fetchedUrls.length, 2);
+
+            // Solicitud de capa satélite usa Esri World Imagery con orden z/y/x
+            const satRes = await request({
+                port,
+                reqPath: '/api/planner/map-tile/15/7192/13946.png?layer=satellite',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(satRes.status, 200);
+            assert.strictEqual(satRes.headers['content-type'], 'image/jpeg');
+            assert.strictEqual(satRes.headers['x-map-tile-provider'], 'esri-imagery');
+            assert.strictEqual(fetchedUrls.length, 3);
+        } finally {
+            global.fetch = origFetch;
+            if (origAllow === undefined) delete process.env.ALLOW_TEST_MAP_TILES;
+            else process.env.ALLOW_TEST_MAP_TILES = origAllow;
+        }
+    });
 });
