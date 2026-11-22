@@ -1893,8 +1893,13 @@
                                 <div id="plannerCoursesContainer" class="music-catalog-container"></div>
 
                                 <hr class="section-divider">
-                                <h4>🗺️ Croquis Oficial Tec de Saltillo (CTO-001 a CTO-004)</h4>
-                                <p class="form-hint" style="margin-top:0;">Click <strong>📍 Pin on Map</strong> on any ITS campus to adjust its exact coordinates interactively on the map without typing latitude or longitude.</p>
+                                <div class="music-panel-head" style="flex-wrap: wrap; gap: 8px;">
+                                    <div>
+                                        <h4 style="margin:0;">🏫 Campuses, Buildings &amp; Classrooms</h4>
+                                        <p class="form-hint" style="margin:4px 0 0;">Add, rename, remove, or pin your campuses/buildings on the map and assign custom classrooms to each location.</p>
+                                    </div>
+                                    <button type="button" class="btn-primary btn-small" id="btnAddCampusPlace" style="width:auto;margin:0;" title="Add a new campus or building with custom map location and classrooms">+ Add Campus / Building</button>
+                                </div>
                                 <div id="itsCroquisDirectoryCards" class="its-croquis-grid"></div>
                             </div>
                         </div>
@@ -3453,6 +3458,53 @@
         </div>
     </div>
 
+    <!-- In-app Modal: Add / Edit Campus, Building & Custom Rooms -->
+    <div class="modal-overlay" id="campusPlaceModal" hidden aria-modal="true" role="dialog" aria-labelledby="campusPlaceModalTitle">
+        <div class="modal-card modal-card-wide">
+            <div class="modal-header">
+                <h2 id="campusPlaceModalTitle">🏫 Add / Edit Campus or Building</h2>
+                <button type="button" class="modal-close-btn" id="btnCloseCampusPlaceModal" aria-label="Close modal" title="Close">✕</button>
+            </div>
+            <form id="campusPlaceForm" autocomplete="off">
+                <input type="hidden" id="campusPlaceEditId" value="">
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label for="campusPlaceNameInput">Place Name *</label>
+                        <input type="text" id="campusPlaceNameInput" maxlength="120" required placeholder="e.g. ITS Campus Miravalle, Building 78 Systems">
+                    </div>
+                    <div class="form-group">
+                        <label for="campusPlaceCodeInput">Code / Building (optional)</label>
+                        <input type="text" id="campusPlaceCodeInput" maxlength="30" placeholder="e.g. CTO-003, Bldg. 78">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Map Location:</label>
+                    <div class="campus-place-loc-box">
+                        <div id="campusPlaceLocationSummary" class="campus-place-loc-summary">No location selected yet.</div>
+                        <button type="button" class="btn-secondary btn-small" id="btnCampusPlacePickMap" title="Pick this place exact pin on the interactive map">📍 Pick Location on Map</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="campusPlaceRoomInput">Classrooms at this location:</label>
+                    <div class="campus-room-input-row">
+                        <input type="text" id="campusPlaceRoomInput" maxlength="160" placeholder="Type a room e.g. N11, R14, LC3 and press Enter or + Add">
+                        <button type="button" class="btn-secondary btn-small" id="btnAddCampusRoom" title="Add classroom tag to this location">+ Add Room</button>
+                    </div>
+                    <div id="campusPlaceRoomsList" class="campus-rooms-chip-list" aria-live="polite"></div>
+                </div>
+
+                <div id="campusPlaceBanner" class="inline-status-banner" hidden aria-live="polite"></div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn-cancel" id="btnCancelCampusPlaceModal">Cancel</button>
+                    <button type="submit" class="btn-submit btn-modal-save" id="btnSaveCampusPlace">Save Location</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- In-app Modal: Interactive Mini-Map Location Picker -->
     <div class="modal-overlay" id="locationMapPickerModal" hidden aria-modal="true" role="dialog" aria-labelledby="locationMapPickerTitle">
         <div class="modal-card modal-card-wide map-picker-modal-card">
@@ -3508,7 +3560,6 @@
             <div id="mapPickerBanner" class="inline-status-banner" hidden aria-live="polite"></div>
 
             <div class="modal-actions modal-actions-split" style="flex-wrap:wrap;gap:8px;margin-top:10px;">
-                <button type="button" class="btn-secondary btn-small" id="btnResetCampusDefaultLocation" hidden title="Restore official TecNM Saltillo croquis coordinates">↺ Restore Official Croquis</button>
                 <div class="modal-actions" style="margin:0;margin-left:auto;">
                     <button type="button" class="btn-cancel" id="btnCancelMapPickerLocation">Cancel</button>
                     <button type="button" class="btn-submit btn-modal-save" id="btnConfirmMapPickerLocation">✅ Confirm This Location</button>

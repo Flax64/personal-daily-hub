@@ -3835,126 +3835,258 @@ function withRoomAliases(obj) {
     };
 }
 
+function normalizeCampusId(rawId = '') {
+    const clean = String(rawId || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    return /^[a-z0-9_-]{2,48}$/.test(clean) ? clean : '';
+}
+
+function normalizeCampusRoomCode(rawRoom = '') {
+    return String(rawRoom || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 24);
+}
+
+function normalizeCampusRooms(rawRooms = []) {
+    const rawList = Array.isArray(rawRooms)
+        ? rawRooms
+        : (typeof rawRooms === 'string' ? rawRooms.split(/[,;\n]+/) : []);
+    const seen = new Set();
+    const rooms = [];
+    for (const item of rawList) {
+        const clean = normalizeCampusRoomCode(item);
+        if (!clean || seen.has(clean)) continue;
+        seen.add(clean);
+        rooms.push(clean);
+        if (rooms.length >= 100) break;
+    }
+    return rooms;
+}
+
+function sanitizeCampusEntry(campusId, rawEntry = {}, fallbackEntry = null) {
+    const id = normalizeCampusId(campusId) || 'principal';
+    const baseDefault = ITS_CAMPUS_DIRECTORY[id] || null;
+    const fb = fallbackEntry && typeof fallbackEntry === 'object' ? fallbackEntry : (baseDefault || {});
+    const src = rawEntry && typeof rawEntry === 'object' ? rawEntry : {};
+
+    const rawName = typeof src.name === 'string' && src.name.trim()
+        ? src.name.trim().slice(0, 120)
+        : (typeof src.label === 'string' && src.label.trim()
+            ? src.label.trim().slice(0, 120)
+            : String(fb.name || fb.label || baseDefault?.name || id).trim().slice(0, 120));
+    const name = rawName || id;
+
+    const plano = typeof src.plano === 'string'
+        ? src.plano.trim().slice(0, 30)
+        : String(fb.plano ?? baseDefault?.plano ?? '').trim().slice(0, 30);
+
+    const address = typeof src.address === 'string'
+        ? src.address.trim().slice(0, 220)
+        : String(fb.address ?? baseDefault?.address ?? '').trim().slice(0, 220);
+
+    const buildings = typeof src.buildings === 'string'
+        ? src.buildings.trim().slice(0, 300)
+        : String(fb.buildings ?? baseDefault?.buildings ?? '').trim().slice(0, 300);
+
+    const rooms = Object.prototype.hasOwnProperty.call(src, 'rooms')
+        ? normalizeCampusRooms(src.rooms)
+        : normalizeCampusRooms(fb.rooms || []);
+
+    const directCoords = parseCoordinatesFromInput(src);
+    const fbCoords = parseCoordinatesFromInput(fb);
+    const baseCoords = baseDefault ? { lat: baseDefault.lat, lng: baseDefault.lng } : { lat: 25.4414, lng: -100.9922 };
+    const chosenCoords = directCoords || fbCoords || baseCoords;
+    const lat = chosenCoords.lat;
+    const lng = chosenCoords.lng;
+
+    const mapsUrl = typeof src.mapsUrl === 'string' && /^https?:\/\//i.test(src.mapsUrl.trim())
+        ? src.mapsUrl.trim().slice(0, 500)
+        : (typeof fb.mapsUrl === 'string' && /^https?:\/\//i.test(fb.mapsUrl.trim()) && !directCoords
+            ? fb.mapsUrl.trim().slice(0, 500)
+            : `https://www.google.com/maps?q=${lat},${lng}`);
+
+    return {
+        id,
+        name,
+        label: name,
+        plano,
+        address,
+        mapsUrl,
+        lat,
+        lng,
+        rooms,
+        buildings
+    };
+}
+
 function getEffectiveCampusDirectory(planner = null) {
-    const campusesSrc = planner && typeof planner === 'object' && planner.locations && planner.locations.campuses && typeof planner.locations.campuses === 'object'
-        ? planner.locations.campuses
-        : {};
+    const hasExplicitCampusesObj = Boolean(
+        planner && typeof planner === 'object'
+        && planner.locations && typeof planner.locations === 'object'
+        && planner.locations.campuses && typeof planner.locations.campuses === 'object'
+        && !Array.isArray(planner.locations.campuses)
+    );
+    const campusesSrc = hasExplicitCampusesObj ? planner.locations.campuses : ITS_CAMPUS_DIRECTORY;
     const uniFallback = planner && typeof planner === 'object' && planner.locations && planner.locations.university && typeof planner.locations.university === 'object'
         ? planner.locations.university
         : null;
     const out = {};
-    for (const key of ['principal', 'miravalle', 'boillot']) {
-        const base = ITS_CAMPUS_DIRECTORY[key];
-        const directOverride = campusesSrc[key] && typeof campusesSrc[key] === 'object' ? campusesSrc[key] : null;
-        const directCoords = parseCoordinatesFromInput(directOverride || {});
-        const uniCoords = key === 'principal' ? parseCoordinatesFromInput(uniFallback || {}) : null;
+    const entries = Object.entries(campusesSrc).slice(0, 25);
 
-        let chosenOverride = directOverride;
-        let chosenCoords = directCoords;
-        if (key === 'principal' && uniCoords) {
-            const directDiffers = Boolean(directCoords && (Math.abs(directCoords.lat - base.lat) > 0.00001 || Math.abs(directCoords.lng - base.lng) > 0.00001));
-            const uniDiffers = Math.abs(uniCoords.lat - base.lat) > 0.00001 || Math.abs(uniCoords.lng - base.lng) > 0.00001;
-            if (!directCoords || (!directDiffers && uniDiffers)) {
-                chosenCoords = uniCoords;
-                chosenOverride = uniFallback;
+    for (const [rawKey, rawVal] of entries) {
+        const key = normalizeCampusId(rawVal?.id || rawKey);
+        if (!key) continue;
+        const base = ITS_CAMPUS_DIRECTORY[key] || null;
+        let entry = sanitizeCampusEntry(key, rawVal || {}, base || {});
+
+        if (key === 'principal' && uniFallback) {
+            const uniCoords = parseCoordinatesFromInput(uniFallback);
+            if (uniCoords && base) {
+                const directDiffers = Math.abs(entry.lat - base.lat) > 0.00001 || Math.abs(entry.lng - base.lng) > 0.00001;
+                const uniDiffers = Math.abs(uniCoords.lat - base.lat) > 0.00001 || Math.abs(uniCoords.lng - base.lng) > 0.00001;
+                if (!directDiffers && uniDiffers) {
+                    entry = sanitizeCampusEntry(key, { ...entry, lat: uniCoords.lat, lng: uniCoords.lng, mapsUrl: `https://www.google.com/maps?q=${uniCoords.lat},${uniCoords.lng}` }, entry);
+                }
             }
         }
 
-        const lat = chosenCoords ? chosenCoords.lat : base.lat;
-        const lng = chosenCoords ? chosenCoords.lng : base.lng;
-        const isCustom = Boolean(
-            Math.abs(lat - base.lat) > 0.00001 ||
-            Math.abs(lng - base.lng) > 0.00001
-        );
-        const rawAddr = chosenOverride && typeof chosenOverride.address === 'string' ? chosenOverride.address.trim() : '';
-        const address = rawAddr || base.address;
-        const mapsUrl = (chosenOverride && typeof chosenOverride.mapsUrl === 'string' && /^https?:\/\//i.test(chosenOverride.mapsUrl.trim()))
-            ? chosenOverride.mapsUrl.trim().slice(0, 500)
-            : `https://www.google.com/maps?q=${lat},${lng}`;
+        const isDefaultCampus = Boolean(base);
+        const isCustom = isDefaultCampus
+            ? Boolean(
+                Math.abs(entry.lat - base.lat) > 0.00001 ||
+                Math.abs(entry.lng - base.lng) > 0.00001 ||
+                entry.name !== base.name ||
+                entry.plano !== base.plano ||
+                entry.rooms.length > 0
+            )
+            : true;
 
         out[key] = {
-            ...base,
-            address,
-            lat,
-            lng,
-            defaultLat: base.lat,
-            defaultLng: base.lng,
-            defaultAddress: base.address,
-            isCustom,
-            mapsUrl
+            ...entry,
+            defaultLat: base ? base.lat : entry.lat,
+            defaultLng: base ? base.lng : entry.lng,
+            defaultAddress: base ? base.address : entry.address,
+            isDefaultCampus,
+            isCustom
         };
     }
     return out;
 }
 
 function resolveItsClassroom(rawRoom = '', campusDirectoryOrPlanner = null) {
-    const dir = campusDirectoryOrPlanner && campusDirectoryOrPlanner.locations
-        ? getEffectiveCampusDirectory(campusDirectoryOrPlanner)
-        : (campusDirectoryOrPlanner && campusDirectoryOrPlanner.principal && campusDirectoryOrPlanner.miravalle && campusDirectoryOrPlanner.boillot
-            ? campusDirectoryOrPlanner
-            : ITS_CAMPUS_DIRECTORY);
+    let dir = ITS_CAMPUS_DIRECTORY;
+    if (campusDirectoryOrPlanner && typeof campusDirectoryOrPlanner === 'object') {
+        if (campusDirectoryOrPlanner.locations) {
+            dir = getEffectiveCampusDirectory(campusDirectoryOrPlanner);
+        } else {
+            const vals = Object.values(campusDirectoryOrPlanner);
+            if (vals.length > 0 && vals.every(v => v && typeof v === 'object' && Number.isFinite(Number(v.lat)))) {
+                dir = campusDirectoryOrPlanner;
+            } else if (Object.keys(campusDirectoryOrPlanner).length === 0) {
+                dir = {};
+            }
+        }
+    }
+
+    const pickDirCampus = (preferredKey) => {
+        const firstEntry = Object.entries(dir)[0];
+        if (dir[preferredKey]) {
+            return { key: dir[preferredKey].id || preferredKey, campus: dir[preferredKey] };
+        }
+        if (firstEntry) {
+            return { key: firstEntry[1].id || firstEntry[0], campus: firstEntry[1] };
+        }
+        const fb = ITS_CAMPUS_DIRECTORY[preferredKey] || ITS_CAMPUS_DIRECTORY.principal;
+        return { key: fb.id, campus: fb };
+    };
 
     const clean = String(rawRoom || '').trim().toUpperCase().replace(/\s+/g, '');
     if (!clean) {
+        const picked = pickDirCampus('principal');
         return withRoomAliases({
             room: 'S/A',
-            campusId: 'principal',
-            campusName: dir.principal.name,
-            plano: 'CTO-002',
-            building: 'Campus General ITS',
-            lat: dir.principal.lat,
-            lng: dir.principal.lng
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || '',
+            building: picked.campus.buildings || picked.campus.name || 'Campus General ITS',
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
     const normalized = clean.replace(/^(AULA|SALON|LAB)/, '').replace(/^-+/, '');
+    const cleanCompact = clean.replace(/-/g, '');
+    const normalizedCompact = normalized.replace(/-/g, '');
 
+    // Prioridad 1: Buscar coincidencia exacta en salones personalizados (campus.rooms)
+    for (const [cKey, camp] of Object.entries(dir)) {
+        const customRooms = normalizeCampusRooms(camp?.rooms || []);
+        const matched = customRooms.find(r => {
+            const rCompact = r.replace(/-/g, '');
+            return r === clean || r === normalized || rCompact === cleanCompact || rCompact === normalizedCompact;
+        });
+        if (matched) {
+            return withRoomAliases({
+                room: clean || matched,
+                campusId: camp.id || cKey,
+                campusName: camp.name || camp.label || cKey,
+                plano: camp.plano || '',
+                building: camp.buildings || camp.name || 'Salón personalizado',
+                lat: camp.lat,
+                lng: camp.lng,
+                matchedCustomRoom: true
+            });
+        }
+    }
+
+    // Prioridad 2: Fallback a reglas regex del Croquis Oficial ITS
     if (/^R-?0?\d+$/.test(normalized)) {
         const num = parseInt(normalized.replace(/\D/g, ''), 10) || 1;
+        const picked = pickDirCampus('boillot');
         return withRoomAliases({
             room: `R${String(num).padStart(2, '0')}`,
-            campusId: 'boillot',
-            campusName: dir.boillot.name,
-            plano: 'CTO-004',
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || 'CTO-004',
             building: 'Edif. 78 Sistemas y Computación (Aulas R-1 a R-14)',
-            lat: dir.boillot.lat,
-            lng: dir.boillot.lng
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
     if (/^(S-?\d+|CLO)$/.test(normalized)) {
+        const picked = pickDirCampus('boillot');
         return withRoomAliases({
             room: normalized,
-            campusId: 'boillot',
-            campusName: dir.boillot.name,
-            plano: 'CTO-004',
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || 'CTO-004',
             building: 'Edif. 79 Ingeniería Mecatrónica (Aulas S-13 a S-20 / CLO)',
-            lat: dir.boillot.lat,
-            lng: dir.boillot.lng
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
     if (/^ED-?\d+$/.test(normalized)) {
+        const picked = pickDirCampus('boillot');
         return withRoomAliases({
             room: normalized,
-            campusId: 'boillot',
-            campusName: dir.boillot.name,
-            plano: 'CTO-004',
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || 'CTO-004',
             building: 'Edif. 80 Educación a Distancia (Aulas ED1 a ED4)',
-            lat: dir.boillot.lat,
-            lng: dir.boillot.lng
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
     if (/^AV-?\d+$/.test(normalized)) {
+        const picked = pickDirCampus('boillot');
         return withRoomAliases({
             room: normalized,
-            campusId: 'boillot',
-            campusName: dir.boillot.name,
-            plano: 'CTO-004',
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || 'CTO-004',
             building: 'Edif. 81 Gestión Tecnológica y Vinculación (AV1 - AV2)',
-            lat: dir.boillot.lat,
-            lng: dir.boillot.lng
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
@@ -3967,51 +4099,55 @@ function resolveItsClassroom(rawRoom = '', campusDirectoryOrPlanner = null) {
         else if (num >= 25 && num <= 26) edif = 'Edif. 63 (Aulas N-25 a N-26)';
         else if (num >= 27 && num <= 28) edif = 'Edif. 64 (Aulas N-27 a N-28)';
         else if (num >= 29) edif = 'Edif. 65 (Aulas N-29 a N-42)';
+        const picked = pickDirCampus('miravalle');
         return withRoomAliases({
             room: `N${String(num).padStart(2, '0')}`,
-            campusId: 'miravalle',
-            campusName: dir.miravalle.name,
-            plano: 'CTO-003',
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || 'CTO-003',
             building: edif,
-            lat: dir.miravalle.lat,
-            lng: dir.miravalle.lng
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
     if (/^(LMA|LE[234]|PLC|LM[12]|LEL|LIN|LS[1-5]|LC[123]|AP1)$/.test(normalized)) {
+        const picked = pickDirCampus('miravalle');
         return withRoomAliases({
             room: normalized,
-            campusId: 'miravalle',
-            campusName: dir.miravalle.name,
-            plano: 'CTO-003',
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || 'CTO-003',
             building: 'Laboratorios y Aulas Especializadas Campus Miravalle (Edif. 50-66)',
-            lat: dir.miravalle.lat,
-            lng: dir.miravalle.lng
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
     if (/^[ABC]-?0?\d+$/.test(normalized)) {
         const letter = normalized[0];
         const piso = letter === 'A' ? 'Piso 1 (Edif. 22)' : (letter === 'B' ? 'Piso 2 (Edif. 23)' : 'Piso 3 (Edif. 24)');
+        const picked = pickDirCampus('principal');
         return withRoomAliases({
             room: normalized,
-            campusId: 'principal',
-            campusName: dir.principal.name,
-            plano: 'CTO-002',
+            campusId: picked.key,
+            campusName: picked.campus.name,
+            plano: picked.campus.plano || 'CTO-002',
             building: `Aulas ${letter} · ${piso}`,
-            lat: dir.principal.lat,
-            lng: dir.principal.lng
+            lat: picked.campus.lat,
+            lng: picked.campus.lng
         });
     }
 
+    const pickedDefault = pickDirCampus('principal');
     return withRoomAliases({
         room: normalized,
-        campusId: 'principal',
-        campusName: dir.principal.name,
-        plano: 'CTO-002',
-        building: 'Campus Principal ITS (CR / AM / TM / SM / LAC)',
-        lat: dir.principal.lat,
-        lng: dir.principal.lng
+        campusId: pickedDefault.key,
+        campusName: pickedDefault.campus.name,
+        plano: pickedDefault.campus.plano || 'CTO-002',
+        building: pickedDefault.campus.buildings || 'Campus Principal ITS (CR / AM / TM / SM / LAC)',
+        lat: pickedDefault.campus.lat,
+        lng: pickedDefault.campus.lng
     });
 }
 
@@ -4208,25 +4344,40 @@ function getDefaultAcademicPlanner() {
             },
             campuses: {
                 principal: {
+                    id: 'principal',
+                    name: ITS_CAMPUS_DIRECTORY.principal.name,
                     label: ITS_CAMPUS_DIRECTORY.principal.name,
+                    plano: ITS_CAMPUS_DIRECTORY.principal.plano,
                     address: ITS_CAMPUS_DIRECTORY.principal.address,
                     mapsUrl: `https://www.google.com/maps?q=${ITS_CAMPUS_DIRECTORY.principal.lat},${ITS_CAMPUS_DIRECTORY.principal.lng}`,
                     lat: ITS_CAMPUS_DIRECTORY.principal.lat,
-                    lng: ITS_CAMPUS_DIRECTORY.principal.lng
+                    lng: ITS_CAMPUS_DIRECTORY.principal.lng,
+                    rooms: [],
+                    buildings: ITS_CAMPUS_DIRECTORY.principal.buildings
                 },
                 miravalle: {
+                    id: 'miravalle',
+                    name: ITS_CAMPUS_DIRECTORY.miravalle.name,
                     label: ITS_CAMPUS_DIRECTORY.miravalle.name,
+                    plano: ITS_CAMPUS_DIRECTORY.miravalle.plano,
                     address: ITS_CAMPUS_DIRECTORY.miravalle.address,
                     mapsUrl: `https://www.google.com/maps?q=${ITS_CAMPUS_DIRECTORY.miravalle.lat},${ITS_CAMPUS_DIRECTORY.miravalle.lng}`,
                     lat: ITS_CAMPUS_DIRECTORY.miravalle.lat,
-                    lng: ITS_CAMPUS_DIRECTORY.miravalle.lng
+                    lng: ITS_CAMPUS_DIRECTORY.miravalle.lng,
+                    rooms: [],
+                    buildings: ITS_CAMPUS_DIRECTORY.miravalle.buildings
                 },
                 boillot: {
+                    id: 'boillot',
+                    name: ITS_CAMPUS_DIRECTORY.boillot.name,
                     label: ITS_CAMPUS_DIRECTORY.boillot.name,
+                    plano: ITS_CAMPUS_DIRECTORY.boillot.plano,
                     address: ITS_CAMPUS_DIRECTORY.boillot.address,
                     mapsUrl: `https://www.google.com/maps?q=${ITS_CAMPUS_DIRECTORY.boillot.lat},${ITS_CAMPUS_DIRECTORY.boillot.lng}`,
                     lat: ITS_CAMPUS_DIRECTORY.boillot.lat,
-                    lng: ITS_CAMPUS_DIRECTORY.boillot.lng
+                    lng: ITS_CAMPUS_DIRECTORY.boillot.lng,
+                    rooms: [],
+                    buildings: ITS_CAMPUS_DIRECTORY.boillot.buildings
                 }
             },
             current: {
@@ -4369,20 +4520,7 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
         locations: {
             home: sanitizeLocationObject(src.locations?.home, prev.locations?.home || def.locations.home),
             university: sanitizeLocationObject(src.locations?.university, prev.locations?.university || def.locations.university),
-            campuses: {
-                principal: sanitizeLocationObject(
-                    src.locations?.campuses?.principal,
-                    prev.locations?.campuses?.principal || def.locations.campuses.principal
-                ),
-                miravalle: sanitizeLocationObject(
-                    src.locations?.campuses?.miravalle,
-                    prev.locations?.campuses?.miravalle || def.locations.campuses.miravalle
-                ),
-                boillot: sanitizeLocationObject(
-                    src.locations?.campuses?.boillot,
-                    prev.locations?.campuses?.boillot || def.locations.campuses.boillot
-                )
-            },
+            campuses: {},
             current: {
                 label: typeof src.locations?.current?.label === 'string' && src.locations.current.label.trim()
                     ? src.locations.current.label.trim().slice(0, 80)
@@ -4402,33 +4540,53 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
         work: {}
     };
 
-    // Mantener sincronizado locations.university <-> locations.campuses.principal
-    const prevPrincipalCoords = parseCoordinatesFromInput(prev?.locations?.campuses?.principal || {});
-    const prevUniCoords = parseCoordinatesFromInput(prev?.locations?.university || {});
-    const rawCampusPrincipal = src.locations?.campuses?.principal;
-    const rawUniLoc = src.locations?.university;
-    const rawCampusPrincipalCoords = parseCoordinatesFromInput(rawCampusPrincipal || {});
-    const rawUniCoords = parseCoordinatesFromInput(rawUniLoc || {});
-    const campusPrincipalChanged = Boolean(rawCampusPrincipalCoords && (!prevPrincipalCoords || Math.abs(rawCampusPrincipalCoords.lat - prevPrincipalCoords.lat) > 0.00001 || Math.abs(rawCampusPrincipalCoords.lng - prevPrincipalCoords.lng) > 0.00001));
-    const uniLocChanged = Boolean(rawUniCoords && (!prevUniCoords || Math.abs(rawUniCoords.lat - prevUniCoords.lat) > 0.00001 || Math.abs(rawUniCoords.lng - prevUniCoords.lng) > 0.00001));
-    if (campusPrincipalChanged || (rawCampusPrincipalCoords && !uniLocChanged)) {
-        out.locations.university = sanitizeLocationObject({
-            ...out.locations.university,
-            address: out.locations.campuses.principal.address || out.locations.university.address,
-            mapsUrl: out.locations.campuses.principal.mapsUrl || `https://www.google.com/maps?q=${rawCampusPrincipalCoords.lat},${rawCampusPrincipalCoords.lng}`,
-            lat: rawCampusPrincipalCoords.lat,
-            lng: rawCampusPrincipalCoords.lng
-        }, out.locations.university);
-    } else if (uniLocChanged || rawUniCoords) {
-        const chosenUni = rawUniCoords || parseCoordinatesFromInput(out.locations.university || {});
-        if (chosenUni) {
-            out.locations.campuses.principal = sanitizeLocationObject({
-                ...out.locations.campuses.principal,
-                address: out.locations.university.address || out.locations.campuses.principal.address,
-                mapsUrl: out.locations.university.mapsUrl || `https://www.google.com/maps?q=${chosenUni.lat},${chosenUni.lng}`,
-                lat: chosenUni.lat,
-                lng: chosenUni.lng
-            }, out.locations.campuses.principal);
+    const hasExplicitSrcCampuses = Boolean(
+        src.locations
+        && Object.prototype.hasOwnProperty.call(src.locations, 'campuses')
+        && src.locations.campuses
+        && typeof src.locations.campuses === 'object'
+        && !Array.isArray(src.locations.campuses)
+    );
+    const prevCampuses = prev.locations?.campuses && typeof prev.locations.campuses === 'object' && !Array.isArray(prev.locations.campuses)
+        ? prev.locations.campuses
+        : def.locations.campuses;
+    const rawCampusesSource = hasExplicitSrcCampuses ? src.locations.campuses : prevCampuses;
+    for (const [rawKey, rawVal] of Object.entries(rawCampusesSource).slice(0, 25)) {
+        const cleanId = normalizeCampusId(rawVal?.id || rawKey);
+        if (!cleanId) continue;
+        const fallbackCampus = prevCampuses[cleanId] || ITS_CAMPUS_DIRECTORY[cleanId] || null;
+        out.locations.campuses[cleanId] = sanitizeCampusEntry(cleanId, rawVal || {}, fallbackCampus);
+    }
+
+    // Mantener sincronizado locations.university <-> locations.campuses.principal solo si principal existe
+    if (Object.prototype.hasOwnProperty.call(out.locations.campuses, 'principal')) {
+        const prevPrincipalCoords = parseCoordinatesFromInput(prev?.locations?.campuses?.principal || {});
+        const prevUniCoords = parseCoordinatesFromInput(prev?.locations?.university || {});
+        const rawCampusPrincipal = src.locations?.campuses?.principal;
+        const rawUniLoc = src.locations?.university;
+        const rawCampusPrincipalCoords = parseCoordinatesFromInput(rawCampusPrincipal || {});
+        const rawUniCoords = parseCoordinatesFromInput(rawUniLoc || {});
+        const campusPrincipalChanged = Boolean(rawCampusPrincipalCoords && (!prevPrincipalCoords || Math.abs(rawCampusPrincipalCoords.lat - prevPrincipalCoords.lat) > 0.00001 || Math.abs(rawCampusPrincipalCoords.lng - prevPrincipalCoords.lng) > 0.00001));
+        const uniLocChanged = Boolean(rawUniCoords && (!prevUniCoords || Math.abs(rawUniCoords.lat - prevUniCoords.lat) > 0.00001 || Math.abs(rawUniCoords.lng - prevUniCoords.lng) > 0.00001));
+        if (campusPrincipalChanged || (rawCampusPrincipalCoords && !uniLocChanged)) {
+            out.locations.university = sanitizeLocationObject({
+                ...out.locations.university,
+                address: out.locations.campuses.principal.address || out.locations.university.address,
+                mapsUrl: out.locations.campuses.principal.mapsUrl || `https://www.google.com/maps?q=${rawCampusPrincipalCoords.lat},${rawCampusPrincipalCoords.lng}`,
+                lat: rawCampusPrincipalCoords.lat,
+                lng: rawCampusPrincipalCoords.lng
+            }, out.locations.university);
+        } else if (uniLocChanged || rawUniCoords) {
+            const chosenUni = rawUniCoords || parseCoordinatesFromInput(out.locations.university || {});
+            if (chosenUni) {
+                out.locations.campuses.principal = sanitizeCampusEntry('principal', {
+                    ...out.locations.campuses.principal,
+                    address: out.locations.university.address || out.locations.campuses.principal.address,
+                    mapsUrl: out.locations.university.mapsUrl || `https://www.google.com/maps?q=${chosenUni.lat},${chosenUni.lng}`,
+                    lat: chosenUni.lat,
+                    lng: chosenUni.lng
+                }, out.locations.campuses.principal);
+            }
         }
     }
 
@@ -4444,6 +4602,7 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
     }
 
     const effectiveCampusDir = getEffectiveCampusDirectory(out);
+    const activeCampusIds = Object.keys(effectiveCampusDir);
     const rawSemesters = Array.isArray(src.semesters) ? src.semesters : (Array.isArray(prev.semesters) ? prev.semesters : def.semesters);
     out.semesters = rawSemesters.slice(0, 16).map((sem, idx) => {
         const sId = typeof sem?.id === 'string' && sem.id.trim() ? sem.id.trim().slice(0, 60) : `sem-${idx + 1}`;
@@ -4453,6 +4612,10 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
             const days = Array.isArray(c?.days)
                 ? Array.from(new Set(c.days.map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))).sort((a, b) => a - b)
                 : [1, 2, 3, 4, 5];
+            const cleanReqCampusId = normalizeCampusId(c?.campusId || '');
+            const resolvedCourseCampusId = cleanReqCampusId && activeCampusIds.includes(cleanReqCampusId)
+                ? cleanReqCampusId
+                : (activeCampusIds.includes(roomInfo.campusId) ? roomInfo.campusId : (activeCampusIds[0] || roomInfo.campusId));
             return {
                 id: typeof c?.id === 'string' && c.id.trim() ? c.id.trim().slice(0, 60) : `course-${idx + 1}-${cIdx + 1}`,
                 code: String(c?.code || '').trim().slice(0, 30),
@@ -4460,7 +4623,7 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
                 teacher: String(c?.teacher || '').trim().slice(0, 120),
                 group: String(c?.group || '').trim().slice(0, 20),
                 room: roomInfo.room,
-                campusId: ['principal', 'miravalle', 'boillot'].includes(c?.campusId) ? c.campusId : roomInfo.campusId,
+                campusId: resolvedCourseCampusId,
                 days: days.length ? days : [1, 2, 3, 4, 5],
                 startTime: HHMM_REGEX.test(String(c?.startTime || '').trim()) ? String(c.startTime).trim() : '09:00',
                 endTime: HHMM_REGEX.test(String(c?.endTime || '').trim()) ? String(c.endTime).trim() : '10:00'
@@ -6102,11 +6265,15 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             reset_campus_miravalle: 'miravalle',
             reset_campus_boillot: 'boillot'
         };
-        const campusTargetMap = {
-            university: 'principal',
-            campus_principal: 'principal',
-            campus_miravalle: 'miravalle',
-            campus_boillot: 'boillot'
+        const resolveDynamicCampusTarget = (rawTarget) => {
+            if (rawTarget === 'university') return 'principal';
+            if (!rawTarget.startsWith('campus_')) return '';
+            const candidate = normalizeCampusId(rawTarget.slice('campus_'.length));
+            if (!candidate) return '';
+            if (planner.locations?.campuses?.[candidate] || ITS_CAMPUS_DIRECTORY[candidate]) {
+                return candidate;
+            }
+            return '';
         };
 
         if (target === 'clear_current') {
@@ -6130,18 +6297,25 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             });
         }
 
-        const resetCampusKey = campusResetTargetMap[target] || (req.body.reset === true ? campusTargetMap[target] : '');
+        const dynamicCampusKey = resolveDynamicCampusTarget(target);
+        const resetCampusKey = campusResetTargetMap[target] || (req.body.reset === true ? dynamicCampusKey : '');
         if (resetCampusKey && ITS_CAMPUS_DIRECTORY[resetCampusKey]) {
             const baseCampus = ITS_CAMPUS_DIRECTORY[resetCampusKey];
+            const prevEntry = planner.locations?.campuses?.[resetCampusKey] || {};
             const defaultLoc = {
+                id: resetCampusKey,
+                name: baseCampus.name,
                 label: baseCampus.name,
+                plano: baseCampus.plano,
                 address: baseCampus.address,
                 mapsUrl: `https://www.google.com/maps?q=${baseCampus.lat},${baseCampus.lng}`,
                 lat: baseCampus.lat,
-                lng: baseCampus.lng
+                lng: baseCampus.lng,
+                rooms: normalizeCampusRooms(prevEntry.rooms || []),
+                buildings: baseCampus.buildings
             };
             planner.locations.campuses = planner.locations.campuses || {};
-            planner.locations.campuses[resetCampusKey] = sanitizeLocationObject(defaultLoc, defaultLoc);
+            planner.locations.campuses[resetCampusKey] = sanitizeCampusEntry(resetCampusKey, defaultLoc, defaultLoc);
             if (resetCampusKey === 'principal') {
                 planner.locations.university = sanitizeLocationObject({
                     ...defaultLoc,
@@ -6211,24 +6385,30 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
                 mapsUrl: req.body.mapsUrl ? resolvedMapsUrl : (planner.locations.home.mapsUrl || resolvedMapsUrl),
                 ...coords
             }, planner.locations.home);
-        } else if (campusTargetMap[target]) {
-            const campusKey = campusTargetMap[target];
-            const baseCampus = ITS_CAMPUS_DIRECTORY[campusKey];
+        } else if (dynamicCampusKey) {
+            const campusKey = dynamicCampusKey;
+            const baseCampus = ITS_CAMPUS_DIRECTORY[campusKey] || null;
             planner.locations.campuses = planner.locations.campuses || {};
-            const existingCampus = planner.locations.campuses[campusKey] || {
+            const existingCampus = planner.locations.campuses[campusKey] || (baseCampus ? {
+                id: campusKey,
+                name: baseCampus.name,
                 label: baseCampus.name,
+                plano: baseCampus.plano,
                 address: baseCampus.address,
                 mapsUrl: `https://www.google.com/maps?q=${baseCampus.lat},${baseCampus.lng}`,
                 lat: baseCampus.lat,
-                lng: baseCampus.lng
-            };
+                lng: baseCampus.lng,
+                rooms: [],
+                buildings: baseCampus.buildings
+            } : { id: campusKey, name: customLabel || campusKey, address: '', lat: coords.lat, lng: coords.lng, rooms: [] });
             const cleanAddr = typeof req.body.address === 'string' && req.body.address.trim()
-                ? req.body.address.trim().slice(0, 200)
-                : (geocodedMeta ? rawTextInput.slice(0, 200) : existingCampus.address);
-            const updatedCampusLoc = sanitizeLocationObject({
+                ? req.body.address.trim().slice(0, 220)
+                : (geocodedMeta ? rawTextInput.slice(0, 220) : (existingCampus.address || ''));
+            const nextName = customLabel || existingCampus.name || existingCampus.label || campusKey;
+            const updatedCampusLoc = sanitizeCampusEntry(campusKey, {
                 ...existingCampus,
-                ...req.body,
-                label: customLabel || existingCampus.label || baseCampus.name,
+                name: nextName,
+                label: nextName,
                 address: cleanAddr,
                 mapsUrl: req.body.mapsUrl ? resolvedMapsUrl : `https://www.google.com/maps?q=${coords.lat},${coords.lng}`,
                 ...coords
@@ -6238,7 +6418,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
                 planner.locations.university = sanitizeLocationObject({
                     ...planner.locations.university,
                     ...updatedCampusLoc,
-                    label: customLabel || planner.locations.university?.label || baseCampus.name
+                    label: customLabel || planner.locations.university?.label || nextName
                 }, planner.locations.university);
             }
         } else if (target === 'residencias') {

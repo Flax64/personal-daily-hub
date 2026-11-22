@@ -10646,3 +10646,91 @@ input[type="password"] {
     opacity: 0.48;
     cursor: not-allowed;
 }
+
+#campusPlaceModal {
+    z-index: 1240;
+}
+
+#locationMapPickerModal {
+    z-index: 1320;
+}
+
+.campus-place-loc-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+}
+
+.campus-place-loc-summary {
+    flex: 1 1 220px;
+    font-size: 0.86rem;
+    line-height: 1.38;
+    color: #334155;
+}
+
+.campus-room-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.campus-room-input-row > input {
+    flex: 1 1 auto;
+}
+
+.campus-rooms-chip-list,
+.its-croquis-rooms-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.campus-room-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    background: #dbeafe;
+    color: #1e40af;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.campus-room-chip-remove {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 0.92rem;
+    line-height: 1;
+    font-weight: 700;
+}
+
+.campus-room-chip-remove:hover {
+    color: #ef4444;
+}
+
+:root[data-theme="dark"] .campus-place-loc-box {
+    background: #0f172a;
+    border-color: #334155;
+}
+
+:root[data-theme="dark"] .campus-place-loc-summary {
+    color: #cbd5e1;
+}
+
+:root[data-theme="dark"] .campus-room-chip {
+    background: rgba(37, 99, 235, 0.2);
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.35);
+}

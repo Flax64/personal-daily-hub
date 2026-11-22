@@ -1548,14 +1548,26 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
 
         const courseModalPos = indexHtml.indexOf('id="plannerCourseModal"');
         const courseFormPos = indexHtml.indexOf('id="plannerCourseForm"');
+        const campusPlaceModalPos = indexHtml.indexOf('id="campusPlaceModal"');
         const mapModalPos = indexHtml.indexOf('id="locationMapPickerModal"');
         assert.ok(courseModalPos > -1, 'public/index.html debe incluir #plannerCourseModal');
         assert.ok(courseFormPos > courseModalPos, '#plannerCourseForm debe estar dentro de #plannerCourseModal');
-        assert.ok(mapModalPos > courseFormPos, '#locationMapPickerModal debe definirse en el DOM');
+        assert.ok(campusPlaceModalPos > courseFormPos, '#campusPlaceModal debe definirse en el DOM');
+        assert.ok(mapModalPos > campusPlaceModalPos, '#locationMapPickerModal debe definirse después de #campusPlaceModal para quedar arriba');
 
         for (const requiredId of [
             'id="btnOpenCourseModal"',
             'id="btnCloseCourseModal"',
+            'id="btnAddCampusPlace"',
+            'id="campusPlaceModal"',
+            'id="campusPlaceForm"',
+            'id="campusPlaceNameInput"',
+            'id="campusPlaceCodeInput"',
+            'id="campusPlaceLocationSummary"',
+            'id="btnCampusPlacePickMap"',
+            'id="campusPlaceRoomInput"',
+            'id="btnAddCampusRoom"',
+            'id="campusPlaceRoomsList"',
             'id="mapPickerViewport"',
             'id="mapPickerCanvas"',
             'id="mapPickerTilesLayer"',
@@ -1565,13 +1577,15 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
             'id="mapPickerSearchInput"',
             'id="btnMapPickerSearch"',
             'id="btnConfirmMapPickerLocation"',
-            'id="btnResetCampusDefaultLocation"',
             'id="btnHomeOpenMapPicker"',
             'id="btnResOpenMapPicker"',
             'id="btnWorkOpenMapPicker"'
         ]) {
             assert.ok(indexHtml.includes(requiredId), `public/index.html debe incluir ${requiredId}`);
         }
+        assert.strictEqual(indexHtml.includes('id="btnResetCampusDefaultLocation"'), false, 'public/index.html ya no debe incluir #btnResetCampusDefaultLocation');
+        assert.strictEqual(frontendJs.includes('btnResetCampusDefaultLocation'), false, 'public/frontend.js ya no debe referenciar btnResetCampusDefaultLocation');
+        assert.ok(frontendJs.includes('function renderCourseCampusSelectOptions('), 'public/frontend.js debe llenar dinámicamente #courseCampus');
 
         // Todos los IDs previos de coordenadas siguen presentes en inputs ocultos para retrocompatibilidad
         for (const legacyId of [

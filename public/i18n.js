@@ -1853,7 +1853,28 @@
         ['🗺️ Streets', '🗺️ Calles'],
         ['Show street map view', 'Mostrar vista de calles'],
         ['🛰️ Satellite', '🛰️ Satélite'],
-        ['Show satellite imagery view', 'Mostrar vista satelital']
+        ['Show satellite imagery view', 'Mostrar vista satelital'],
+        ['🏫 Campuses, Buildings & Classrooms', '🏫 Campus, Edificios y Salones'],
+        ['Add, rename, remove, or pin your campuses/buildings on the map and assign custom classrooms to each location.', 'Agrega, renombra, elimina o fija tus campus/edificios en el mapa y asigna salones personalizados a cada lugar.'],
+        ['+ Add Campus / Building', '+ Agregar Campus / Edificio'],
+        ['Add a new campus or building with custom map location and classrooms', 'Agregar un nuevo campus o edificio con ubicación en el mapa y salones personalizados'],
+        ['🏫 Add / Edit Campus or Building', '🏫 Agregar / Editar Campus o Edificio'],
+        ['Place Name *', 'Nombre del lugar *'],
+        ['e.g. ITS Campus Miravalle, Building 78 Systems', 'ej. ITS Campus Miravalle, Edificio 78 Sistemas'],
+        ['Code / Building (optional)', 'Código / Edificio (opcional)'],
+        ['e.g. CTO-003, Bldg. 78', 'ej. CTO-003, Edif. 78'],
+        ['Map Location:', 'Ubicación en el mapa:'],
+        ['No location selected yet.', 'Aún no hay ubicación seleccionada.'],
+        ['📍 Pick Location on Map', '📍 Fijar ubicación en el mapa'],
+        ['Pick this place exact pin on the interactive map', 'Fijar el pin exacto de este lugar en el mapa interactivo'],
+        ['Classrooms at this location:', 'Salones del lugar:'],
+        ['Type a room e.g. N11, R14, LC3 and press Enter or + Add', 'Escribe un salón ej. N11, R14, LC3 y presiona Enter o + Agregar'],
+        ['+ Add Room', '+ Agregar Salón'],
+        ['Add classroom tag to this location', 'Agregar etiqueta de salón a este lugar'],
+        ['Save Location', 'Guardar Lugar'],
+        ['✏️ Edit', '✏️ Editar'],
+        ['🗺️ View on Map', '🗺️ Ver en Mapa'],
+        ['🗑️ Delete', '🗑️ Borrar']
     ];
 
     var EN_FROM_KEY = new Map();

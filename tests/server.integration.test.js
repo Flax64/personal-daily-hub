@@ -5344,6 +5344,180 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.ok(csp.includes('https://tile.openstreetmap.org'));
     });
 
+    it('soporta CRUD completo de campus/edificios y salones personalizados en /api/planner y /api/planner/resolve-room', async () => {
+        const baseRes = await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } });
+        assert.strictEqual(baseRes.status, 200);
+        const baseData = JSON.parse(baseRes.body);
+        const basePlanner = baseData.planner;
+
+        // 1. Renombrar campus miravalle, asignarle salones personalizados (["N11", "R14"]) y fijar coordenadas
+        const renamedCampuses = {
+            ...basePlanner.locations.campuses,
+            miravalle: {
+                ...basePlanner.locations.campuses.miravalle,
+                id: 'miravalle',
+                name: 'Campus Miravalle Sistemas',
+                label: 'Campus Miravalle Sistemas',
+                plano: 'CTO-003-M',
+                address: 'Blvd. Vito Alessio Robles Km 2, Saltillo',
+                lat: 25.4218,
+                lng: -101.0195,
+                rooms: ['N11', ' r14 ', 'n11']
+            }
+        };
+        const updMiraRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: {
+                planner: {
+                    ...basePlanner,
+                    locations: {
+                        ...basePlanner.locations,
+                        campuses: renamedCampuses
+                    }
+                }
+            }
+        });
+        assert.strictEqual(updMiraRes.status, 200);
+        const updMiraBody = JSON.parse(updMiraRes.body);
+        assert.strictEqual(updMiraBody.campusDirectory.miravalle.name, 'Campus Miravalle Sistemas');
+        assert.deepStrictEqual(updMiraBody.campusDirectory.miravalle.rooms, ['N11', 'R14']);
+
+        for (const customRoom of ['N11', 'R14']) {
+            const rrRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/planner/resolve-room',
+                headers: { Cookie: adminCookie },
+                body: { room: customRoom }
+            });
+            assert.strictEqual(rrRes.status, 200);
+            const resolved = JSON.parse(rrRes.body).resolved;
+            assert.strictEqual(resolved.campusId, 'miravalle', `El salón personalizado ${customRoom} debe resolver a miravalle`);
+            assert.strictEqual(resolved.campusName, 'Campus Miravalle Sistemas');
+            assert.strictEqual(resolved.lat, 25.4218);
+            assert.strictEqual(resolved.lng, -101.0195);
+        }
+
+        // 2. Crear nuevo campus/edificio personalizado ('edif-sistemas'), asignar una materia y verificar commutePreview + location update
+        const withNewCampus = {
+            ...updMiraBody.planner,
+            locations: {
+                ...updMiraBody.planner.locations,
+                campuses: {
+                    ...updMiraBody.planner.locations.campuses,
+                    'edif-sistemas': {
+                        id: 'edif-sistemas',
+                        name: 'Edificio 78 Sistemas',
+                        label: 'Edificio 78 Sistemas',
+                        plano: 'EDIF-78',
+                        address: 'Av. Universidad Sur #120, Saltillo',
+                        lat: 25.4375,
+                        lng: -100.9965,
+                        rooms: ['LC3', 'S99']
+                    }
+                }
+            },
+            semesters: [
+                {
+                    ...updMiraBody.planner.semesters[0],
+                    courses: [
+                        {
+                            id: 'course-custom-edif',
+                            code: 'DED2599',
+                            name: 'Arquitectura Cloud',
+                            teacher: 'Docente Sistemas',
+                            group: 'A',
+                            room: 'LC3',
+                            campusId: 'edif-sistemas',
+                            days: [1, 3],
+                            startTime: '11:00',
+                            endTime: '12:00'
+                        }
+                    ]
+                }
+            ]
+        };
+        const addCampusRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: { planner: withNewCampus }
+        });
+        assert.strictEqual(addCampusRes.status, 200);
+        const addCampusBody = JSON.parse(addCampusRes.body);
+        assert.ok(addCampusBody.campusDirectory['edif-sistemas']);
+        assert.strictEqual(addCampusBody.campusDirectory['edif-sistemas'].name, 'Edificio 78 Sistemas');
+        assert.strictEqual(addCampusBody.planner.semesters[0].courses[0].campusId, 'edif-sistemas');
+        assert.ok(addCampusBody.commutePreview.campuses['edif-sistemas']);
+        assert.ok(addCampusBody.commutePreview.commutes.some(c => c.campusKey === 'edif-sistemas' && c.target === 'Edificio 78 Sistemas'));
+
+        const resolveLc3Res = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/resolve-room',
+            headers: { Cookie: adminCookie },
+            body: { room: 'LC3' }
+        });
+        assert.strictEqual(resolveLc3Res.status, 200);
+        assert.strictEqual(JSON.parse(resolveLc3Res.body).resolved.campusId, 'edif-sistemas');
+
+        const locCustomRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/location',
+            headers: { Cookie: adminCookie },
+            body: { target: 'campus_edif-sistemas', lat: 25.4379, lng: -100.9961, address: 'Acceso Principal Edif. 78', source: 'map_picker' }
+        });
+        assert.strictEqual(locCustomRes.status, 200);
+        assert.strictEqual(JSON.parse(locCustomRes.body).campusDirectory['edif-sistemas'].lat, 25.4379);
+
+        // 3. Eliminar el campus personalizado y un campus predeterminado (boillot) y confirmar que no reaparecen en GET /api/planner
+        const latestPlanner = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+        const prunedCampuses = { ...latestPlanner.locations.campuses };
+        delete prunedCampuses['edif-sistemas'];
+        delete prunedCampuses.boillot;
+
+        const delCampusRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: {
+                planner: {
+                    ...latestPlanner,
+                    locations: {
+                        ...latestPlanner.locations,
+                        campuses: prunedCampuses
+                    }
+                }
+            }
+        });
+        assert.strictEqual(delCampusRes.status, 200);
+
+        const afterDeleteRes = await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } });
+        assert.strictEqual(afterDeleteRes.status, 200);
+        const afterDeleteBody = JSON.parse(afterDeleteRes.body);
+        assert.strictEqual(afterDeleteBody.campusDirectory['edif-sistemas'], undefined);
+        assert.strictEqual(afterDeleteBody.campusDirectory.boillot, undefined);
+        assert.ok(afterDeleteBody.campusDirectory.principal && afterDeleteBody.campusDirectory.miravalle);
+        assert.strictEqual(afterDeleteBody.commutePreview.campuses.boillot, undefined);
+
+        // Verificar que resolve-room no falla cuando falta un campus predeterminado (boillot)
+        const r02FallbackRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/resolve-room',
+            headers: { Cookie: adminCookie },
+            body: { room: 'R02' }
+        });
+        assert.strictEqual(r02FallbackRes.status, 200);
+        assert.ok(afterDeleteBody.campusDirectory[JSON.parse(r02FallbackRes.body).resolved.campusId]);
+    });
+
     it('proxy GET /api/planner/map-tile valida auth/coordenadas/magic-bytes, usa OSM->Esri fallback y cache LRU v2', async () => {
         // 1. Requiere sesión autenticada
         const unauthRes = await request({ port, reqPath: '/api/planner/map-tile/15/7191/13946.png' });
