@@ -56,64 +56,90 @@
         }
     }
 
-    function defaultResilientFetch(url, fetchOpts, { timeoutMs = 26000, externalSignal = null } = {}) {
-        const controller = typeof AbortController === 'function' ? new AbortController() : null;
-        let timedOut = false;
-        const timer = controller && timeoutMs > 0
-            ? setTimeout(() => {
-                timedOut = true;
-                controller.abort();
-            }, timeoutMs)
-            : null;
+    function defaultResilientFetch(url, fetchOpts, { timeoutMs = 50000, externalSignal = null, maxRetries = 1 } = {}) {
+        const runAttempt = (attempt) => {
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            let timedOut = false;
+            const timer = controller && timeoutMs > 0
+                ? setTimeout(() => {
+                    timedOut = true;
+                    controller.abort();
+                }, timeoutMs)
+                : null;
 
-        const onExternalAbort = () => {
-            if (controller) controller.abort();
-        };
-        if (externalSignal && typeof externalSignal.addEventListener === 'function') {
-            if (externalSignal.aborted) controller && controller.abort();
-            else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-        }
+            const onExternalAbort = () => {
+                if (controller) controller.abort();
+            };
+            if (externalSignal && typeof externalSignal.addEventListener === 'function') {
+                if (externalSignal.aborted) controller && controller.abort();
+                else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+            }
 
-        return fetch(url, {
-            ...fetchOpts,
-            signal: controller ? controller.signal : externalSignal || undefined
-        })
-            .then(async (res) => {
-                const rawText = await res.text();
-                if (!res.ok) {
-                    return {
-                        ok: false,
-                        aborted: false,
-                        status: res.status,
-                        data: null,
-                        isNetworkIssue: res.status >= 500 || res.status === 0,
-                        errorMessage: rawText && rawText.length < 220 && !/<[a-z][\s\S]*>/i.test(rawText)
-                            ? trServer(rawText)
-                            : tr(`Server error (HTTP ${res.status}). Please retry.`, `Error del servidor (HTTP ${res.status}). Reintenta.`)
-                    };
-                }
-                try {
-                    const parsed = rawText ? JSON.parse(rawText) : {};
-                    return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
-                } catch (_) {
-                    return {
-                        ok: false,
-                        aborted: false,
-                        status: res.status,
-                        data: null,
-                        isNetworkIssue: true,
-                        errorMessage: tr(
-                            'Incomplete response from server due to a possible network interruption.',
-                            'Respuesta incompleta del servidor por posible corte de red.'
-                        )
-                    };
-                }
+            return fetch(url, {
+                ...fetchOpts,
+                signal: controller ? controller.signal : externalSignal || undefined
             })
-            .catch((err) => {
-                if (err && err.name === 'AbortError' && !timedOut && externalSignal && externalSignal.aborted) {
-                    return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
-                }
-                if (timedOut) {
+                .then(async (res) => {
+                    const rawText = await res.text();
+                    if (!res.ok) {
+                        const retryableStatus = res.status === 408 || res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+                        if (retryableStatus && attempt < maxRetries && !(externalSignal && externalSignal.aborted)) {
+                            await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                            return runAttempt(attempt + 1);
+                        }
+                        return {
+                            ok: false,
+                            aborted: false,
+                            status: res.status,
+                            data: null,
+                            isNetworkIssue: res.status >= 500 || res.status === 0,
+                            errorMessage: rawText && rawText.length < 220 && !/<[a-z][\s\S]*>/i.test(rawText)
+                                ? trServer(rawText)
+                                : tr(`Server error (HTTP ${res.status}). Please retry.`, `Error del servidor (HTTP ${res.status}). Reintenta.`)
+                        };
+                    }
+                    try {
+                        const parsed = rawText ? JSON.parse(rawText) : {};
+                        return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
+                    } catch (_) {
+                        if (attempt < maxRetries && !(externalSignal && externalSignal.aborted)) {
+                            await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                            return runAttempt(attempt + 1);
+                        }
+                        return {
+                            ok: false,
+                            aborted: false,
+                            status: res.status,
+                            data: null,
+                            isNetworkIssue: true,
+                            errorMessage: tr(
+                                'Incomplete response from server due to a possible network interruption.',
+                                'Respuesta incompleta del servidor por posible corte de red.'
+                            )
+                        };
+                    }
+                })
+                .catch(async (err) => {
+                    if (err && err.name === 'AbortError' && !timedOut && externalSignal && externalSignal.aborted) {
+                        return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
+                    }
+                    if (attempt < maxRetries && !(externalSignal && externalSignal.aborted)) {
+                        await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                        return runAttempt(attempt + 1);
+                    }
+                    if (timedOut) {
+                        return {
+                            ok: false,
+                            aborted: false,
+                            status: 0,
+                            data: null,
+                            isNetworkIssue: true,
+                            errorMessage: tr(
+                                'Request timed out (slow network or temporary cut). Please retry.',
+                                'Tiempo de espera agotado (red lenta o corte temporal). Reintenta.'
+                            )
+                        };
+                    }
                     return {
                         ok: false,
                         aborted: false,
@@ -121,29 +147,19 @@
                         data: null,
                         isNetworkIssue: true,
                         errorMessage: tr(
-                            'Request timed out (slow network or temporary cut). Please retry.',
-                            'Tiempo de espera agotado (red lenta o corte temporal). Reintenta.'
+                            'No stable connection to the server. Check your Wi-Fi or mobile data and try again.',
+                            'Sin conexión estable con el servidor. Revisa tu Wi-Fi o datos móviles e intenta de nuevo.'
                         )
                     };
-                }
-                return {
-                    ok: false,
-                    aborted: false,
-                    status: 0,
-                    data: null,
-                    isNetworkIssue: true,
-                    errorMessage: tr(
-                        'No stable connection to the server. Check your Wi-Fi or mobile data and try again.',
-                        'Sin conexión estable con el servidor. Revisa tu Wi-Fi o datos móviles e intenta de nuevo.'
-                    )
-                };
-            })
-            .finally(() => {
-                if (timer) clearTimeout(timer);
-                if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
-                    externalSignal.removeEventListener('abort', onExternalAbort);
-                }
-            });
+                })
+                .finally(() => {
+                    if (timer) clearTimeout(timer);
+                    if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
+                        externalSignal.removeEventListener('abort', onExternalAbort);
+                    }
+                });
+        };
+        return runAttempt(0);
     }
 
     function defaultLoadingNode(message) {
@@ -484,7 +500,7 @@
                         'X-UI-Lang': currentUiLang()
                     },
                     body: JSON.stringify({ text, direction, mode, context })
-                }, { timeoutMs: 26000, externalSignal: activeController ? activeController.signal : null });
+                }, { timeoutMs: 50000, externalSignal: activeController ? activeController.signal : null });
 
                 if (resp.aborted || mySeq !== seqCounter) return;
 

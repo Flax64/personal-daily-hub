@@ -33,6 +33,7 @@ SECCIONES_INGLES = {
     "phrasal_verb": "3. Phrasal Verbs",
     "music": "4. Songs & Music Study",
     "notes": "5. My Notes & Learnings",
+    "alphabet": "6. Alphabets & Composition Rules",
 }
 
 _PREFIJOS_SECCION_INGLES = {
@@ -41,7 +42,18 @@ _PREFIJOS_SECCION_INGLES = {
     "phrasal_verb": "3.",
     "music": "4.",
     "notes": "5.",
+    "alphabet": "6.",
 }
+
+_STUDY_LANGUAGE_META = {
+    "en": ("English", "🇺🇸 Apartado: Inglés (English)"),
+    "ko": ("Korean (한국어)", "🇰🇷 Apartado: Coreano (한국어)"),
+    "ja": ("Japanese (日本語)", "🇯🇵 Apartado: Japonés (日本語)"),
+    "en_ko": ("English + Korean (K-Pop)", "🎵 Apartado: K-Pop (EN + 한국어)"),
+    "en_ja": ("English + Japanese (J-Pop)", "🎌 Apartado: J-Pop (EN + 日本語)"),
+}
+
+_RE_JAPANESE_SCRIPT_CHAR = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]")
 
 _LANG_CODE_ALIASES = {
     "kr": "ko",
@@ -878,6 +890,78 @@ def _combinar_metadata_cancion_word(existing_fields, new_entry) -> dict:
     }
 
 
+def _normalizar_codigo_idioma_estudio(raw_lang) -> str:
+    val = str(raw_lang or "").strip().lower()
+    if not val or val in ("english", "en", "inglés", "ingles"):
+        return "en"
+    if val in ("ko", "kr", "korean", "coreano", "한국어"):
+        return "ko"
+    if val in ("ja", "jp", "japanese", "japonés", "japones", "日本語"):
+        return "ja"
+    if val in ("en_ja", "en-ja", "en_jp", "en-jp", "jp_en", "jp-en", "en+jp", "en+ja", "jpop", "j-pop"):
+        return "en_ja"
+    if "j-pop" in val or "jpop" in val or (("japanese" in val or "japon" in val or "日本" in val) and ("english" in val or "en " in val or "en+" in val or "(en" in val)):
+        return "en_ja"
+    if val in ("en_ko", "en-kr", "en+kr", "kpop", "k-pop") or "k-pop" in val or "kpop" in val or (("korean" in val or "corean" in val or "한국" in val) and ("english" in val or "en " in val or "en+" in val or "(en" in val)):
+        return "en_ko"
+    if "korean" in val or "corean" in val or "한국" in val:
+        return "ko"
+    if "japanese" in val or "japon" in val or "日本" in val:
+        return "ja"
+    return "en"
+
+
+def _resolver_idioma_entrada_estudio(entry: dict) -> tuple[str, str, str]:
+    primary = " ".join(
+        str(entry.get(k) or "").strip() for k in ("word", "title", "verb", "song_title") if entry.get(k)
+    )
+    body = " ".join(
+        str(entry.get(k) or "").strip()
+        for k in ("lyrics_study", "notes", "example", "composition_rules", "symbols_table", "alphabet_overview")
+        if entry.get(k)
+    )
+    combined = f"{primary} {body}".strip()
+    primary_hangul = bool(_RE_HANGUL_CHAR.search(primary))
+    primary_ja = (not primary_hangul) and bool(_RE_JAPANESE_SCRIPT_CHAR.search(primary))
+    any_hangul = bool(_RE_HANGUL_CHAR.search(combined))
+    any_ja = bool(_RE_JAPANESE_SCRIPT_CHAR.search(combined))
+    stripped_primary = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", primary)
+    primary_multi_latin = bool(re.search(r"[A-Za-z]{2,}", stripped_primary))
+
+    raw_explicit = _limpiar_linea(entry.get("language_code") or entry.get("language") or entry.get("language_section"))
+    norm_explicit = _normalizar_codigo_idioma_estudio(raw_explicit) if raw_explicit else ""
+
+    if entry.get("category") == "music":
+        lyrics_txt = str(entry.get("lyrics_study") or "")
+        if norm_explicit == "en_ko" or (any_hangul and re.search(r"[A-Za-z]{3,}", lyrics_txt)):
+            code = "en_ko"
+        elif norm_explicit == "en_ja" or (any_ja and re.search(r"[A-Za-z]{3,}", lyrics_txt)):
+            code = "en_ja"
+        elif any_hangul:
+            code = "ko"
+        elif any_ja:
+            code = "ja"
+        elif raw_explicit:
+            code = norm_explicit
+        else:
+            code = "en"
+    elif primary_hangul:
+        code = "en_ko" if (norm_explicit == "en_ko" and primary_multi_latin) else "ko"
+    elif primary_ja:
+        code = "en_ja" if (norm_explicit == "en_ja" and primary_multi_latin) else "ja"
+    elif any_hangul:
+        code = "en_ko" if (norm_explicit == "en_ko" and primary_multi_latin) else "ko"
+    elif any_ja:
+        code = "en_ja" if (norm_explicit == "en_ja" and primary_multi_latin) else "ja"
+    elif raw_explicit and norm_explicit in ("ko", "ja"):
+        code = norm_explicit
+    else:
+        code = "en"
+
+    lang_label, sec_label = _STUDY_LANGUAGE_META.get(code, _STUDY_LANGUAGE_META["en"])
+    return code, lang_label, sec_label
+
+
 def parsear_entrada_ingles(entry_or_text) -> dict:
     if isinstance(entry_or_text, dict):
         parsed = entry_or_text
@@ -888,18 +972,38 @@ def parsear_entrada_ingles(entry_or_text) -> dict:
         try:
             parsed = json.loads(texto)
         except (ValueError, TypeError):
-            return {"category": "grammar", "title": _limpiar_linea(texto)[:60] or "General English Note", "notes": texto, "example": ""}
+            code, lbl, sec = _resolver_idioma_entrada_estudio({"category": "grammar", "notes": texto})
+            return {
+                "category": "grammar",
+                "language": lbl,
+                "language_code": code,
+                "language_section": sec,
+                "title": _limpiar_linea(texto)[:60] or "General English Note",
+                "notes": texto,
+                "example": "",
+            }
         if not isinstance(parsed, dict):
-            return {"category": "grammar", "title": _limpiar_linea(parsed)[:60] or "General English Note", "notes": str(parsed), "example": ""}
+            code, lbl, sec = _resolver_idioma_entrada_estudio({"category": "grammar", "notes": str(parsed)})
+            return {
+                "category": "grammar",
+                "language": lbl,
+                "language_code": code,
+                "language_section": sec,
+                "title": _limpiar_linea(parsed)[:60] or "General English Note",
+                "notes": str(parsed),
+                "example": "",
+            }
 
     category = str(parsed.get("category", "")).strip().lower()
     if category not in SECCIONES_INGLES:
         category = "grammar"
 
     if category == "vocabulary":
-        return {
+        item = {
             "category": "vocabulary",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
             "word": _limpiar_linea(parsed.get("word")),
             "romanization": _limpiar_linea(parsed.get("romanization")),
             "part_of_speech": _limpiar_linea(parsed.get("part_of_speech")),
@@ -907,10 +1011,12 @@ def parsear_entrada_ingles(entry_or_text) -> dict:
             "example": str(parsed.get("example") or "").strip(),
             "notes": str(parsed.get("notes") or "").strip(),
         }
-    if category == "phrasal_verb":
-        return {
+    elif category == "phrasal_verb":
+        item = {
             "category": "phrasal_verb",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
             "verb": _limpiar_linea(parsed.get("verb")),
             "grammar_type": _limpiar_linea(parsed.get("grammar_type")),
             "meaning_es": _limpiar_linea(parsed.get("meaning_es")),
@@ -918,16 +1024,31 @@ def parsear_entrada_ingles(entry_or_text) -> dict:
             "example": str(parsed.get("example") or "").strip(),
             "notes": str(parsed.get("notes") or "").strip(),
         }
-    if category == "notes":
+    elif category == "notes":
         notes_body = str(parsed.get("notes") or parsed.get("text") or "").strip()
-        return {
+        item = {
             "category": "notes",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
             "title": _limpiar_linea(parsed.get("title")) or _limpiar_linea(notes_body)[:60] or "Personal Note",
             "notes": notes_body,
             "example": str(parsed.get("example") or "").strip(),
         }
-    if category == "music":
+    elif category == "alphabet":
+        item = {
+            "category": "alphabet",
+            "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
+            "title": _limpiar_linea(parsed.get("title")) or "Alphabet & Composition Guide",
+            "alphabet_overview": str(parsed.get("alphabet_overview") or "").strip(),
+            "symbols_table": str(parsed.get("symbols_table") or "").strip(),
+            "composition_rules": str(parsed.get("composition_rules") or "").strip(),
+            "example": str(parsed.get("example") or "").strip(),
+            "notes": str(parsed.get("notes") or "").strip(),
+        }
+    elif category == "music":
         raw_track = parsed.get("track_number") if parsed.get("track_number") is not None else parsed.get("numero_pista")
         try:
             track_num = int(raw_track) if raw_track not in (None, "", False) else None
@@ -935,9 +1056,10 @@ def parsear_entrada_ingles(entry_or_text) -> dict:
                 track_num = None
         except (ValueError, TypeError):
             track_num = _extraer_numero_pista(raw_track)
-        return {
+        item = {
             "category": "music",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
             "song_title": _limpiar_linea(parsed.get("song_title")),
             "artists_display": _limpiar_linea(parsed.get("artists_display")),
             "album_title": _limpiar_linea(parsed.get("album_title")),
@@ -956,14 +1078,25 @@ def parsear_entrada_ingles(entry_or_text) -> dict:
             "notes": str(parsed.get("notes") or "").strip(),
             "append_study_fields": bool(parsed.get("append_study_fields")),
         }
-    return {
-        "category": "grammar",
-        "language": _limpiar_linea(parsed.get("language")),
-        "title": _limpiar_linea(parsed.get("title")) or "Grammar Note",
-        "notes": str(parsed.get("notes") or "").strip(),
-        "example": str(parsed.get("example") or "").strip(),
-        "practice_quiz": str(parsed.get("practice_quiz") or "").strip(),
-    }
+    else:
+        item = {
+            "category": "grammar",
+            "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
+            "title": _limpiar_linea(parsed.get("title")) or "Grammar Note",
+            "notes": str(parsed.get("notes") or "").strip(),
+            "example": str(parsed.get("example") or "").strip(),
+            "practice_quiz": str(parsed.get("practice_quiz") or "").strip(),
+        }
+
+    lang_code, lang_label, sec_label = _resolver_idioma_entrada_estudio(item)
+    item["language_code"] = lang_code
+    if not item.get("language") or category != "music":
+        item["language"] = lang_label
+    if category != "music":
+        item["language_section"] = item.get("language_section") or sec_label
+    return item
 
 
 def _encabezado_grupo_album(entry: dict) -> str:
@@ -1039,18 +1172,20 @@ def formatear_entrada_ingles(entry: dict, fecha_dt=None) -> dict:
     category = entry.get("category") if entry.get("category") in SECCIONES_INGLES else "grammar"
     section_title = SECCIONES_INGLES[category]
     timestamp_str = _limpiar_linea(entry.get("added_at")) or (fecha_dt or datetime.now()).strftime("%Y-%m-%d %H:%M")
+    lang_code, default_lang_label, default_sec_label = _resolver_idioma_entrada_estudio(entry)
     lines = []
 
     if category == "vocabulary":
-        language = _limpiar_linea(entry.get("language"))
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
         word = _limpiar_linea(entry.get("word")) or "New Word"
         romanization = _limpiar_linea(entry.get("romanization"))
         pos = _limpiar_linea(entry.get("part_of_speech"))
         spanish = _limpiar_linea(entry.get("spanish")) or "(No translation)"
         word_disp = f"{word} [{romanization}]" if romanization else word
         heading = f"{word_disp} ({pos}) — {spanish}" if pos else f"{word_disp} — {spanish}"
-        if language:
-            lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language Section: ", "text": lang_section, "size": 9, "italic": True, "muted": True})
         lines.append({"label": "Expression: " if language else "English: ", "text": word, "size": 11, "italic": False, "muted": False})
         if romanization:
             lines.append({"label": "Romanization: ", "text": romanization, "size": 11, "italic": False, "muted": False})
@@ -1061,14 +1196,15 @@ def formatear_entrada_ingles(entry: dict, fecha_dt=None) -> dict:
         _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
 
     elif category == "phrasal_verb":
-        language = _limpiar_linea(entry.get("language"))
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
         verb = _limpiar_linea(entry.get("verb")) or "Phrasal Verb"
         grammar_type = _limpiar_linea(entry.get("grammar_type"))
         meaning_es = _limpiar_linea(entry.get("meaning_es")) or "(No meaning)"
         meaning_en = _limpiar_linea(entry.get("meaning_en"))
         heading = f"{verb} — {meaning_es}"
-        if language:
-            lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language Section: ", "text": lang_section, "size": 9, "italic": True, "muted": True})
         lines.append({"label": "Phrasal Verb: ", "text": verb, "size": 11, "italic": False, "muted": False})
         if grammar_type:
             lines.append({"label": "Pattern: ", "text": grammar_type, "size": 11, "italic": False, "muted": False})
@@ -1078,8 +1214,20 @@ def formatear_entrada_ingles(entry: dict, fecha_dt=None) -> dict:
         _agregar_lineas_texto(lines, "Example: ", entry.get("example"))
         _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
 
+    elif category == "alphabet":
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
+        heading = _limpiar_linea(entry.get("title")) or f"Alphabet & Composition — {language}"
+        lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language Section: ", "text": lang_section, "size": 9, "italic": True, "muted": True})
+        _agregar_lineas_texto(lines, "Alphabet Overview: ", entry.get("alphabet_overview"))
+        _agregar_lineas_texto(lines, "Alphabet & Symbols: ", entry.get("symbols_table"))
+        _agregar_lineas_texto(lines, "Composition Rules: ", entry.get("composition_rules"))
+        _agregar_lineas_texto(lines, "Examples: ", entry.get("example"))
+        _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
+
     elif category == "music":
-        language = _limpiar_linea(entry.get("language"))
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
         song_title = _limpiar_linea(entry.get("song_title")) or "Untitled Song"
         artists_display = _limpiar_linea(entry.get("artists_display")) or "Unknown Artist"
         album_title = _limpiar_linea(entry.get("album_title"))
@@ -1124,16 +1272,24 @@ def formatear_entrada_ingles(entry: dict, fecha_dt=None) -> dict:
         _agregar_lineas_texto(lines, "Extra Study Notes: ", clean_notes)
 
     else:
-        language = _limpiar_linea(entry.get("language"))
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
         heading = _limpiar_linea(entry.get("title")) or "Grammar Note"
-        if language:
-            lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language Section: ", "text": lang_section, "size": 9, "italic": True, "muted": True})
         _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
         _agregar_lineas_texto(lines, "Examples: ", entry.get("example"))
         _agregar_lineas_texto(lines, "Practice & Quiz: ", entry.get("practice_quiz"))
 
     lines.append({"label": "Added: ", "text": timestamp_str, "size": 9, "italic": True, "muted": True})
-    out = {"category": category, "section_title": section_title, "heading": heading, "lines": lines}
+    out = {
+        "category": category,
+        "section_title": section_title,
+        "heading": heading,
+        "lines": lines,
+        "language": _limpiar_linea(entry.get("language")) or default_lang_label,
+        "language_code": lang_code,
+    }
     if category == "music":
         out["group_heading"] = group_heading
         out["track_heading"] = track_heading
@@ -1242,6 +1398,53 @@ def _coincide_cancion_en_bloque(fields: dict, heading_text: str, target_title: s
     return True
 
 
+def _detectar_idioma_bloque_items(heading_text: str, body_texts: list[str]) -> str:
+    explicit_lang = ""
+    for line in body_texts:
+        low = line.lower()
+        if low.startswith("language section:") or low.startswith("language:"):
+            explicit_lang = line.split(":", 1)[1].strip()
+            break
+    code, _, _ = _resolver_idioma_entrada_estudio({
+        "title": heading_text,
+        "language": explicit_lang,
+        "notes": "\n".join(body_texts),
+    })
+    return code
+
+
+def _indice_insercion_agrupado_idioma(items, sec_start: int | None, sec_end: int, target_lang_code: str) -> int:
+    if sec_start is None:
+        return sec_end
+    lang_order = {"en": 0, "ko": 1, "ja": 2, "en_ko": 3, "en_ja": 4}
+    target_order = lang_order.get(target_lang_code, 9)
+    last_same_end = None
+    first_after_idx = None
+
+    idx = sec_start + 1
+    while idx < sec_end:
+        level, text = items[idx]
+        if level == 2 and text:
+            j = idx + 1
+            while j < sec_end and items[j][0] not in (1, 2):
+                j += 1
+            block_texts = [items[k][1] for k in range(idx + 1, j) if items[k][1]]
+            blk_code = _detectar_idioma_bloque_items(text, block_texts)
+            if blk_code == target_lang_code:
+                last_same_end = j
+            elif first_after_idx is None and lang_order.get(blk_code, 9) > target_order:
+                first_after_idx = idx
+            idx = j
+            continue
+        idx += 1
+
+    if last_same_end is not None:
+        return last_same_end
+    if first_after_idx is not None:
+        return first_after_idx
+    return sec_end
+
+
 def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[bytes, dict]:
     if not orig_bytes:
         orig_bytes = _build_minimal_docx_bytes(mode="english")
@@ -1338,12 +1541,19 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
         if _bloque_duplicado(items, sec_start, sec_end, spec):
             deduplicated = True
         else:
+            insert_pos = _indice_insercion_agrupado_idioma(items, sec_start, sec_end, spec.get("language_code", "en"))
             bloque = _construir_bloque_elementos(spec["heading"], estilo_ids["heading_2"], 12, spec["lines"])
             for offset, el in enumerate(bloque):
-                body.insert(sec_end + offset, el)
+                body.insert(insert_pos + offset, el)
 
     if deduplicated:
-        return orig_bytes, {"category": spec["category"], "heading": spec["heading"], "deduplicated": True}
+        return orig_bytes, {
+            "category": spec["category"],
+            "heading": spec["heading"],
+            "language": spec.get("language", ""),
+            "languageCode": spec.get("language_code", ""),
+            "deduplicated": True,
+        }
 
     _normalizar_saltos_pagina(body, style_levels)
     new_doc_bytes = _serializar_documento(doc_root, orig_doc_bytes)
@@ -1353,7 +1563,13 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
         for info in zin.infolist():
             payload = new_doc_bytes if info.filename == "word/document.xml" else zin.read(info.filename)
             zout.writestr(info, payload)
-    return out_buf.getvalue(), {"category": spec["category"], "heading": spec["heading"], "deduplicated": False}
+    return out_buf.getvalue(), {
+        "category": spec["category"],
+        "heading": spec["heading"],
+        "language": spec.get("language", ""),
+        "languageCode": spec.get("language_code", ""),
+        "deduplicated": False,
+    }
 
 
 # ---------------------------------------------------------------------------

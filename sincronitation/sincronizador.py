@@ -1431,6 +1431,7 @@ SECCIONES_INGLES = {
     "phrasal_verb": "3. Phrasal Verbs",
     "music": "4. Songs & Music Study",
     "notes": "5. My Notes & Learnings",
+    "alphabet": "6. Alphabets & Composition Rules",
 }
 
 _PREFIJOS_SECCION_INGLES = {
@@ -1439,7 +1440,18 @@ _PREFIJOS_SECCION_INGLES = {
     "phrasal_verb": "3.",
     "music": "4.",
     "notes": "5.",
+    "alphabet": "6.",
 }
+
+_STUDY_LANGUAGE_META = {
+    "en": ("English", "🇺🇸 Apartado: Inglés (English)"),
+    "ko": ("Korean (한국어)", "🇰🇷 Apartado: Coreano (한국어)"),
+    "ja": ("Japanese (日本語)", "🇯🇵 Apartado: Japonés (日本語)"),
+    "en_ko": ("English + Korean (K-Pop)", "🎵 Apartado: K-Pop (EN + 한국어)"),
+    "en_ja": ("English + Japanese (J-Pop)", "🎌 Apartado: J-Pop (EN + 日本語)"),
+}
+
+_RE_JAPANESE_SCRIPT_CHAR = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]")
 
 
 def _limpiar_linea(texto):
@@ -1459,6 +1471,78 @@ def _dividir_lineas_limpias(texto):
     return lineas
 
 
+def _normalizar_codigo_idioma_estudio(raw_lang):
+    val = str(raw_lang or "").strip().lower()
+    if not val or val in ("english", "en", "inglés", "ingles"):
+        return "en"
+    if val in ("ko", "kr", "korean", "coreano", "한국어"):
+        return "ko"
+    if val in ("ja", "jp", "japanese", "japonés", "japones", "日本語"):
+        return "ja"
+    if val in ("en_ja", "en-ja", "en_jp", "en-jp", "jp_en", "jp-en", "en+jp", "en+ja", "jpop", "j-pop"):
+        return "en_ja"
+    if "j-pop" in val or "jpop" in val or (("japanese" in val or "japon" in val or "日本" in val) and ("english" in val or "en " in val or "en+" in val or "(en" in val)):
+        return "en_ja"
+    if val in ("en_ko", "en-kr", "en+kr", "kpop", "k-pop") or "k-pop" in val or "kpop" in val or (("korean" in val or "corean" in val or "한국" in val) and ("english" in val or "en " in val or "en+" in val or "(en" in val)):
+        return "en_ko"
+    if "korean" in val or "corean" in val or "한국" in val:
+        return "ko"
+    if "japanese" in val or "japon" in val or "日本" in val:
+        return "ja"
+    return "en"
+
+
+def _resolver_idioma_entrada_estudio(entry):
+    primary = " ".join(
+        str(entry.get(k) or "").strip() for k in ("word", "title", "verb", "song_title") if entry.get(k)
+    )
+    body = " ".join(
+        str(entry.get(k) or "").strip()
+        for k in ("lyrics_study", "notes", "example", "composition_rules", "symbols_table", "alphabet_overview")
+        if entry.get(k)
+    )
+    combined = f"{primary} {body}".strip()
+    primary_hangul = bool(_RE_HANGUL_CHAR.search(primary))
+    primary_ja = (not primary_hangul) and bool(_RE_JAPANESE_SCRIPT_CHAR.search(primary))
+    any_hangul = bool(_RE_HANGUL_CHAR.search(combined))
+    any_ja = bool(_RE_JAPANESE_SCRIPT_CHAR.search(combined))
+    stripped_primary = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", primary)
+    primary_multi_latin = bool(re.search(r"[A-Za-z]{2,}", stripped_primary))
+
+    raw_explicit = _limpiar_linea(entry.get("language_code") or entry.get("language") or entry.get("language_section"))
+    norm_explicit = _normalizar_codigo_idioma_estudio(raw_explicit) if raw_explicit else ""
+
+    if entry.get("category") == "music":
+        lyrics_txt = str(entry.get("lyrics_study") or "")
+        if norm_explicit == "en_ko" or (any_hangul and re.search(r"[A-Za-z]{3,}", lyrics_txt)):
+            code = "en_ko"
+        elif norm_explicit == "en_ja" or (any_ja and re.search(r"[A-Za-z]{3,}", lyrics_txt)):
+            code = "en_ja"
+        elif any_hangul:
+            code = "ko"
+        elif any_ja:
+            code = "ja"
+        elif raw_explicit:
+            code = norm_explicit
+        else:
+            code = "en"
+    elif primary_hangul:
+        code = "en_ko" if (norm_explicit == "en_ko" and primary_multi_latin) else "ko"
+    elif primary_ja:
+        code = "en_ja" if (norm_explicit == "en_ja" and primary_multi_latin) else "ja"
+    elif any_hangul:
+        code = "en_ko" if (norm_explicit == "en_ko" and primary_multi_latin) else "ko"
+    elif any_ja:
+        code = "en_ja" if (norm_explicit == "en_ja" and primary_multi_latin) else "ja"
+    elif raw_explicit and norm_explicit in ("ko", "ja"):
+        code = norm_explicit
+    else:
+        code = "en"
+
+    lang_label, sec_label = _STUDY_LANGUAGE_META.get(code, _STUDY_LANGUAGE_META["en"])
+    return code, lang_label, sec_label
+
+
 def parsear_entrada_ingles(raw_text):
     """Convierte el texto descifrado de /api/pull-english en una entrada estructurada."""
     texto = (raw_text or "").strip()
@@ -1469,16 +1553,24 @@ def parsear_entrada_ingles(raw_text):
         parsed = json.loads(texto)
     except (ValueError, TypeError):
         titulo_fallback = _limpiar_linea(texto)[:60] or "General English Note"
+        code, lbl, sec = _resolver_idioma_entrada_estudio({"category": "grammar", "notes": texto})
         return {
             "category": "grammar",
+            "language": lbl,
+            "language_code": code,
+            "language_section": sec,
             "title": titulo_fallback,
             "notes": texto,
             "example": "",
         }
 
     if not isinstance(parsed, dict):
+        code, lbl, sec = _resolver_idioma_entrada_estudio({"category": "grammar", "notes": str(parsed)})
         return {
             "category": "grammar",
+            "language": lbl,
+            "language_code": code,
+            "language_section": sec,
             "title": _limpiar_linea(parsed)[:60] or "General English Note",
             "notes": str(parsed),
             "example": "",
@@ -1489,9 +1581,11 @@ def parsear_entrada_ingles(raw_text):
         category = "grammar"
 
     if category == "vocabulary":
-        return {
+        item = {
             "category": "vocabulary",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
             "word": _limpiar_linea(parsed.get("word")),
             "romanization": _limpiar_linea(parsed.get("romanization")),
             "part_of_speech": _limpiar_linea(parsed.get("part_of_speech")),
@@ -1500,10 +1594,12 @@ def parsear_entrada_ingles(raw_text):
             "notes": str(parsed.get("notes") or "").strip(),
         }
 
-    if category == "phrasal_verb":
-        return {
+    elif category == "phrasal_verb":
+        item = {
             "category": "phrasal_verb",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
             "verb": _limpiar_linea(parsed.get("verb")),
             "grammar_type": _limpiar_linea(parsed.get("grammar_type")),
             "meaning_es": _limpiar_linea(parsed.get("meaning_es")),
@@ -1512,11 +1608,13 @@ def parsear_entrada_ingles(raw_text):
             "notes": str(parsed.get("notes") or "").strip(),
         }
 
-    if category == "notes":
+    elif category == "notes":
         notes_body = str(parsed.get("notes") or parsed.get("text") or "").strip()
-        return {
+        item = {
             "category": "notes",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
             "title": _limpiar_linea(parsed.get("title"))
             or _limpiar_linea(notes_body)[:60]
             or "Personal Note",
@@ -1524,7 +1622,21 @@ def parsear_entrada_ingles(raw_text):
             "example": str(parsed.get("example") or "").strip(),
         }
 
-    if category == "music":
+    elif category == "alphabet":
+        item = {
+            "category": "alphabet",
+            "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
+            "title": _limpiar_linea(parsed.get("title")) or "Alphabet & Composition Guide",
+            "alphabet_overview": str(parsed.get("alphabet_overview") or "").strip(),
+            "symbols_table": str(parsed.get("symbols_table") or "").strip(),
+            "composition_rules": str(parsed.get("composition_rules") or "").strip(),
+            "example": str(parsed.get("example") or "").strip(),
+            "notes": str(parsed.get("notes") or "").strip(),
+        }
+
+    elif category == "music":
         raw_track = (
             parsed.get("track_number")
             if parsed.get("track_number") is not None
@@ -1537,9 +1649,10 @@ def parsear_entrada_ingles(raw_text):
         except (ValueError, TypeError):
             track_num = _extraer_numero_pista(raw_track)
 
-        return {
+        item = {
             "category": "music",
             "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
             "song_title": _limpiar_linea(parsed.get("song_title")),
             "artists_display": _limpiar_linea(parsed.get("artists_display")),
             "album_title": _limpiar_linea(parsed.get("album_title")),
@@ -1559,14 +1672,25 @@ def parsear_entrada_ingles(raw_text):
             "append_study_fields": bool(parsed.get("append_study_fields")),
         }
 
-    return {
-        "category": "grammar",
-        "language": _limpiar_linea(parsed.get("language")),
-        "title": _limpiar_linea(parsed.get("title")) or "Grammar Note",
-        "notes": str(parsed.get("notes") or "").strip(),
-        "example": str(parsed.get("example") or "").strip(),
-        "practice_quiz": str(parsed.get("practice_quiz") or "").strip(),
-    }
+    else:
+        item = {
+            "category": "grammar",
+            "language": _limpiar_linea(parsed.get("language")),
+            "language_code": _limpiar_linea(parsed.get("language_code")),
+            "language_section": _limpiar_linea(parsed.get("language_section")),
+            "title": _limpiar_linea(parsed.get("title")) or "Grammar Note",
+            "notes": str(parsed.get("notes") or "").strip(),
+            "example": str(parsed.get("example") or "").strip(),
+            "practice_quiz": str(parsed.get("practice_quiz") or "").strip(),
+        }
+
+    lang_code, lang_label, sec_label = _resolver_idioma_entrada_estudio(item)
+    item["language_code"] = lang_code
+    if not item.get("language") or category != "music":
+        item["language"] = lang_label
+    if category != "music":
+        item["language_section"] = item.get("language_section") or sec_label
+    return item
 
 
 def _normalizar_clave_texto(texto):
@@ -2198,10 +2322,12 @@ def formatear_entrada_ingles(entry, fecha_dt=None):
     timestamp_str = _limpiar_linea(entry.get("added_at")) or (
         fecha_dt or datetime.now()
     ).strftime("%Y-%m-%d %H:%M")
+    lang_code, default_lang_label, default_sec_label = _resolver_idioma_entrada_estudio(entry)
     lines = []
 
     if category == "vocabulary":
-        language = _limpiar_linea(entry.get("language"))
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
         word = _limpiar_linea(entry.get("word")) or "New Word"
         romanization = _limpiar_linea(entry.get("romanization"))
         pos = _limpiar_linea(entry.get("part_of_speech"))
@@ -2211,16 +2337,8 @@ def formatear_entrada_ingles(entry, fecha_dt=None):
             f"{word_disp} ({pos}) — {spanish}" if pos else f"{word_disp} — {spanish}"
         )
 
-        if language:
-            lines.append(
-                {
-                    "label": "Language: ",
-                    "text": language,
-                    "size": 10,
-                    "italic": True,
-                    "muted": True,
-                }
-            )
+        lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language Section: ", "text": lang_section, "size": 9, "italic": True, "muted": True})
         lines.append(
             {
                 "label": "Expression: " if language else "English: ",
@@ -2263,23 +2381,16 @@ def formatear_entrada_ingles(entry, fecha_dt=None):
         _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
 
     elif category == "phrasal_verb":
-        language = _limpiar_linea(entry.get("language"))
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
         verb = _limpiar_linea(entry.get("verb")) or "Phrasal Verb"
         grammar_type = _limpiar_linea(entry.get("grammar_type"))
         meaning_es = _limpiar_linea(entry.get("meaning_es")) or "(No meaning)"
         meaning_en = _limpiar_linea(entry.get("meaning_en"))
         heading = f"{verb} — {meaning_es}"
 
-        if language:
-            lines.append(
-                {
-                    "label": "Language: ",
-                    "text": language,
-                    "size": 10,
-                    "italic": True,
-                    "muted": True,
-                }
-            )
+        lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language Section: ", "text": lang_section, "size": 9, "italic": True, "muted": True})
         lines.append(
             {
                 "label": "Phrasal Verb: ",
@@ -2319,6 +2430,18 @@ def formatear_entrada_ingles(entry, fecha_dt=None):
                 }
             )
         _agregar_lineas_texto(lines, "Example: ", entry.get("example"))
+        _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
+
+    elif category == "alphabet":
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
+        heading = _limpiar_linea(entry.get("title")) or f"Alphabet & Composition — {language}"
+        lines.append({"label": "Language: ", "text": language, "size": 10, "italic": True, "muted": True})
+        lines.append({"label": "Language Section: ", "text": lang_section, "size": 9, "italic": True, "muted": True})
+        _agregar_lineas_texto(lines, "Alphabet Overview: ", entry.get("alphabet_overview"))
+        _agregar_lineas_texto(lines, "Alphabet & Symbols: ", entry.get("symbols_table"))
+        _agregar_lineas_texto(lines, "Composition Rules: ", entry.get("composition_rules"))
+        _agregar_lineas_texto(lines, "Examples: ", entry.get("example"))
         _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
 
     elif category == "music":
@@ -2461,19 +2584,28 @@ def formatear_entrada_ingles(entry, fecha_dt=None):
         _agregar_lineas_texto(lines, "Extra Study Notes: ", clean_notes)
 
     else:
-        language = _limpiar_linea(entry.get("language"))
+        language = _limpiar_linea(entry.get("language")) or default_lang_label
+        lang_section = _limpiar_linea(entry.get("language_section")) or default_sec_label
         title = _limpiar_linea(entry.get("title")) or "Grammar Note"
         heading = title
-        if language:
-            lines.append(
-                {
-                    "label": "Language: ",
-                    "text": language,
-                    "size": 10,
-                    "italic": True,
-                    "muted": True,
-                }
-            )
+        lines.append(
+            {
+                "label": "Language: ",
+                "text": language,
+                "size": 10,
+                "italic": True,
+                "muted": True,
+            }
+        )
+        lines.append(
+            {
+                "label": "Language Section: ",
+                "text": lang_section,
+                "size": 9,
+                "italic": True,
+                "muted": True,
+            }
+        )
         _agregar_lineas_texto(lines, "Notes: ", entry.get("notes"))
         _agregar_lineas_texto(lines, "Examples: ", entry.get("example"))
         _agregar_lineas_texto(lines, "Practice & Quiz: ", entry.get("practice_quiz"))
@@ -2492,6 +2624,8 @@ def formatear_entrada_ingles(entry, fecha_dt=None):
         "category": category,
         "section_title": section_title,
         "heading": heading,
+        "language": _limpiar_linea(entry.get("language")) or default_lang_label,
+        "language_code": lang_code,
         "lines": lines,
     }
     if category == "music":
@@ -4276,6 +4410,7 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
             "grammar": [],
             "phrasal_verb": [],
             "notes": [],
+            "alphabet": [],
         }
         music_entries = []
         extra_h1_blocks = []
@@ -4304,6 +4439,13 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
                 return "music"
             if low == SECCIONES_INGLES["notes"].lower() or low.startswith("5."):
                 return "notes"
+            if (
+                low == SECCIONES_INGLES["alphabet"].lower()
+                or low.startswith("6.")
+                or "alphabet" in low
+                or "alfabeto" in low
+            ):
+                return "alphabet"
             if "bloque a" in low or "bloque b" in low:
                 if "apartado 1" in low:
                     return "legacy_apartado_1"
@@ -4319,7 +4461,7 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
             h1_title = items[s_idx][1]
             kind = _classify_h1(h1_title)
 
-            if kind in ("vocabulary", "grammar", "phrasal_verb", "notes"):
+            if kind in ("vocabulary", "grammar", "phrasal_verb", "notes", "alphabet"):
                 idx = s_idx + 1
                 while idx < e_idx:
                     lvl, txt = items[idx]
@@ -4581,6 +4723,24 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
                     )
                 )
 
+        # Sección 6: Alphabets & Composition Rules
+        if buckets["alphabet"]:
+            new_elements.append(
+                _ooxml_crear_parrafo_texto(
+                    style_id=estilo_ids["heading_1"],
+                    text=SECCIONES_INGLES["alphabet"],
+                    font_size=15,
+                    bold_all=True,
+                )
+            )
+            for item in buckets["alphabet"]:
+                line_specs = _ooxml_lineas_desde_textos(item["lines"])
+                new_elements.extend(
+                    _ooxml_construir_bloque_elementos(
+                        item["heading"], estilo_ids["heading_2"], 12, line_specs
+                    )
+                )
+
         for block_elems in extra_h1_blocks:
             new_elements.extend(block_elems)
 
@@ -4616,13 +4776,14 @@ def consolidar_y_deduplicar_cuaderno_word(ruta_docx=None):
         return {
             "ok": True,
             "changed": True,
-            "legacySectionsRemoved": raw_section_count > 5,
+            "legacySectionsRemoved": raw_section_count > 6,
             "counts": {
                 "vocabulary": len(buckets["vocabulary"]),
                 "grammar": len(buckets["grammar"]),
                 "phrasal_verb": len(buckets["phrasal_verb"]),
                 "music": len(music_entries),
                 "notes": len(buckets["notes"]),
+                "alphabet": len(buckets["alphabet"]),
             },
         }
 
@@ -5104,6 +5265,12 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
     """
     params = params if isinstance(params, dict) else {}
     section_filter = str(params.get("section") or "all").strip().lower()
+    raw_lang_filter = str(params.get("language") or "all").strip().lower()
+    lang_filter = (
+        "all"
+        if raw_lang_filter in ("", "all", "todos")
+        else _normalizar_codigo_idioma_estudio(raw_lang_filter)
+    )
     q = _normalizar_clave_texto(params.get("q"))
     f_artist = _normalizar_clave_texto(params.get("artist"))
     f_album = _normalizar_clave_texto(params.get("album"))
@@ -5149,6 +5316,7 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
     entries = []
     artists, albums, songs = set(), set(), set()
     counts = {cat: 0 for cat in SECCIONES_INGLES}
+    counts_by_lang = {"all": 0, "en": 0, "ko": 0, "ja": 0, "en_ko": 0, "en_ja": 0}
 
     for cat in SECCIONES_INGLES:
         sec_start, sec_end, items = _ooxml_buscar_rango_seccion(
@@ -5173,6 +5341,15 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
                         albums.add(album)
                     if song_name:
                         songs.add(song_name)
+                    lang_code, lang_lbl, sec_lbl = _resolver_idioma_entrada_estudio(
+                        {
+                            "category": "music",
+                            "language": _limpiar_linea(fields.get("language")),
+                            "song_title": song_name,
+                            "lyrics_study": fields.get("lyrics_study") or "",
+                            "notes": fields.get("notes") or "",
+                        }
+                    )
                     entries.append(
                         {
                             "section": "music",
@@ -5180,7 +5357,9 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
                             "album": album,
                             "artist": artist,
                             "song": song_name,
-                            "language": _limpiar_linea(fields.get("language")),
+                            "language": lang_lbl,
+                            "languageCode": lang_code,
+                            "languageSectionLabel": sec_lbl,
                             "trackNumber": tr.get("track_num"),
                             "fields": {
                                 k: fields.get(k, "")
@@ -5199,6 +5378,8 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
                         }
                     )
                     counts["music"] += 1
+                    counts_by_lang[lang_code] = counts_by_lang.get(lang_code, 0) + 1
+                    counts_by_lang["all"] += 1
         else:
             idx = sec_start + 1
             while idx < sec_end:
@@ -5220,27 +5401,57 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
                         ),
                         "",
                     )
+                    raw_lang_line = ""
+                    raw_sec_line = ""
+                    for bl in body_lines:
+                        low_bl = bl.lower()
+                        if low_bl.startswith("language section:"):
+                            raw_sec_line = bl.split(":", 1)[1].strip()
+                        elif low_bl.startswith("language:"):
+                            raw_lang_line = bl.split(":", 1)[1].strip()
+                    lang_code, lang_lbl, sec_lbl = _resolver_idioma_entrada_estudio(
+                        {
+                            "category": cat,
+                            "language": raw_lang_line,
+                            "language_section": raw_sec_line,
+                            "title": text,
+                            "notes": " ".join(body_lines),
+                        }
+                    )
                     entries.append(
                         {
                             "section": cat,
                             "heading": text,
                             "lines": body_lines,
                             "added": added,
+                            "language": lang_lbl,
+                            "languageCode": lang_code,
+                            "languageSectionLabel": sec_lbl,
                         }
                     )
-                    counts[cat] += 1
+                    counts[cat] = counts.get(cat, 0) + 1
+                    counts_by_lang[lang_code] = counts_by_lang.get(lang_code, 0) + 1
+                    counts_by_lang["all"] += 1
                     idx = j
                 else:
                     idx += 1
 
     def entry_text(e):
-        parts = [e.get("heading", ""), e.get("album", ""), e.get("artist", "")]
+        parts = [
+            e.get("heading", ""),
+            e.get("album", ""),
+            e.get("artist", ""),
+            e.get("language", ""),
+            e.get("languageSectionLabel", ""),
+        ]
         parts += e.get("lines", [])
         parts += list((e.get("fields") or {}).values())
         return _normalizar_clave_texto(" ".join(str(p) for p in parts))
 
     def keep(e):
         if section_filter not in ("", "all") and e["section"] != section_filter:
+            return False
+        if lang_filter != "all" and e.get("languageCode") != lang_filter:
             return False
         if f_artist and f_artist not in _normalizar_clave_texto(e.get("artist")):
             return False
@@ -5283,6 +5494,7 @@ def leer_cuaderno_estudio_word(params=None, ruta_docx=None):
         "offset": offset,
         "nextOffset": next_offset,
         "counts": counts,
+        "countsByLanguage": counts_by_lang,
         "facets": {
             "artists": sorted(artists, key=str.lower)[:150],
             "albums": sorted(albums, key=str.lower)[:150],

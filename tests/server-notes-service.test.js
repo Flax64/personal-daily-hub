@@ -439,4 +439,131 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
             fs.rmSync(tmpLogs, { recursive: true, force: true });
         }
     });
+
+    it('divide automáticamente entradas del cuaderno por idioma y soporta Sección 6 (Alfabetos y Composición)', async () => {
+        const pyCmd = resolvePythonCmd();
+        assert.ok(pyCmd, 'Python debe estar disponible para probar docx_writer.py');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-lang-apt-'));
+        try {
+            const docxPath = path.join(tmpDir, 'Study_Languages.docx');
+            const utf8Env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+            const runWriter = (entry) => spawnSync(
+                pyCmd,
+                [path.join(ROOT, 'lib', 'docx_writer.py'), '--mode', 'english'],
+                { input: JSON.stringify({ docxPath, entry }), encoding: 'utf8', env: utf8Env }
+            );
+
+            // Enviar frase puramente en coreano aunque venga etiquetada erróneamente como English
+            const r1 = runWriter({
+                category: 'vocabulary',
+                language: '🇺🇸 English',
+                word: '그를 볼 때마다 가슴이 뛰어',
+                spanish: 'Cada vez que lo veo, mi corazón late fuerte',
+                notes: 'Expresión emocional en coreano'
+            });
+            assert.strictEqual(r1.status, 0, r1.stderr || r1.stdout);
+            const j1 = JSON.parse(r1.stdout.trim());
+            assert.strictEqual(j1.ok, true);
+            assert.strictEqual(j1.languageCode, 'ko');
+
+            const r2 = runWriter({
+                category: 'vocabulary',
+                language: '🎵 K-Pop (EN + 한국어)',
+                word: 'Resilience',
+                spanish: 'Resiliencia',
+                example: 'She showed great resilience.'
+            });
+            assert.strictEqual(r2.status, 0, r2.stderr || r2.stdout);
+            const j2 = JSON.parse(r2.stdout.trim());
+            assert.strictEqual(j2.ok, true);
+            assert.strictEqual(j2.languageCode, 'en');
+
+            const r3 = runWriter({
+                category: 'alphabet',
+                language: '🇰🇷 Korean (한국어)',
+                language_code: 'ko',
+                title: 'Alfabeto Coreano Hangul (자모)',
+                alphabet_overview: 'Consonantes y vocales combinadas en bloques.',
+                symbols_table: 'ㅏ [a], ㅓ [eo], ㄱ [g/k], ㄴ [n]',
+                composition_rules: 'Consonante + Vocal + Batchim opcional (한).',
+                example: '한글 [han-geul]'
+            });
+            assert.strictEqual(r3.status, 0, r3.stderr || r3.stdout);
+            const j3 = JSON.parse(r3.stdout.trim());
+            assert.strictEqual(j3.ok, true);
+            assert.strictEqual(j3.languageCode, 'ko');
+
+            const docxBuf = fs.readFileSync(docxPath);
+            const parsedAll = await langStudio.parseStudyNotebookDocxBuffer(docxBuf, { section: 'all', limit: 50, includeAllEntries: true });
+            assert.strictEqual(parsedAll.ok, true);
+            assert.strictEqual(parsedAll.counts.vocabulary, 2);
+            assert.strictEqual(parsedAll.counts.alphabet, 1);
+            assert.strictEqual(parsedAll.countsByLanguage.ko, 2);
+            assert.strictEqual(parsedAll.countsByLanguage.en, 1);
+
+            const onlyKo = langStudio.filterStudyNotebookData(parsedAll, { language: 'ko' });
+            assert.strictEqual(onlyKo.entries.length, 2);
+            assert.ok(onlyKo.entries.every((e) => e.languageCode === 'ko'));
+            assert.ok(onlyKo.entries.some((e) => e.heading.includes('그를 볼 때마다')));
+            assert.ok(onlyKo.entries.some((e) => e.section === 'alphabet'));
+
+            const onlyEn = langStudio.filterStudyNotebookData(parsedAll, { language: 'en' });
+            assert.strictEqual(onlyEn.entries.length, 1);
+            assert.ok(onlyEn.entries[0].heading.includes('Resilience'));
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it('genera guías de alfabeto y reglas de composición en offline y con Gemini simulado', async () => {
+        const offlineKo = await langStudio.generateAlphabetGuideWithAi({
+            language: 'ko',
+            mode: 'offline',
+            uiLang: 'es'
+        });
+        assert.strictEqual(offlineKo.ok, true);
+        assert.strictEqual(offlineKo.languageCode, 'ko');
+        assert.ok(Array.isArray(offlineKo.symbols) && offlineKo.symbols.length >= 6);
+        assert.ok(Array.isArray(offlineKo.compositionRules) && offlineKo.compositionRules.length >= 4);
+        assert.ok(offlineKo.symbols[0].sound);
+        assert.strictEqual(offlineKo.wordPayloads.alphabetEntry.category, 'alphabet');
+        assert.strictEqual(offlineKo.wordPayloads.alphabetEntry.language_code, 'ko');
+        assert.strictEqual(offlineKo.wordPayloads.notesEntry.category, 'notes');
+        assert.strictEqual(offlineKo.wordPayloads.notesEntry.language_code, 'ko');
+
+        const geminiMockPayload = {
+            candidates: [{
+                content: {
+                    parts: [{
+                        text: JSON.stringify({
+                            aiAnswer: 'El alfabeto inglés combina vocales cortas/largas y dígrafos.',
+                            extraSymbols: [{ symbol: 'th', name: 'Dígrafo TH', sound: 'θ / ð', formation: 't + h', example: 'think / this' }],
+                            extraRules: [{ rule: 'Silent E alarga la vocal', pattern: 'CVCe', explanation: 'La e muda alarga la vocal previa: cap -> cape.', examples: 'cap -> cape' }],
+                            soundTips: ['Distingue short i (ship) de long ee (sheep).'],
+                            practiceExercises: [{ prompt: 'Lee en voz alta cap vs cape', answer: 'cap [kæp] / cape [keɪp]' }]
+                        })
+                    }]
+                }
+            }]
+        };
+        const aiEn = await langStudio.generateAlphabetGuideWithAi({
+            apiKey: 'AIzaSyMockKey1234567890123456789012345',
+            model: 'gemini-2.5-flash',
+            language: 'en',
+            mode: 'gemini',
+            customFocus: 'Silent E',
+            fetchImpl: async () => ({
+                ok: true,
+                status: 200,
+                json: async () => geminiMockPayload,
+                text: async () => JSON.stringify(geminiMockPayload)
+            })
+        });
+        assert.strictEqual(aiEn.ok, true);
+        assert.strictEqual(aiEn.usedGemini, true);
+        assert.strictEqual(aiEn.languageCode, 'en');
+        assert.match(aiEn.aiAnswer, /dígrafos/);
+        assert.ok(aiEn.compositionRules.some((r) => String(r.rule || '').includes('Silent E')));
+    });
 });

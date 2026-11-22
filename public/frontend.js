@@ -454,79 +454,96 @@ function formatHumanNetworkError(status, rawText = '', err = null) {
     return tServer(cleanText.slice(0, 260));
 }
 
-async function resilientFetchJson(url, fetchOpts = {}, { timeoutMs = 26000, externalSignal = null } = {}) {
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    let timedOut = false;
-    const timer = controller && timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            controller.abort();
-        }, timeoutMs)
-        : null;
-    const onExternalAbort = () => {
-        if (controller) controller.abort();
-    };
-    if (externalSignal && typeof externalSignal.addEventListener === 'function') {
-        if (externalSignal.aborted) controller?.abort();
-        else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-    }
+async function resilientFetchJson(url, fetchOpts = {}, { timeoutMs = 55000, externalSignal = null, maxRetries = 1 } = {}) {
+    const attemptRequest = async (attempt) => {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let timedOut = false;
+        const timer = controller && timeoutMs > 0
+            ? setTimeout(() => {
+                timedOut = true;
+                controller.abort();
+            }, timeoutMs)
+            : null;
+        const onExternalAbort = () => {
+            if (controller) controller.abort();
+        };
+        if (externalSignal && typeof externalSignal.addEventListener === 'function') {
+            if (externalSignal.aborted) controller?.abort();
+            else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
 
-    try {
-        const mergedHeaders = new Headers(fetchOpts.headers || {});
-        if (!mergedHeaders.has('X-UI-Lang')) {
-            mergedHeaders.set('X-UI-Lang', i18nGetLang());
-        }
-        const res = await fetch(url, {
-            ...fetchOpts,
-            headers: mergedHeaders,
-            signal: controller ? controller.signal : externalSignal || undefined
-        });
-        const rawText = await res.text();
-        if (!res.ok) {
-            return {
-                ok: false,
-                aborted: false,
-                status: res.status,
-                data: null,
-                isNetworkIssue: res.status >= 500 || res.status === 0,
-                errorMessage: formatHumanNetworkError(res.status, rawText)
-            };
-        }
         try {
-            const parsed = rawText ? JSON.parse(rawText) : {};
-            return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
-        } catch (_) {
+            const mergedHeaders = new Headers(fetchOpts.headers || {});
+            if (!mergedHeaders.has('X-UI-Lang')) {
+                mergedHeaders.set('X-UI-Lang', i18nGetLang());
+            }
+            const res = await fetch(url, {
+                ...fetchOpts,
+                headers: mergedHeaders,
+                signal: controller ? controller.signal : externalSignal || undefined
+            });
+            const rawText = await res.text();
+            if (!res.ok) {
+                const retryableHttp = res.status === 408 || res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+                if (retryableHttp && attempt < maxRetries && !externalSignal?.aborted) {
+                    await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                    return attemptRequest(attempt + 1);
+                }
+                return {
+                    ok: false,
+                    aborted: false,
+                    status: res.status,
+                    data: null,
+                    isNetworkIssue: res.status >= 500 || res.status === 0,
+                    errorMessage: formatHumanNetworkError(res.status, rawText)
+                };
+            }
+            try {
+                const parsed = rawText ? JSON.parse(rawText) : {};
+                return { ok: true, aborted: false, status: res.status, data: parsed, isNetworkIssue: false, errorMessage: '' };
+            } catch (_) {
+                if (attempt < maxRetries && !externalSignal?.aborted) {
+                    await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                    return attemptRequest(attempt + 1);
+                }
+                return {
+                    ok: false,
+                    aborted: false,
+                    status: res.status,
+                    data: null,
+                    isNetworkIssue: true,
+                    errorMessage: tUi(
+                        'Unexpected server response (possible network cut). Retry.',
+                        'Respuesta inesperada del servidor (posible corte de red). Reintenta.'
+                    )
+                };
+            }
+        } catch (err) {
+            if (isAbortError(err) && !timedOut && externalSignal?.aborted) {
+                return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
+            }
+            if (attempt < maxRetries && !externalSignal?.aborted) {
+                await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+                return attemptRequest(attempt + 1);
+            }
+            const effectiveErr = timedOut ? Object.assign(new Error('Request timeout'), { name: 'TimeoutError' }) : err;
             return {
                 ok: false,
                 aborted: false,
-                status: res.status,
+                status: 0,
                 data: null,
                 isNetworkIssue: true,
-                errorMessage: tUi(
-                    'Unexpected server response (possible network cut). Retry.',
-                    'Respuesta inesperada del servidor (posible corte de red). Reintenta.'
-                )
+                errorMessage: formatHumanNetworkError(0, '', effectiveErr)
             };
+        } finally {
+            if (timer) clearTimeout(timer);
+            if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
+                externalSignal.removeEventListener('abort', onExternalAbort);
+            }
         }
-    } catch (err) {
-        if (isAbortError(err) && !timedOut && externalSignal?.aborted) {
-            return { ok: false, aborted: true, status: 0, data: null, isNetworkIssue: false, errorMessage: '' };
-        }
-        const effectiveErr = timedOut ? Object.assign(new Error('Request timeout'), { name: 'TimeoutError' }) : err;
-        return {
-            ok: false,
-            aborted: false,
-            status: 0,
-            data: null,
-            isNetworkIssue: true,
-            errorMessage: formatHumanNetworkError(0, '', effectiveErr)
-        };
-    } finally {
-        if (timer) clearTimeout(timer);
-        if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
-            externalSignal.removeEventListener('abort', onExternalAbort);
-        }
-    }
+    };
+
+    return attemptRequest(0);
 }
 
 function hangulToRomanizationClient(text = '') {
@@ -750,7 +767,8 @@ async function submitMutationRequest({
     signature = '',
     buildBody = null,
     parseJson = false,
-    timeoutMs = 20000
+    timeoutMs = 55000,
+    maxRetries = 2
 }) {
     let idempotencyKey = createIdempotencyKey();
     let bodyObj = buildBody ? buildBody() : null;
@@ -761,45 +779,62 @@ async function submitMutationRequest({
         bodyObj = sub.body;
     }
 
-    const headers = { 'X-Idempotency-Key': idempotencyKey };
-    const fetchOpts = { method, headers };
+    const executeAttempt = async (attempt) => {
+        const headers = { 'X-Idempotency-Key': idempotencyKey };
+        const fetchOpts = { method, headers };
 
-    if (bodyObj !== null && bodyObj !== undefined) {
-        headers['Content-Type'] = 'application/json';
-        fetchOpts.body = JSON.stringify(bodyObj);
-    }
+        if (bodyObj !== null && bodyObj !== undefined) {
+            headers['Content-Type'] = 'application/json';
+            fetchOpts.body = JSON.stringify(bodyObj);
+        }
 
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    let timedOut = false;
-    const timer = controller && timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            controller.abort();
-        }, timeoutMs)
-        : null;
-    if (controller) fetchOpts.signal = controller.signal;
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let timedOut = false;
+        const timer = controller && timeoutMs > 0
+            ? setTimeout(() => {
+                timedOut = true;
+                controller.abort();
+            }, timeoutMs)
+            : null;
+        if (controller) fetchOpts.signal = controller.signal;
 
-    try {
-        const res = await fetch(url, fetchOpts);
-        if (!res.ok) {
-            if (scopeKey && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
-                clearIdempotentSubmission(scopeKey);
+        try {
+            const res = await fetch(url, fetchOpts);
+            if (!res.ok) {
+                const errText = await res.text().catch(() => '');
+                const isInFlightDup = res.status === 409 && /already being processed|ya est[aá] siendo procesada/i.test(errText);
+                const retryableHttp = isInFlightDup || res.status === 408 || res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+                if (retryableHttp && attempt < maxRetries) {
+                    await new Promise((r) => setTimeout(r, 1100 * (attempt + 1)));
+                    return executeAttempt(attempt + 1);
+                }
+                if (scopeKey && !isInFlightDup && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+                    clearIdempotentSubmission(scopeKey);
+                }
+                throw new Error(formatHumanNetworkError(res.status, errText));
             }
-            const errText = await res.text().catch(() => '');
-            throw new Error(formatHumanNetworkError(res.status, errText));
-        }
 
-        clearIdempotentSubmission(scopeKey);
-        return parseJson ? res.json() : res.text();
-    } catch (err) {
-        if (timedOut || isAbortError(err) || /failed to fetch|networkerror|load failed/i.test(String(err?.message || ''))) {
-            const effectiveErr = timedOut ? Object.assign(new Error('Timeout'), { name: 'TimeoutError' }) : err;
-            throw new Error(formatHumanNetworkError(0, '', effectiveErr));
+            clearIdempotentSubmission(scopeKey);
+            return parseJson ? res.json() : res.text();
+        } catch (err) {
+            const isTransient = timedOut
+                || isAbortError(err)
+                || /failed to fetch|networkerror|load failed|timeout|tard[oó] demasiado|gateway/i.test(String(err?.message || ''));
+            if (isTransient && attempt < maxRetries) {
+                await new Promise((r) => setTimeout(r, 1100 * (attempt + 1)));
+                return executeAttempt(attempt + 1);
+            }
+            if (timedOut || isAbortError(err) || /failed to fetch|networkerror|load failed/i.test(String(err?.message || ''))) {
+                const effectiveErr = timedOut ? Object.assign(new Error('Timeout'), { name: 'TimeoutError' }) : err;
+                throw new Error(formatHumanNetworkError(0, '', effectiveErr));
+            }
+            throw err;
+        } finally {
+            if (timer) clearTimeout(timer);
         }
-        throw err;
-    } finally {
-        if (timer) clearTimeout(timer);
-    }
+    };
+
+    return executeAttempt(0);
 }
 
 const homeSummaryTracker = createRequestTracker();
@@ -3650,6 +3685,8 @@ if (englishForm) {
     const englishCard = document.querySelector('#view-english .english-card');
     const englishRecentBox = document.getElementById('englishRecentBox');
     const englishMusicStudio = document.getElementById('englishMusicStudio');
+    const englishHangulStudio = document.getElementById('englishHangulPracticeStudio');
+    const englishAlphabetStudio = document.getElementById('englishAlphabetStudio');
     const categoryInput = document.getElementById('englishCategoryInput');
     const studyLanguageInput = document.getElementById('studyLanguageInput');
     const studyLangPills = document.querySelectorAll('.study-lang-pill[data-study-lang]');
@@ -3694,6 +3731,32 @@ if (englishForm) {
         }
     };
 
+    function detectEntryScriptLanguageClient(primaryText = '', secondaryText = '', preferredCode = 'en_ko') {
+        const primary = String(primaryText || '').trim();
+        const combined = `${primary} ${String(secondaryText || '').trim()}`.trim();
+        const hasHangulPrimary = /[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(primary);
+        const hasJaPrimary = !hasHangulPrimary && /[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/.test(primary);
+        const hasHangulAny = /[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(combined);
+        const hasJaAny = /[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/.test(combined);
+        const strippedPrimary = primary.replace(/\[[^\]]*\]|\([^)]*\)/g, '');
+        const hasMultiLatinPrimary = /[A-Za-z]{2,}/.test(strippedPrimary);
+
+        if (hasHangulPrimary) {
+            return (preferredCode === 'en_ko' && hasMultiLatinPrimary) ? 'en_ko' : 'ko';
+        }
+        if (hasJaPrimary) {
+            return (preferredCode === 'en_ja' && hasMultiLatinPrimary) ? 'en_ja' : 'ja';
+        }
+        if (hasHangulAny) {
+            return (preferredCode === 'en_ko' && hasMultiLatinPrimary) ? 'en_ko' : 'ko';
+        }
+        if (hasJaAny) {
+            return (preferredCode === 'en_ja' && hasMultiLatinPrimary) ? 'en_ja' : 'ja';
+        }
+        if (preferredCode === 'ko' || preferredCode === 'ja') return preferredCode;
+        return 'en';
+    }
+
     function applyStudyLanguageUi(langCode, { syncMusicSelect = true } = {}) {
         const norm = ['en', 'ko', 'en_ko', 'ja', 'en_ja'].includes(langCode) ? langCode : 'en_ko';
         if (studyLanguageInput) studyLanguageInput.value = norm;
@@ -3705,6 +3768,13 @@ if (englishForm) {
         if (studyLangHint) studyLangHint.textContent = meta.hint;
         if (engWordLabel) engWordLabel.textContent = meta.wordLabel;
         if (engWordInput) engWordInput.placeholder = meta.wordPlaceholder;
+
+        const proofBadge = document.getElementById('englishProofingBadge');
+        if (proofBadge && (norm === 'ko' || norm === 'ja')) {
+            proofBadge.textContent = norm === 'ko'
+                ? tUi('🇰🇷 Hangul / Korean detected — will save to Korean section', '🇰🇷 Hangul / Coreano detectado — se guardará en el apartado Coreano')
+                : tUi('🇯🇵 Japanese script detected — will save to Japanese section', '🇯🇵 Japonés detectado — se guardará en el apartado Japonés');
+        }
 
         if (syncMusicSelect) {
             const musicLangSelect = document.getElementById('musicSongLanguage');
@@ -3724,6 +3794,24 @@ if (englishForm) {
     studyLangPills.forEach(btn => {
         btn.addEventListener('click', () => {
             applyStudyLanguageUi(btn.getAttribute('data-study-lang'));
+        });
+    });
+
+    // Auto-detect Korean / Japanese vs English while typing so Korean notes never land under English
+    ['engWord', 'engGrammarTitle', 'engGrammarNotes', 'engNoteTitle', 'engNoteBody', 'engPvVerb'].forEach((inpId) => {
+        const el = document.getElementById(inpId);
+        if (!el) return;
+        el.addEventListener('input', () => {
+            const val = el.value.trim();
+            if (!val) return;
+            const currentCode = studyLanguageInput?.value || 'en_ko';
+            if (/[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(val)) {
+                const target = detectEntryScriptLanguageClient(val, '', currentCode);
+                if (target !== currentCode) applyStudyLanguageUi(target, { syncMusicSelect: false });
+            } else if (/[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/.test(val)) {
+                const target = detectEntryScriptLanguageClient(val, '', currentCode);
+                if (target !== currentCode) applyStudyLanguageUi(target, { syncMusicSelect: false });
+            }
         });
     });
 
@@ -3749,6 +3837,8 @@ if (englishForm) {
                 } catch (_) {
                     if (/[\u3040-\u30FF]/.test(val) && typeof kanaToRomajiClient === 'function') {
                         engRomanizationInput.value = kanaToRomajiClient(val);
+                    } else if (/[\uAC00-\uD7A3]/.test(val)) {
+                        engRomanizationInput.value = hangulToRomanizationClient(val);
                     }
                 }
             }, 220);
@@ -3791,7 +3881,10 @@ if (englishForm) {
 
     function cambiarCategoriaEnglish(cat) {
         const isMusic = cat === 'music' && Boolean(englishMusicStudio);
-        const safeCat = isMusic ? 'music' : (sectionConfig[cat] ? cat : 'vocabulary');
+        const isHangul = cat === 'hangul_practice' && Boolean(englishHangulStudio);
+        const isAlphabet = cat === 'alphabet' && Boolean(englishAlphabetStudio);
+        const isStudioTab = isMusic || isHangul || isAlphabet;
+        const safeCat = isStudioTab ? cat : (sectionConfig[cat] ? cat : 'vocabulary');
         if (categoryInput) categoryInput.value = safeCat;
 
         tabButtons.forEach(btn => {
@@ -3800,13 +3893,15 @@ if (englishForm) {
             btn.setAttribute('aria-selected', String(active));
         });
 
-        englishForm.hidden = isMusic;
-        if (englishRecentBox) englishRecentBox.hidden = isMusic;
+        englishForm.hidden = isStudioTab;
+        if (englishRecentBox) englishRecentBox.hidden = isStudioTab;
         if (englishMusicStudio) englishMusicStudio.hidden = !isMusic;
-        if (englishCard) englishCard.classList.toggle('music-wide', isMusic);
+        if (englishHangulStudio) englishHangulStudio.hidden = !isHangul;
+        if (englishAlphabetStudio) englishAlphabetStudio.hidden = !isAlphabet;
+        if (englishCard) englishCard.classList.toggle('music-wide', isStudioTab);
 
         Object.entries(sectionConfig).forEach(([key, cfg]) => {
-            const isTarget = !isMusic && key === safeCat;
+            const isTarget = !isStudioTab && key === safeCat;
             const fs = document.getElementById(cfg.fieldsetId);
             if (fs) fs.hidden = !isTarget;
             cfg.requiredIds.forEach(id => {
@@ -3819,6 +3914,12 @@ if (englishForm) {
         if (isMusic && typeof ensureEnglishMusicCatalogLoaded === 'function') {
             ensureEnglishMusicCatalogLoaded();
         }
+        if (isHangul && typeof ensureHangulPracticeInitialized === 'function') {
+            ensureHangulPracticeInitialized();
+        }
+        if (isAlphabet && typeof ensureAlphabetStudioInitialized === 'function') {
+            ensureAlphabetStudioInitialized();
+        }
     }
 
     tabButtons.forEach(btn => {
@@ -3829,14 +3930,16 @@ if (englishForm) {
 
     function buildEnglishEntryPayload(category) {
         const val = (id) => (document.getElementById(id)?.value || '').trim();
-        const activeLangCode = studyLanguageInput ? studyLanguageInput.value : 'en_ko';
-        const languageLabel = STUDY_LANGUAGE_UI[activeLangCode]?.label || 'English + Korean (K-Pop)';
+        const selectedLangCode = studyLanguageInput ? studyLanguageInput.value : 'en_ko';
 
         if (category === 'vocabulary') {
+            const word = val('engWord');
+            const resolvedCode = detectEntryScriptLanguageClient(word, `${val('engVocabExample')} ${val('engVocabNotes')}`, selectedLangCode);
             return {
                 category: 'vocabulary',
-                language: languageLabel,
-                word: val('engWord'),
+                language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+                language_code: resolvedCode,
+                word,
                 romanization: val('engRomanization'),
                 part_of_speech: val('engPos'),
                 spanish: val('engSpanish'),
@@ -3846,29 +3949,42 @@ if (englishForm) {
         }
 
         if (category === 'grammar') {
+            const title = val('engGrammarTitle');
+            const notes = val('engGrammarNotes');
+            const example = val('engGrammarExample');
+            const resolvedCode = detectEntryScriptLanguageClient(title, `${notes} ${example}`, selectedLangCode);
             return {
                 category: 'grammar',
-                language: languageLabel,
-                title: val('engGrammarTitle'),
-                notes: val('engGrammarNotes'),
-                example: val('engGrammarExample')
+                language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+                language_code: resolvedCode,
+                title,
+                notes,
+                example
             };
         }
 
         if (category === 'notes') {
+            const title = val('engNoteTitle');
+            const notes = val('engNoteBody');
+            const example = val('engNoteExample');
+            const resolvedCode = detectEntryScriptLanguageClient(title, `${notes} ${example}`, selectedLangCode);
             return {
                 category: 'notes',
-                language: languageLabel,
-                title: val('engNoteTitle'),
-                notes: val('engNoteBody'),
-                example: val('engNoteExample')
+                language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+                language_code: resolvedCode,
+                title,
+                notes,
+                example
             };
         }
 
+        const verb = val('engPvVerb');
+        const resolvedCode = detectEntryScriptLanguageClient(verb, `${val('engPvExample')} ${val('engPvNotes')}`, selectedLangCode);
         return {
             category: 'phrasal_verb',
-            language: languageLabel,
-            verb: val('engPvVerb'),
+            language: STUDY_LANGUAGE_UI[resolvedCode]?.label || STUDY_LANGUAGE_UI.en.label,
+            language_code: resolvedCode,
+            verb,
             grammar_type: val('engPvType'),
             meaning_es: val('engPvMeaningEs'),
             meaning_en: val('engPvMeaningEn'),
@@ -4037,13 +4153,691 @@ if (englishForm) {
     cambiarCategoriaEnglish = function (cat) {
         origCambiarCategoria(cat);
         if (languageAiPanel) {
-            languageAiPanel.hidden = (cat === 'music');
+            languageAiPanel.hidden = (cat === 'music' || cat === 'hangul_practice' || cat === 'alphabet');
         }
     };
 
     cambiarCategoriaEnglish('vocabulary');
     applyStudyLanguageUi(studyLanguageInput ? studyLanguageInput.value : 'en_ko');
     initStudyNoteDrafts();
+
+    window.__switchEnglishStudioTab = cambiarCategoriaEnglish;
+    window.__applyStudyLanguageFromStudio = applyStudyLanguageUi;
+    initHangulPracticeStudio();
+    initAlphabetCompositionStudio();
+}
+
+function speakStudyText(text, bcp47Lang = 'ko-KR') {
+    const clean = String(text || '').trim();
+    if (!clean) return false;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof window.SpeechSynthesisUtterance !== 'function') {
+        showToast('info', tUi('Voice synthesis is not available in this browser.', 'La síntesis de voz no está disponible en este navegador.'));
+        return false;
+    }
+    try {
+        window.speechSynthesis.cancel();
+        const utt = new window.SpeechSynthesisUtterance(clean);
+        utt.lang = bcp47Lang;
+        utt.rate = 0.88;
+        const voices = typeof window.speechSynthesis.getVoices === 'function' ? window.speechSynthesis.getVoices() : [];
+        const prefix = String(bcp47Lang || 'ko').split('-')[0].toLowerCase();
+        const match = voices.find((v) => String(v.lang || '').toLowerCase().startsWith(prefix));
+        if (match) utt.voice = match;
+        window.speechSynthesis.speak(utt);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+let hangulPracticeInitialized = false;
+function ensureHangulPracticeInitialized() {
+    if (!hangulPracticeInitialized) initHangulPracticeStudio();
+}
+
+function initHangulPracticeStudio() {
+    const root = document.getElementById('englishHangulPracticeStudio');
+    if (!root || hangulPracticeInitialized) return;
+    hangulPracticeInitialized = true;
+
+    const HANGUL_SYMBOLS = [
+        // Vocales básicas (10)
+        { char: 'ㅏ', group: 'basic_vowels', rom: 'a', nameEs: 'Vocal vertical A', soundEs: 'Como "a" abierta en "casa". Trazo vertical derecho.', tipEs: 'Se ubica a la derecha de la consonante inicial (ej. 가 = ga).', speak: '아' },
+        { char: 'ㅑ', group: 'basic_vowels', rom: 'ya', nameEs: 'Vocal vertical YA', soundEs: 'Como "ya" en "yate". Doble trazo corto hacia la derecha.', tipEs: 'El segundo trazo corto siempre añade un sonido "y-" inicial.', speak: '야' },
+        { char: 'ㅓ', group: 'basic_vowels', rom: 'eo', nameEs: 'Vocal vertical EO', soundEs: 'Entre "o" y "a" relajada (boca abierta sin redondear labios).', tipEs: 'Trazo corto hacia la izquierda. Muy común (서, 어, 너).', speak: '어' },
+        { char: 'ㅕ', group: 'basic_vowels', rom: 'yeo', nameEs: 'Vocal vertical YEO', soundEs: 'Igual que "ㅓ" precedida de "y" suave (yeo).', tipEs: 'Usada en palabras frecuentes como 여자 (yeoja = mujer).', speak: '여' },
+        { char: 'ㅗ', group: 'basic_vowels', rom: 'o', nameEs: 'Vocal horizontal O', soundEs: 'Como "o" clara con labios redondeados.', tipEs: 'Trazo arriba de la línea horizontal; va debajo de la consonante (고 = go).', speak: '오' },
+        { char: 'ㅛ', group: 'basic_vowels', rom: 'yo', nameEs: 'Vocal horizontal YO', soundEs: 'Como "yo" en "yoyo". Dos trazos verticales arriba.', tipEs: 'Siempre va debajo de la consonante inicial (요 = yo).', speak: '요' },
+        { char: 'ㅜ', group: 'basic_vowels', rom: 'u', nameEs: 'Vocal horizontal U', soundEs: 'Como "u" en "luna" con labios hacia adelante.', tipEs: 'Trazo corto apuntando hacia abajo; va debajo de la consonante (구 = gu).', speak: '우' },
+        { char: 'ㅠ', group: 'basic_vowels', rom: 'yu', nameEs: 'Vocal horizontal YU', soundEs: 'Como "yu" en "yuca".', tipEs: 'Va debajo de la consonante inicial (유 = yu).', speak: '유' },
+        { char: 'ㅡ', group: 'basic_vowels', rom: 'eu', nameEs: 'Vocal horizontal EU', soundEs: 'Sonrisa plana diciendo "u" sin redondear los labios.', tipEs: 'Línea horizontal pura debajo de la consonante (그 = geu).', speak: '으' },
+        { char: 'ㅣ', group: 'basic_vowels', rom: 'i', nameEs: 'Vocal vertical I', soundEs: 'Como "i" en "isla".', tipEs: 'Línea vertical pura a la derecha de la consonante (이 = i).', speak: '이' },
+        // Vocales compuestas (11)
+        { char: 'ㅐ', group: 'compound_vowels', rom: 'ae', nameEs: 'Vocal compuesta AE', soundEs: 'Como "e" abierta en español.', tipEs: 'Combinación de ㅏ + ㅣ (en el habla moderna suena muy parecido a ㅔ).', speak: '애' },
+        { char: 'ㅒ', group: 'compound_vowels', rom: 'yae', nameEs: 'Vocal compuesta YAE', soundEs: 'Como "ye" abierta.', tipEs: 'Poco frecuente (예: 얘기 = charla/historia).', speak: '얘' },
+        { char: 'ㅔ', group: 'compound_vowels', rom: 'e', nameEs: 'Vocal compuesta E', soundEs: 'Como "e" clara en "mesa".', tipEs: 'Usada en partículas de lugar (에, 에서).', speak: '에' },
+        { char: 'ㅖ', group: 'compound_vowels', rom: 'ye', nameEs: 'Vocal compuesta YE', soundEs: 'Como "ye" en "yegua".', tipEs: 'En 네/예 ("sí") y 세계 (mundo).', speak: '예' },
+        { char: 'ㅘ', group: 'compound_vowels', rom: 'wa', nameEs: 'Diptongo WA', soundEs: 'ㅗ + ㅏ = "wa" rápida ("guagua").', tipEs: 'Va envolviendo por debajo y a la derecha (와 = wa).', speak: '와' },
+        { char: 'ㅙ', group: 'compound_vowels', rom: 'wae', nameEs: 'Diptongo WAE', soundEs: 'ㅗ + ㅐ = "we" / "wae".', tipEs: 'Ejemplo clásico: 왜? (wae? = ¿por qué?).', speak: '왜' },
+        { char: 'ㅚ', group: 'compound_vowels', rom: 'oe', nameEs: 'Diptongo OE / WE', soundEs: 'En coreano moderno se pronuncia "we".', tipEs: 'Ej.: 외국 (weguk = país extranjero).', speak: '외' },
+        { char: 'ㅝ', group: 'compound_vowels', rom: 'wo', nameEs: 'Diptongo WO', soundEs: 'ㅜ + ㅓ = "wo" en "won".', tipEs: 'En 고마워 (gomawo = gracias).', speak: '워' },
+        { char: 'ㅞ', group: 'compound_vowels', rom: 'we', nameEs: 'Diptongo WE', soundEs: 'ㅜ + ㅔ = "we".', tipEs: 'Usado en préstamos como 웨딩 (wedding).', speak: '웨' },
+        { char: 'ㅟ', group: 'compound_vowels', rom: 'wi', nameEs: 'Diptongo WI', soundEs: 'ㅜ + ㅣ = "wi" en "wifi".', tipEs: 'Ejemplo: 위 (arriba) o 쉬다 (descansar).', speak: '위' },
+        { char: 'ㅢ', group: 'compound_vowels', rom: 'ui', nameEs: 'Diptongo UI / EUI', soundEs: 'ㅡ deslizada rápidamente a ㅣ ("eui").', tipEs: 'Como partícula posesiva 의 se pronuncia "e"; en 의사 (médico) "eu-i".', speak: '의' },
+        // Consonantes básicas (14)
+        { char: 'ㄱ', group: 'basic_consonants', rom: 'g / k', nameEs: 'Giyeok (기역)', soundEs: 'Al inicio suave entre g/k; entre vocales suena "g"; al final "k" cerrada.', tipEs: 'Forma de lengua tocando el paladar posterior.', speak: '가' },
+        { char: 'ㄴ', group: 'basic_consonants', rom: 'n', nameEs: 'Nieun (니은)', soundEs: 'Igual que "n" en español.', tipEs: 'Representa la punta de la lengua tocando detrás de los dientes superiores.', speak: '나' },
+        { char: 'ㄷ', group: 'basic_consonants', rom: 'd / t', nameEs: 'Digeut (디귿)', soundEs: 'Al inicio entre d/t suave; entre vocales "d"; como batchim suena "t" seca.', tipEs: 'Ejemplo: 다 (da = todo).', speak: '다' },
+        { char: 'ㄹ', group: 'basic_consonants', rom: 'r / l', nameEs: 'Rieul (리을)', soundEs: 'R suave entre vocales (como "pero"); L clara al final o cuando va doble ㄹㄹ.', tipEs: 'Ejemplo: 사랑 (sarang) vs 물 (mul).', speak: '라' },
+        { char: 'ㅁ', group: 'basic_consonants', rom: 'm', nameEs: 'Mieum (미음)', soundEs: 'Igual que "m" en "mamá".', tipEs: 'Cuadrado = labios cerrados formando una boca.', speak: '마' },
+        { char: 'ㅂ', group: 'basic_consonants', rom: 'b / p', nameEs: 'Bieup (비읍)', soundEs: 'Al inicio entre b/p suave; entre vocales "b"; al final "p" cerrada.', tipEs: 'Ejemplo: 바다 (bada = mar), 밥 (bap = arroz).', speak: '바' },
+        { char: 'ㅅ', group: 'basic_consonants', rom: 's / sh', nameEs: 'Siot (시옷)', soundEs: '"S" suave normalmente; ante ㅣ/ㅑ/ㅕ/ㅛ/ㅠ suena casi como "sh". Al final suena "t".', tipEs: '시 (shi) / 사랑 (sarang).', speak: '사' },
+        { char: 'ㅇ', group: 'basic_consonants', rom: '- / ng', nameEs: 'Ieung (이응)', soundEs: 'SILENCIOSA al inicio de sílaba (solo sostiene la vocal); suena "-ng" al final (Batchim).', tipEs: 'Regla clave: ninguna sílaba Hangul empieza con vocal sola; usa ㅇ + vocal (아).', speak: '아' },
+        { char: 'ㅈ', group: 'basic_consonants', rom: 'j', nameEs: 'Jieut (지읒)', soundEs: 'Similar a "y/j" en inglés suave; sin vibración fuerte.', tipEs: 'Entre vocales se sonoriza suavemente (가자 = gaja).', speak: '자' },
+        { char: 'ㅊ', group: 'basic_consonants', rom: 'ch', nameEs: 'Chieut (치읓)', soundEs: '"Ch" ASPIRADA con aire fuerte ("chico" + soplo de aire).', tipEs: 'El trazo superior extra indica aspiración respecto a ㅈ.', speak: '차' },
+        { char: 'ㅋ', group: 'basic_consonants', rom: 'k', nameEs: 'Kieuk (키읔)', soundEs: '"K" ASPIRADA con golpe de aire.', tipEs: 'Derivada de ㄱ con una barra extra de aspiración (커피 = keopi).', speak: '카' },
+        { char: 'ㅌ', group: 'basic_consonants', rom: 't', nameEs: 'Tieut (티읕)', soundEs: '"T" ASPIRADA con golpe de aire.', tipEs: 'Derivada de ㄷ con barra media extra.', speak: '타' },
+        { char: 'ㅍ', group: 'basic_consonants', rom: 'p', nameEs: 'Pieup (피읖)', soundEs: '"P" ASPIRADA con golpe de aire.', tipEs: 'Ejemplo: 피아노 (piano).', speak: '파' },
+        { char: 'ㅎ', group: 'basic_consonants', rom: 'h', nameEs: 'Hieut (히읗)', soundEs: '"H" aspirada suave (como "h" inglesa en "hello").', tipEs: 'Al combinarse como Batchim con ㄱ/ㄷ/ㅂ/ㅈ las vuelve aspiradas (좋다 -> 조타).', speak: '하' },
+        // Consonantes dobles / tensas (5)
+        { char: 'ㄲ', group: 'double_consonants', rom: 'kk', nameEs: 'Ssang-giyeok (쌍기역)', soundEs: '"K" tensa sin aire (contracción firme de garganta).', tipEs: 'No sueltes aire; corta el sonido en seco antes de la vocal.', speak: '까' },
+        { char: 'ㄸ', group: 'double_consonants', rom: 'tt', nameEs: 'Ssang-digeut (쌍디귿)', soundEs: '"T" tensa pura sin aire.', tipEs: 'Ejemplo: 때 (ttae = momento/ocasión).', speak: '따' },
+        { char: 'ㅃ', group: 'double_consonants', rom: 'pp', nameEs: 'Ssang-bieup (쌍비읍)', soundEs: '"P" tensa sin aire.', tipEs: 'Ejemplo: 오빠 (oppa) / 예쁘다 (yeppeuda = bonito).', speak: '빠' },
+        { char: 'ㅆ', group: 'double_consonants', rom: 'ss', nameEs: 'Ssang-siot (쌍시옷)', soundEs: '"S" intensa y sostenida.', tipEs: 'En verbos en pasado siempre aparece como batchim ㅆ (했어요).', speak: '싸' },
+        { char: 'ㅉ', group: 'double_consonants', rom: 'jj', nameEs: 'Ssang-jieut (쌍지읒)', soundEs: '"Ch/J" tensa comprimida sin aire.', tipEs: 'Ejemplo: 진짜 (jinjja = de verdad).', speak: '짜' },
+        // 7 Reglas Batchim (consonante final)
+        { char: '받침 ㄱ', group: 'batchim', rom: '-k (ㄱ,ㅋ,ㄲ)', nameEs: 'Batchim Grupo K', soundEs: 'Se cierra con "k" muda sin exhalar al final de sílaba.', tipEs: 'Ej.: 책 (chaek = libro), 부엌 (bueok = cocina). Si sigue vocal, se enlaza.', speak: '책' },
+        { char: '받침 ㄴ', group: 'batchim', rom: '-n (ㄴ)', nameEs: 'Batchim N', soundEs: 'Terminación nasal "-n" sostenida.', tipEs: 'Ej.: 눈 (nun = ojo / nieve), 산 (san = montaña).', speak: '산' },
+        { char: '받침 ㄷ', group: 'batchim', rom: '-t (ㄷ,ㅅ,ㅆ,ㅈ,ㅊ,ㅌ,ㅎ)', nameEs: 'Batchim Grupo T (7 en 1)', soundEs: 'Todas estas letras al cerrar sílaba suenan como "t" bloqueada (sin soltar aire).', tipEs: 'Ej.: 꽃 [kkot] = flor, 있다 [itda] = haber. Con vocal siguiente recupera su sonido original!', speak: '꽃' },
+        { char: '받침 ㄹ', group: 'batchim', rom: '-l (ㄹ)', nameEs: 'Batchim L', soundEs: 'Al final de sílaba suena siempre como "L" suave.', tipEs: 'Ej.: 달 (dal = luna), 물 (mul = agua).', speak: '물' },
+        { char: '받침 ㅁ', group: 'batchim', rom: '-m (ㅁ)', nameEs: 'Batchim M', soundEs: 'Cierra completamente los labios con "-m".', tipEs: 'Ej.: 마음 (maeum = corazón/mente), 봄 (bom = primavera).', speak: '밤' },
+        { char: '받침 ㅂ', group: 'batchim', rom: '-p (ㅂ,ㅍ)', nameEs: 'Batchim Grupo P', soundEs: 'Cierre labial seco "-p" sin aire.', tipEs: 'Ej.: 집 (jip = casa), 앞 (ap = frente).', speak: '집' },
+        { char: '받침 ㅇ', group: 'batchim', rom: '-ng (ㅇ)', nameEs: 'Batchim NG', soundEs: 'Sonido nasal posterior "-ng" (como en "song").', tipEs: 'Ej.: 방 (bang = habitación), 사랑 (sarang = amor).', speak: '사랑' }
+    ];
+
+    const gridEl = document.getElementById('hangulSymbolGrid');
+    const filterBtns = root.querySelectorAll('.hangul-filter-row [data-hangul-group]');
+    const detailGlyph = document.getElementById('hangulDetailGlyph');
+    const detailName = document.getElementById('hangulDetailName');
+    const detailMeta = document.getElementById('hangulDetailMeta');
+    const detailTip = document.getElementById('hangulDetailTip');
+    const btnSpeakSym = document.getElementById('btnHangulSpeakSymbol');
+    const statusBanner = document.getElementById('hangulPracticeStatusBanner');
+
+    let currentGroup = 'all';
+    let selectedSymbol = HANGUL_SYMBOLS[0];
+
+    function showSymbolDetail(sym, { speak = false } = {}) {
+        selectedSymbol = sym;
+        if (detailGlyph) detailGlyph.textContent = sym.char;
+        if (detailName) detailName.textContent = `${sym.char} — ${sym.nameEs} [${sym.rom}]`;
+        if (detailMeta) detailMeta.textContent = `🔊 ${sym.soundEs}`;
+        if (detailTip) detailTip.textContent = `📐 ${sym.tipEs}`;
+        if (gridEl) {
+            gridEl.querySelectorAll('.hangul-symbol-card').forEach((card) => {
+                card.classList.toggle('active', card.dataset.char === sym.char);
+            });
+        }
+        if (speak) speakStudyText(sym.speak || sym.char, 'ko-KR');
+    }
+
+    function renderSymbolGrid(group = 'all') {
+        if (!gridEl) return;
+        currentGroup = group;
+        const filtered = group === 'all' ? HANGUL_SYMBOLS : HANGUL_SYMBOLS.filter((s) => s.group === group);
+        gridEl.replaceChildren();
+        filtered.forEach((sym) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'hangul-symbol-card' + (selectedSymbol && selectedSymbol.char === sym.char ? ' active' : '');
+            btn.dataset.char = sym.char;
+
+            const ch = document.createElement('span');
+            ch.className = 'hangul-symbol-char';
+            ch.textContent = sym.char;
+
+            const rm = document.createElement('span');
+            rm.className = 'hangul-symbol-rom';
+            rm.textContent = `[${sym.rom}]`;
+
+            btn.append(ch, rm);
+            btn.addEventListener('click', () => showSymbolDetail(sym, { speak: true }));
+            gridEl.appendChild(btn);
+        });
+    }
+
+    filterBtns.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            filterBtns.forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderSymbolGrid(btn.getAttribute('data-hangul-group') || 'all');
+        });
+    });
+
+    btnSpeakSym?.addEventListener('click', () => {
+        if (selectedSymbol) speakStudyText(selectedSymbol.speak || selectedSymbol.char, 'ko-KR');
+    });
+
+    renderSymbolGrid('all');
+    showSymbolDetail(HANGUL_SYMBOLS[0]);
+
+    // Syllable block builder (Unicode AC00..D7A3)
+    const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+    const CHO_ROM = ['g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp', 's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h'];
+    const JUNG = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ'];
+    const JUNG_ROM = ['a', 'ae', 'ya', 'yae', 'eo', 'e', 'yeo', 'ye', 'o', 'wa', 'wae', 'oe', 'yo', 'u', 'wo', 'we', 'wi', 'yu', 'eu', 'ui', 'i'];
+    const JONG = ['', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+    const JONG_ROM = ['', 'k', 'k', 'k', 'n', 'n', 'n', 't', 'l', 'lk', 'lm', 'lb', 'ls', 'lt', 'lp', 'lh', 'm', 'p', 'p', 't', 't', 'ng', 't', 't', 'k', 't', 'p', 't'];
+    const HORIZ_VOWELS = new Set([8, 12, 13, 17, 18]);
+    const MIXED_VOWELS = new Set([9, 10, 11, 14, 15, 16, 19]);
+
+    const selInit = document.getElementById('hangulBuilderInitial');
+    const selMed = document.getElementById('hangulBuilderMedial');
+    const selFin = document.getElementById('hangulBuilderFinal');
+    const previewGlyph = document.getElementById('hangulBuilderGlyph');
+    const previewFormula = document.getElementById('hangulBuilderFormula');
+    const previewGeom = document.getElementById('hangulBuilderGeometry');
+
+    if (selInit && selMed && selFin) {
+        selInit.replaceChildren();
+        CHO.forEach((c, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = `${c} (${CHO_ROM[idx] || 'silencio'})`;
+            if (c === 'ㅎ') opt.selected = true;
+            selInit.appendChild(opt);
+        });
+        selMed.replaceChildren();
+        JUNG.forEach((v, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = `${v} (${JUNG_ROM[idx]})`;
+            if (v === 'ㅏ') opt.selected = true;
+            selMed.appendChild(opt);
+        });
+        selFin.replaceChildren();
+        JONG.forEach((f, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = idx === 0 ? 'Sin Batchim (abierta)' : `${f} (-${JONG_ROM[idx]})`;
+            if (f === 'ㄴ') opt.selected = true;
+            selFin.appendChild(opt);
+        });
+
+        const updateBuilder = () => {
+            const i = Number(selInit.value || 0);
+            const m = Number(selMed.value || 0);
+            const f = Number(selFin.value || 0);
+            const ch = String.fromCharCode(0xAC00 + (i * 21 + m) * 28 + f);
+            const rom = `${CHO_ROM[i] || ''}${JUNG_ROM[m] || ''}${JONG_ROM[f] || ''}`;
+            if (previewGlyph) previewGlyph.textContent = ch;
+            if (previewFormula) {
+                const finPart = f > 0 ? ` + ${JONG[f]} (-${JONG_ROM[f]})` : '';
+                previewFormula.textContent = `${CHO[i]} (${CHO_ROM[i] || 'ø'}) + ${JUNG[m]} (${JUNG_ROM[m]})${finPart} = ${ch} [${rom}]`;
+            }
+            if (previewGeom) {
+                const layoutDesc = HORIZ_VOWELS.has(m)
+                    ? tUi('Vertical layout: Initial C on TOP + Vowel BOTTOM', 'Disposición Vertical: Consonante ARRIBA + Vocal ABAJO')
+                    : (MIXED_VOWELS.has(m)
+                        ? tUi('L-wrap compound: C top-left, Vowel wraps below & right', 'Envolvente Mixta: C arriba-izq, Vocal rodea abajo y derecha')
+                        : tUi('Side-by-side: Initial C LEFT + Vowel RIGHT', 'Lado a Lado: Consonante IZQUIERDA + Vocal DERECHA'));
+                const batchimDesc = f > 0
+                    ? tUi(' + Final Batchim closing underneath', ' + Batchim cerrando abajo')
+                    : '';
+                previewGeom.textContent = layoutDesc + batchimDesc;
+            }
+        };
+
+        [selInit, selMed, selFin].forEach((sel) => sel.addEventListener('change', updateBuilder));
+        updateBuilder();
+
+        document.getElementById('btnHangulSpeakBlock')?.addEventListener('click', () => {
+            if (previewGlyph?.textContent) speakStudyText(previewGlyph.textContent, 'ko-KR');
+        });
+        document.getElementById('btnHangulRandomBlock')?.addEventListener('click', () => {
+            selInit.value = String(Math.floor(Math.random() * CHO.length));
+            selMed.value = String(Math.floor(Math.random() * JUNG.length));
+            selFin.value = Math.random() < 0.45 ? '0' : String(1 + Math.floor(Math.random() * (JONG.length - 1)));
+            updateBuilder();
+            speakStudyText(previewGlyph?.textContent || '', 'ko-KR');
+        });
+        document.getElementById('btnHangulCopyToVocab')?.addEventListener('click', () => {
+            const ch = previewGlyph?.textContent || '';
+            if (!ch) return;
+            window.__applyStudyLanguageFromStudio?.('ko', { syncMusicSelect: false });
+            window.__switchEnglishStudioTab?.('vocabulary');
+            const wordEl = document.getElementById('engWord');
+            const romEl = document.getElementById('engRomanization');
+            if (wordEl) {
+                wordEl.value = ch;
+                wordEl.dispatchEvent(new Event('input'));
+            }
+            if (romEl) romEl.value = hangulToRomanizationClient(ch);
+            showToast('ok', tUi(`Copied "${ch}" to glossary form.`, `"${ch}" copiado al formulario de vocabulario.`));
+        });
+    }
+
+    // Mini Recognition Quiz
+    const quizPool = HANGUL_SYMBOLS.filter((s) => s.group !== 'batchim');
+    const qPrompt = document.getElementById('hangulQuizPrompt');
+    const qOpts = document.getElementById('hangulQuizOptions');
+    const qFeedback = document.getElementById('hangulQuizFeedback');
+    const qScore = document.getElementById('hangulQuizScoreBadge');
+    let quizHits = 0;
+    let quizTotal = 0;
+    let quizLocked = false;
+
+    const loadQuizQuestion = () => {
+        if (!qPrompt || !qOpts) return;
+        quizLocked = false;
+        const target = quizPool[Math.floor(Math.random() * quizPool.length)];
+        const distractors = quizPool
+            .filter((x) => x.char !== target.char && x.rom !== target.rom)
+            .sort(() => Math.random() - 0.5)
+            .slice(0, 3);
+        const options = [target, ...distractors].sort(() => Math.random() - 0.5);
+
+        qPrompt.textContent = tUi(`Which sound corresponds to "${target.char}" (${target.nameEs})?`, `¿Qué sonido corresponde a "${target.char}" (${target.nameEs})?`);
+        if (qFeedback) qFeedback.textContent = tUi('Tap the matching romanization/sound.', 'Toca la romanización correcta.');
+        qOpts.replaceChildren();
+        options.forEach((optItem) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'hangul-quiz-opt';
+            btn.textContent = `[${optItem.rom}]`;
+            btn.addEventListener('click', () => {
+                if (quizLocked) return;
+                quizLocked = true;
+                quizTotal += 1;
+                const ok = optItem.char === target.char;
+                if (ok) {
+                    quizHits += 1;
+                    btn.classList.add('is-correct');
+                    if (qFeedback) qFeedback.textContent = `✅ ${target.char} = [${target.rom}] — ${target.soundEs}`;
+                } else {
+                    btn.classList.add('is-wrong');
+                    qOpts.querySelectorAll('.hangul-quiz-opt').forEach((b) => {
+                        if (b.textContent === `[${target.rom}]`) b.classList.add('is-correct');
+                    });
+                    if (qFeedback) qFeedback.textContent = `❌ Era "${target.char}" = [${target.rom}]. ${target.tipEs}`;
+                }
+                if (qScore) qScore.textContent = tUi(`Score: ${quizHits} / ${quizTotal}`, `Aciertos: ${quizHits} / ${quizTotal}`);
+                speakStudyText(target.speak || target.char, 'ko-KR');
+            });
+            qOpts.appendChild(btn);
+        });
+    };
+    document.getElementById('btnHangulNewQuestion')?.addEventListener('click', loadQuizQuestion);
+    loadQuizQuestion();
+
+    // Save Korean Alphabet & Rules directly to Notes & Section 6 in Word
+    const btnSaveHangul = document.getElementById('btnSaveHangulToWord');
+    btnSaveHangul?.addEventListener('click', async () => {
+        const llaveTexto = await solicitarLlaveE2EEAsync();
+        if (!llaveTexto) return;
+
+        runWithButtonLock(btnSaveHangul, async () => {
+            try {
+                const guideRes = await resilientFetchJson('/api/language/alphabet-guide', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language: 'ko', mode: 'auto' })
+                }, { timeoutMs: 55000 });
+                const payloads = guideRes.ok && guideRes.data?.wordPayloads ? guideRes.data.wordPayloads : null;
+                const alphabetEntry = payloads?.alphabetEntry || {
+                    category: 'alphabet',
+                    language: '🇰🇷 Korean (한국어)',
+                    language_code: 'ko',
+                    title: 'Alfabeto Coreano Hangul (자모) y Reglas de Composición',
+                    alphabet_overview: 'Sistema fonético de 14 consonantes básicas, 5 dobles, 10 vocales básicas, 11 compuestas y 7 grupos Batchim.',
+                    symbols_table: HANGUL_SYMBOLS.map((s) => `${s.char} [${s.rom}]: ${s.soundEs}`).join('\n'),
+                    composition_rules: '1. C + Vocal Vertical (ㅏ,ㅓ,ㅣ): lado a lado (가).\n2. C + Vocal Horizontal (ㅗ,ㅜ,ㅡ): arriba/abajo (고).\n3. Batchim (종성): consonante final siempre cierra debajo (한, 사랑).',
+                    example: '한글 [han-geul] · 사랑해 [sa-rang-hae] · 가자 [ga-ja]',
+                    notes: 'Guardado desde Práctica de Símbolos Coreanos.'
+                };
+                const notesEntry = payloads?.notesEntry || {
+                    category: 'notes',
+                    language: '🇰🇷 Korean (한국어)',
+                    language_code: 'ko',
+                    title: '🇰🇷 Alfabeto Coreano (Hangul) — Reglas Rápidas en Mis Notas',
+                    notes: `${alphabetEntry.symbols_table}\n\nReglas de composición:\n${alphabetEntry.composition_rules}`,
+                    example: alphabetEntry.example
+                };
+
+                await submitMutationRequest({
+                    url: '/api/send-english',
+                    method: 'POST',
+                    scopeKey: 'english:hangul:alphabet',
+                    signature: `alphabet-ko:${Date.now()}`,
+                    buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(alphabetEntry), llaveTexto) })
+                });
+                await submitMutationRequest({
+                    url: '/api/send-english',
+                    method: 'POST',
+                    scopeKey: 'english:hangul:notes',
+                    signature: `notes-ko:${Date.now()}`,
+                    buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(notesEntry), llaveTexto) })
+                });
+
+                if (statusBanner) {
+                    statusBanner.hidden = false;
+                    statusBanner.className = 'english-status-banner ok';
+                    statusBanner.textContent = tUi(
+                        'Korean alphabet & composition rules saved into Notes and Section 6 (Korean section) of your Word notebook.',
+                        'Alfabeto coreano y reglas de composición guardados en Notas y en el Apartado Coreano de tu cuaderno Word.'
+                    );
+                }
+                showToast('ok', tUi('Korean alphabet saved to Notes & Word!', '¡Alfabeto coreano guardado en Notas y Word!'));
+            } catch (err) {
+                if (statusBanner) {
+                    statusBanner.hidden = false;
+                    statusBanner.className = 'english-status-banner err';
+                    statusBanner.textContent = err.message;
+                }
+                showToast('err', err.message);
+            }
+        }, { loadingText: tUi('Saving...', 'Guardando...') });
+    });
+
+    document.getElementById('btnViewKoreanInNotebook')?.addEventListener('click', () => {
+        if (typeof window.openStudyNotebookViewer === 'function') {
+            window.openStudyNotebookViewer({ defaultLanguage: 'ko' });
+        } else {
+            document.getElementById('btnOpenStudyViewer')?.click();
+        }
+    });
+}
+
+let alphabetStudioInitialized = false;
+function ensureAlphabetStudioInitialized() {
+    if (!alphabetStudioInitialized) initAlphabetCompositionStudio();
+}
+
+function initAlphabetCompositionStudio() {
+    const root = document.getElementById('englishAlphabetStudio');
+    if (!root || alphabetStudioInitialized) return;
+    alphabetStudioInitialized = true;
+
+    const langSelect = document.getElementById('alphabetLangSelect');
+    const modeSelect = document.getElementById('alphabetAiEngineSelect');
+    const focusInput = document.getElementById('alphabetFocusInput');
+    const btnGen = document.getElementById('btnGenerateAlphabetGuide');
+    const btnSave = document.getElementById('btnSaveAlphabetToWord');
+    const btnView = document.getElementById('btnViewAlphabetInNotebook');
+    const chkAutoSave = document.getElementById('chkAutoSaveAlphabetToWord');
+    const statusBanner = document.getElementById('alphabetStudioStatus');
+    const resultBox = document.getElementById('alphabetGuideResultBox');
+
+    let lastGuidePayload = null;
+
+    const speakLangCodeFor = (code) => {
+        if (code === 'ko' || code === 'en_ko') return 'ko-KR';
+        if (code === 'ja' || code === 'en_ja') return 'ja-JP';
+        return 'en-US';
+    };
+
+    function setStatus(type, msg) {
+        if (!statusBanner) return;
+        statusBanner.hidden = !msg;
+        statusBanner.className = `english-status-banner ${type || ''}`;
+        statusBanner.textContent = msg || '';
+    }
+
+    function renderGuide(data) {
+        if (!resultBox) return;
+        const g = data?.guide || data || {};
+        resultBox.replaceChildren();
+
+        const summary = document.createElement('div');
+        summary.className = 'ai-summary-box';
+        const badge = data?.usedGemini ? `🤖 ${data.model || 'Gemini'}` : '⚡ Guía Estructurada';
+        summary.textContent = `${badge} · ${g.title || ''} — ${g.overview || ''}`;
+        resultBox.appendChild(summary);
+
+        if (data?.aiAnswer || g?.aiAnswer) {
+            const aiNote = document.createElement('p');
+            aiNote.className = 'study-viewer-meta';
+            aiNote.textContent = `✨ ${data?.aiAnswer || g?.aiAnswer}`;
+            resultBox.appendChild(aiNote);
+        }
+
+        if (Array.isArray(g.symbols) && g.symbols.length) {
+            const symTitle = document.createElement('h4');
+            symTitle.textContent = tUi('🔤 Symbols, Sounds & Examples', '🔤 Símbolos, Sonidos y Ejemplos');
+            resultBox.appendChild(symTitle);
+
+            const grid = document.createElement('div');
+            grid.className = 'alphabet-symbols-grid';
+            const speakBcp = speakLangCodeFor(data.languageCode || langSelect?.value || 'ko');
+
+            g.symbols.forEach((s) => {
+                const tile = document.createElement('div');
+                tile.className = 'alphabet-symbol-tile';
+
+                const head = document.createElement('div');
+                head.className = 'alphabet-symbol-head';
+
+                const strong = document.createElement('strong');
+                const symLabel = s.symbol || '';
+                const subLabel = s.romanization ? `[${s.romanization}]` : (s.name || '');
+                strong.textContent = subLabel ? `${symLabel}` : symLabel;
+
+                const btnSpk = document.createElement('button');
+                btnSpk.type = 'button';
+                btnSpk.className = 'btn-secondary btn-small';
+                btnSpk.textContent = '🔊';
+                btnSpk.addEventListener('click', () => speakStudyText(s.speakText || s.example || s.symbol || '', speakBcp));
+
+                head.append(strong, btnSpk);
+
+                const nameP = document.createElement('div');
+                nameP.className = 'small-note';
+                nameP.style.fontWeight = '600';
+                nameP.textContent = subLabel;
+
+                const soundP = document.createElement('div');
+                soundP.className = 'small-note';
+                soundP.textContent = s.sound || s.soundEs || '';
+
+                const ruleP = document.createElement('div');
+                ruleP.className = 'muted-text small-note';
+                ruleP.textContent = [s.formation || s.compositionRule, s.example ? `Ej.: ${s.example}` : ''].filter(Boolean).join(' · ');
+
+                tile.append(head);
+                if (subLabel) tile.appendChild(nameP);
+                tile.append(soundP, ruleP);
+                grid.appendChild(tile);
+            });
+            resultBox.appendChild(grid);
+        }
+
+        if (Array.isArray(g.compositionRules) && g.compositionRules.length) {
+            const rulesTitle = document.createElement('h4');
+            rulesTitle.textContent = tUi('🧩 Composition & Formation Rules', '🧩 Reglas de Composición y Formación');
+            const ol = document.createElement('ol');
+            ol.className = 'alphabet-rules-list';
+            g.compositionRules.forEach((r) => {
+                const li = document.createElement('li');
+                if (r && typeof r === 'object') {
+                    const hdr = document.createElement('strong');
+                    hdr.textContent = [r.rule, r.pattern ? `[${r.pattern}]` : ''].filter(Boolean).join(' ');
+                    const body = document.createElement('div');
+                    body.className = 'muted-text small-note';
+                    body.textContent = [r.explanation, r.examples ? `Ej.: ${r.examples}` : ''].filter(Boolean).join(' · ');
+                    li.append(hdr, body);
+                } else {
+                    li.textContent = String(r || '');
+                }
+                ol.appendChild(li);
+            });
+            resultBox.append(rulesTitle, ol);
+        }
+
+        if (Array.isArray(g.soundTips) && g.soundTips.length) {
+            const tipsTitle = document.createElement('h4');
+            tipsTitle.textContent = tUi('🗣️ Pronunciation Tips', '🗣️ Consejos de Pronunciación');
+            const ul = document.createElement('ul');
+            ul.className = 'alphabet-rules-list';
+            g.soundTips.forEach((t) => {
+                const li = document.createElement('li');
+                li.textContent = String(t || '');
+                ul.appendChild(li);
+            });
+            resultBox.append(tipsTitle, ul);
+        }
+
+        if (Array.isArray(g.practiceExercises) && g.practiceExercises.length) {
+            const exTitle = document.createElement('h4');
+            exTitle.textContent = tUi('📝 Guided Practice', '📝 Práctica Guiada');
+            const ulEx = document.createElement('ul');
+            ulEx.className = 'alphabet-rules-list';
+            g.practiceExercises.forEach((p) => {
+                const li = document.createElement('li');
+                if (p && typeof p === 'object') {
+                    const pr = document.createElement('strong');
+                    pr.textContent = p.prompt || '';
+                    const ans = document.createElement('div');
+                    ans.className = 'muted-text small-note';
+                    ans.textContent = p.answer ? `✔️ ${p.answer}` : '';
+                    li.append(pr, ans);
+                } else {
+                    li.textContent = String(p || '');
+                }
+                ulEx.appendChild(li);
+            });
+            resultBox.append(exTitle, ulEx);
+        }
+    }
+
+    async function saveGuideToWord(dataPayload, { interactiveKeyPrompt = true } = {}) {
+        const payloads = dataPayload?.wordPayloads;
+        if (!payloads) return false;
+        const llaveTexto = interactiveKeyPrompt
+            ? await solicitarLlaveE2EEAsync()
+            : obtenerLlaveE2EE();
+        if (!llaveTexto) return false;
+
+        if (payloads.alphabetEntry) {
+            await submitMutationRequest({
+                url: '/api/send-english',
+                method: 'POST',
+                scopeKey: `english:alphabet:${payloads.alphabetEntry.language_code || 'ko'}`,
+                signature: `${payloads.alphabetEntry.title}:${payloads.alphabetEntry.symbols_table?.length || 0}`,
+                buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(payloads.alphabetEntry), llaveTexto) })
+            });
+        }
+        if (payloads.notesEntry) {
+            await submitMutationRequest({
+                url: '/api/send-english',
+                method: 'POST',
+                scopeKey: `english:alphabet_note:${payloads.notesEntry.language_code || 'ko'}`,
+                signature: `${payloads.notesEntry.title}:${payloads.notesEntry.notes?.length || 0}`,
+                buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(payloads.notesEntry), llaveTexto) })
+            });
+        }
+        return true;
+    }
+
+    async function loadOfflinePreview(langCode) {
+        const res = await resilientFetchJson(
+            `/api/language/alphabet-guide?language=${encodeURIComponent(langCode || 'ko')}`,
+            { method: 'GET' },
+            { timeoutMs: 25000 }
+        );
+        if (res.ok && res.data?.guide) {
+            lastGuidePayload = null;
+            renderGuide({ ...res.data, usedGemini: false });
+        }
+    }
+
+    btnGen?.addEventListener('click', () => {
+        const language = langSelect?.value || 'ko';
+        const mode = modeSelect?.value || 'auto';
+        const customFocus = (focusInput?.value || '').trim();
+
+        runWithButtonLock(btnGen, async () => {
+            setStatus('', '');
+            if (resultBox) resultBox.replaceChildren(createLoadingBanner(tUi('Generating alphabet & composition rules with AI...', 'Generando alfabeto y reglas de composición con IA...'), 'sm'));
+
+            const resp = await resilientFetchJson('/api/language/alphabet-guide', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ language, mode, customFocus })
+            }, { timeoutMs: 55000 });
+
+            if (!resp.ok || !resp.data) {
+                setStatus('err', resp.errorMessage || tUi('Could not generate alphabet guide.', 'No se pudo generar la guía del alfabeto.'));
+                await loadOfflinePreview(language);
+                return;
+            }
+
+            lastGuidePayload = resp.data;
+            renderGuide({
+                ...resp.data,
+                guide: {
+                    title: resp.data.title,
+                    overview: resp.data.overview,
+                    symbols: resp.data.symbols,
+                    compositionRules: resp.data.compositionRules,
+                    soundTips: resp.data.soundTips,
+                    practiceExercises: resp.data.practiceExercises
+                }
+            });
+            if (btnSave) btnSave.disabled = false;
+
+            if (chkAutoSave?.checked) {
+                try {
+                    const saved = await saveGuideToWord(lastGuidePayload, { interactiveKeyPrompt: false });
+                    if (saved) {
+                        setStatus('ok', tUi(
+                            `Saved into Notes & Section 6 (${resp.data.languageSectionLabel || resp.data.language}) in your Word notebook.`,
+                            `Guardado en Notas y en la Sección 6 (${resp.data.languageSectionLabel || resp.data.language}) de tu cuaderno Word.`
+                        ));
+                        showToast('ok', tUi('Alphabet guide saved to Word & Notes!', '¡Guía de alfabeto guardada en Word y Notas!'));
+                    } else {
+                        setStatus('ok', tUi(
+                            'Guide generated! Click "Save to Notes & Word Notebook" to enter your E2EE key and save it.',
+                            '¡Guía generada! Pulsa "Guardar en Notas y Cuaderno Word" para guardar con tu llave privada.'
+                        ));
+                    }
+                } catch (err) {
+                    setStatus('err', err.message);
+                }
+            }
+        }, { loadingText: tUi('Generating...', 'Generando...') });
+    });
+
+    btnSave?.addEventListener('click', () => {
+        if (!lastGuidePayload) return;
+        runWithButtonLock(btnSave, async () => {
+            try {
+                const saved = await saveGuideToWord(lastGuidePayload, { interactiveKeyPrompt: true });
+                if (saved) {
+                    setStatus('ok', tUi('Alphabet & composition rules saved to Notes and Word notebook!', '¡Alfabeto y reglas de composición guardados en Notas y Cuaderno Word!'));
+                    showToast('ok', tUi('Saved to Word notebook!', '¡Guardado en el cuaderno Word!'));
+                }
+            } catch (err) {
+                setStatus('err', err.message);
+                showToast('err', err.message);
+            }
+        }, { loadingText: tUi('Saving...', 'Guardando...') });
+    });
+
+    btnView?.addEventListener('click', () => {
+        const lang = langSelect?.value || 'ko';
+        if (typeof window.openStudyNotebookViewer === 'function') {
+            window.openStudyNotebookViewer({ defaultLanguage: lang });
+        } else {
+            document.getElementById('btnOpenStudyViewer')?.click();
+        }
+    });
+
+    langSelect?.addEventListener('change', () => {
+        if (btnSave) btnSave.disabled = true;
+        loadOfflinePreview(langSelect.value);
+    });
+
+    loadOfflinePreview(langSelect?.value || 'ko');
 }
 
 let cachedLanguageMemory = { terms: [], grammarNotes: [], songs: [], customContext: '' };
@@ -4303,7 +5097,7 @@ function initLanguageAiStudio() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: query, question: query, language, mode, songTitle, artistName })
-            }, { timeoutMs: 28000, externalSignal: signal });
+            }, { timeoutMs: 55000, externalSignal: signal });
 
             if (resp.aborted || !langAiTracker.isCurrent(seq)) return;
 
@@ -4476,7 +5270,7 @@ function initLanguageAiStudio() {
                     artistName,
                     mode
                 })
-            }, { timeoutMs: 28000, externalSignal: signal });
+            }, { timeoutMs: 55000, externalSignal: signal });
 
             if (resp.aborted || !musicAiTracker.isCurrent(seq)) return;
 
@@ -4678,7 +5472,7 @@ function initLanguageAiStudio() {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({})
-                        }, { timeoutMs: 25000 });
+                        }, { timeoutMs: 50000 });
                         if (!pRes.ok || !pRes.data?.practice) {
                             showToast('err', pRes.errorMessage || 'No se pudo generar la práctica.');
                             return;
@@ -4829,7 +5623,7 @@ function initLanguageAiStudio() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ targetText, spokenText, language: langCode })
-            }, { timeoutMs: 18000 });
+            }, { timeoutMs: 35000 });
 
             if (evalRes.ok && evalRes.data && resultBox) {
                 const d = evalRes.data;
@@ -9733,1085 +10527,6 @@ function renderAgendaBoard() {
     const corner = document.createElement('div');
     corner.className = 'agenda-corner-cell';
     corner.textContent = tUi('Block / Day', 'Bloque / Día');
-    weekBoard.appendChild(corner);
-
-    diasVisibles.forEach(dia => {
-        const header = document.createElement('div');
-        header.className = `agenda-day-header day-${dia.key}${dia.fecha === hoyStr ? ' is-today' : ''}`;
-        const dayNameLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaDayName === 'function')
-            ? window.DailyHubI18n.agendaDayName(dia.nombre, false)
-            : dia.nombre;
-        const dateLabel = dia.dateObj.toLocaleDateString(tLocale(), { month: 'short', day: 'numeric' });
-        header.innerHTML = `
-                    <span class="agenda-day-name">${dayNameLoc}</span>
-                    <span class="agenda-day-date">${dateLabel}${dia.fecha === hoyStr ? tUi(' · Today', ' · Hoy') : ''}</span>
-                `;
-        weekBoard.appendChild(header);
-    });
-
-    AGENDA_BLOQUES.forEach(bloque => {
-        const bloqueLabelLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaBlockLabel === 'function')
-            ? window.DailyHubI18n.agendaBlockLabel(bloque.id)
-            : bloque.label;
-        const blockHeader = document.createElement('div');
-        blockHeader.className = 'agenda-block-header';
-        blockHeader.innerHTML = `
-                    ${bloque.svg}
-                    <span class="agenda-block-title">${bloqueLabelLoc}</span>
-                `;
-        weekBoard.appendChild(blockHeader);
-
-        diasVisibles.forEach(dia => {
-            const cell = document.createElement('div');
-            cell.className = `agenda-cell day-${dia.key}`;
-
-            const list = document.createElement('div');
-            list.className = 'agenda-items-list';
-
-            const cellItems = filteredItems.filter(
-                i => i.fecha === dia.fecha && i.bloque === bloque.id
-            );
-
-            appendCategorizedAgendaItems(list, cellItems);
-
-            const addBtn = document.createElement('button');
-            addBtn.type = 'button';
-            addBtn.className = 'agenda-cell-add';
-            addBtn.textContent = tUi('+ Add', '+ Agregar');
-            addBtn.addEventListener('click', () => abrirAgendaModal({
-                fecha: dia.fecha,
-                bloque: bloque.id,
-                hora: bloque.defaultHora,
-                categoria: defaultModalCategory,
-                tipo: defaultModalType
-            }));
-
-            cell.append(list, addBtn);
-            weekBoard.appendChild(cell);
-        });
-    });
-}
-
-function cargarAgendaSemana() {
-    ensureAcademicPlannerLoaded();
-    const monday = getMondayOfOffset(agendaState.weekOffset);
-    const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
-    const begin = formatLocalDate(monday);
-    const end = formatLocalDate(sunday);
-    const reqToken = agendaLoadTracker.begin();
-    const fetchOpts = reqToken.signal ? { signal: reqToken.signal } : {};
-
-    const diasVisibles = getVisibleAgendaDays();
-    const weekLabel = document.getElementById('agendaWeekLabel');
-    if (weekLabel && diasVisibles.length > 0) {
-        const f1 = diasVisibles[0].dateObj.toLocaleDateString(tLocale(), { day: 'numeric', month: 'short' });
-        const f2 = diasVisibles[diasVisibles.length - 1].dateObj.toLocaleDateString(tLocale(), { day: 'numeric', month: 'short', year: 'numeric' });
-        weekLabel.textContent = `${f1} - ${f2}`;
-    }
-
-    const weekStats = document.getElementById('agendaWeekStats');
-    if (weekStats) {
-        weekStats.textContent = tUi('Loading activities...', 'Cargando actividades...');
-    }
-
-    const beginMs = Date.parse(`${begin}T00:00:00Z`);
-    const isHistoricalRange = Number.isFinite(beginMs) && (Date.now() - beginMs) > (28 * 24 * 60 * 60 * 1000);
-    const loadingBanner = document.getElementById('agendaLoadingBanner');
-    if (loadingBanner) {
-        loadingBanner.replaceChildren(createLoadingBanner(
-            isHistoricalRange
-                ? tUi('Loading older agenda records (may take a moment longer)...', 'Cargando agenda de fechas anteriores (puede tardar un poco más)...')
-                : tUi('Loading agenda...', 'Cargando agenda...'),
-            'sm'
-        ));
-        loadingBanner.hidden = false;
-    }
-
-    fetch(`/api/get-agenda?begin=${begin}&end=${end}`, fetchOpts)
-        .then(res => {
-            if (!res.ok) return res.text().then(t => { throw new Error(t); });
-            return res.json();
-        })
-        .then(items => {
-            if (!agendaLoadTracker.isCurrent(reqToken.seq)) return;
-            if (loadingBanner) {
-                loadingBanner.hidden = true;
-                loadingBanner.innerHTML = '';
-            }
-            agendaState.items = Array.isArray(items) ? items : [];
-            renderAgendaBoard();
-        })
-        .catch(err => {
-            if (isAbortError(err) || !agendaLoadTracker.isCurrent(reqToken.seq)) return;
-            console.error('Error loading agenda:', err);
-            if (loadingBanner) {
-                loadingBanner.hidden = true;
-                loadingBanner.innerHTML = '';
-            }
-            agendaState.items = [];
-            renderAgendaBoard();
-            if (weekStats) {
-                weekStats.textContent = tUi('Could not load agenda (check RegistrosAgenda table in DB).', 'No se pudo cargar la agenda (revisa la tabla RegistrosAgenda en la BD).');
-            }
-        });
-}
-
-function shiftYmdDateClient(ymd, deltaDays = 0) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || '').trim())) return '';
-    const [y, m, d] = String(ymd).trim().split('-').map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d + (Number(deltaDays) || 0)));
-    return dt.toISOString().slice(0, 10);
-}
-
-function getMondayYmdForDateClient(ymd) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || '').trim())) return '';
-    const [y, m, d] = String(ymd).trim().split('-').map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    const day = dt.getUTCDay();
-    const diffToMonday = day === 0 ? -6 : 1 - day;
-    const monday = new Date(Date.UTC(y, m - 1, d + diffToMonday));
-    return monday.toISOString().slice(0, 10);
-}
-
-function computeWeekOffsetForDate(ymd, todayDate = new Date()) {
-    const targetMon = getMondayYmdForDateClient(ymd);
-    if (!targetMon) return 0;
-    const todayYmd = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
-    const todayMon = getMondayYmdForDateClient(todayYmd);
-    const [ty, tm, td] = targetMon.split('-').map(Number);
-    const [ny, nm, nd] = todayMon.split('-').map(Number);
-    const diffMs = Date.UTC(ty, tm - 1, td) - Date.UTC(ny, nm - 1, nd);
-    return Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
-}
-
-function buildMonthCalendarMatrix(year, monthIndex) {
-    const firstUtc = new Date(Date.UTC(year, monthIndex, 1));
-    const firstDow = firstUtc.getUTCDay(); // 0=Sun..6=Sat
-    const mondayOffset = firstDow === 0 ? -6 : 1 - firstDow;
-    const lastUtc = new Date(Date.UTC(year, monthIndex + 1, 0));
-    const daysInMonth = lastUtc.getUTCDate();
-    const totalNeeded = Math.abs(mondayOffset) + daysInMonth;
-    const totalCells = totalNeeded > 35 ? 42 : 35;
-    const cells = [];
-    for (let i = 0; i < totalCells; i += 1) {
-        const dt = new Date(Date.UTC(year, monthIndex, 1 + mondayOffset + i));
-        const ymd = dt.toISOString().slice(0, 10);
-        cells.push({
-            ymd,
-            dayNum: dt.getUTCDate(),
-            inMonth: dt.getUTCFullYear() === firstUtc.getUTCFullYear() && dt.getUTCMonth() === firstUtc.getUTCMonth(),
-            weekday: dt.getUTCDay()
-        });
-    }
-    return cells;
-}
-
-function computeAgendaRepeatDates({
-    startDate = '',
-    mode = 'none',
-    intervalDays = 2,
-    weekdays = [],
-    endMode = 'count',
-    countExtra = 3,
-    untilDate = ''
-} = {}) {
-    const cleanStart = String(startDate || '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanStart)) return [];
-    const normalizedMode = String(mode || 'none').trim().toLowerCase();
-    if (normalizedMode === 'none') return [cleanStart];
-
-    const dates = [cleanStart];
-    const seen = new Set(dates);
-    const maxTotal = 30;
-    const safeExtra = Math.max(1, Math.min(29, Number.parseInt(countExtra, 10) || 1));
-    const safeUntil = /^\d{4}-\d{2}-\d{2}$/.test(String(untilDate || '').trim())
-        ? String(untilDate).trim()
-        : '';
-
-    if (normalizedMode === 'weekdays') {
-        const [sy, sm, sd] = cleanStart.split('-').map(Number);
-        const startDt = new Date(Date.UTC(sy, sm - 1, sd));
-        const selectedDays = new Set(
-            Array.isArray(weekdays) && weekdays.length > 0
-                ? weekdays.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6)
-                : [startDt.getUTCDay()]
-        );
-        if (selectedDays.size === 0) selectedDays.add(startDt.getUTCDay());
-
-        for (let offset = 1; offset <= 365 && dates.length < maxTotal; offset += 1) {
-            if (endMode !== 'until' && (dates.length - 1) >= safeExtra) break;
-            const probe = new Date(Date.UTC(sy, sm - 1, sd + offset));
-            const ymd = probe.toISOString().slice(0, 10);
-            if (endMode === 'until' && safeUntil && ymd > safeUntil) break;
-            if (selectedDays.has(probe.getUTCDay()) && !seen.has(ymd)) {
-                seen.add(ymd);
-                dates.push(ymd);
-            }
-        }
-        return dates;
-    }
-
-    const stepDays = normalizedMode === 'daily'
-        ? 1
-        : normalizedMode === 'weekly'
-            ? 7
-            : Math.max(1, Math.min(90, Number.parseInt(intervalDays, 10) || 1));
-
-    const [sy, sm, sd] = cleanStart.split('-').map(Number);
-    for (let occ = 1; occ <= maxTotal && dates.length < maxTotal; occ += 1) {
-        if (endMode !== 'until' && (dates.length - 1) >= safeExtra) break;
-        const probe = new Date(Date.UTC(sy, sm - 1, sd + (occ * stepDays)));
-        const ymd = probe.toISOString().slice(0, 10);
-        if (endMode === 'until' && safeUntil && ymd > safeUntil) break;
-        if (!seen.has(ymd)) {
-            seen.add(ymd);
-            dates.push(ymd);
-        }
-    }
-    return dates;
-}
-
-function toggleAgendaItem(item, ui = {}, targetEstado = null) {
-    const prevEstado = getAgendaItemStatus(item);
-    const nextEstado = targetEstado && ['todo', 'in_progress', 'done', 'skipped'].includes(targetEstado)
-        ? targetEstado
-        : nextAgendaStatus(prevEstado);
-    const nuevoCompletada = nextEstado === 'done' ? 1 : 0;
-    const lockBtn = ui.checkBtn || ui.statusSelect || ui.skipBtn || ui.row || document.createElement('button');
-
-    runWithButtonLock(lockBtn, async () => {
-        try {
-            await submitMutationRequest({
-                url: `/api/toggle-agenda/${item.id}`,
-                method: 'PATCH',
-                scopeKey: `agenda-toggle:${item.id}`,
-                signature: nextEstado,
-                buildBody: () => ({ estado: nextEstado, completada: nuevoCompletada }),
-                parseJson: true
-            });
-            item.estado = nextEstado;
-            item.completada = nuevoCompletada;
-            renderAgendaBoard();
-            if (typeof refreshOpenAgendaHeaderCalendar === 'function') refreshOpenAgendaHeaderCalendar();
-            cargarRecordatoriosActivos();
-            const movedLabel = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaStatusLabel === 'function')
-                ? window.DailyHubI18n.agendaStatusLabel(nextEstado)
-                : (nextEstado === 'done'
-                    ? tUi('Done', 'Completado')
-                    : nextEstado === 'skipped'
-                        ? tUi('Skipped', 'Omitida (Skip)')
-                        : nextEstado === 'in_progress'
-                            ? tUi('In Progress', 'En progreso')
-                            : tUi('To Do', 'Por hacer'));
-            showToast('ok', tUi(`Activity moved to ${movedLabel}.`, `Actividad movida a ${movedLabel}.`));
-        } catch (err) {
-            if (ui.statusSelect) ui.statusSelect.value = prevEstado;
-            showToast('err', `${tUi('Failed to update activity status', 'Error al actualizar el estado de la actividad')}: ${tServer(err.message)}`);
-        }
-    }, { extraDisable: [ui.row, ui.checkBtn, ui.statusSelect, ui.postponeBtn, ui.skipBtn, ui.editBtn, ui.delBtn] });
-}
-
-function posponerAgendaItem(item, { days = null, targetDate = '' } = {}, lockEl = null) {
-    if (!item || !item.id) return Promise.resolve(false);
-    const lockBtn = lockEl || document.createElement('button');
-    const bodyPayload = targetDate
-        ? { targetDate: String(targetDate).trim() }
-        : { days: Number.parseInt(days, 10) };
-    return runWithButtonLock(lockBtn, async () => {
-        try {
-            const respData = await submitMutationRequest({
-                url: `/api/postpone-agenda/${item.id}`,
-                method: 'PATCH',
-                scopeKey: `agenda-postpone:${item.id}`,
-                signature: JSON.stringify(bodyPayload),
-                buildBody: () => bodyPayload,
-                parseJson: true
-            });
-            const newFecha = respData?.fecha || targetDate || shiftYmdDateClient(item.fecha, days);
-            const popover = document.getElementById('agendaPostponePopover');
-            if (popover) popover.hidden = true;
-            if (newFecha) agendaState.selectedDate = newFecha;
-            cargarAgendaSemana();
-            if (typeof refreshOpenAgendaHeaderCalendar === 'function') refreshOpenAgendaHeaderCalendar();
-            cargarRecordatoriosActivos();
-            showToast('ok', tUi(
-                `Activity postponed to ${newFecha}.`,
-                `Actividad pospuesta al ${newFecha}.`
-            ));
-            return true;
-        } catch (err) {
-            showToast('err', `${tUi('Failed to postpone activity', 'Error al posponer la actividad')}: ${tServer(err.message)}`);
-            return false;
-        }
-    });
-}
-
-async function eliminarAgendaItem(id, ui = {}) {
-    const ok = await openConfirmDialog({
-        title: tUi('Delete Activity?', '¿Eliminar actividad?'),
-        message: tUi('Remove this activity permanently from your Weekly Agenda?', '¿Quitar esta actividad permanentemente de tu Agenda Semanal?'),
-        confirmText: tUi('Delete', 'Eliminar'),
-        danger: true
-    });
-    if (!ok) return;
-
-    const lockBtn = ui.delBtn || ui.row || document.createElement('button');
-    runWithButtonLock(lockBtn, async () => {
-        try {
-            await submitMutationRequest({
-                url: `/api/delete-agenda/${id}`,
-                method: 'DELETE',
-                scopeKey: `agenda-delete:${id}`,
-                signature: String(id),
-                parseJson: true
-            });
-            agendaState.items = agendaState.items.filter(i => i.id !== id);
-            renderAgendaBoard();
-            if (typeof refreshOpenAgendaHeaderCalendar === 'function') refreshOpenAgendaHeaderCalendar();
-            cargarRecordatoriosActivos();
-            showToast('ok', tUi('Activity removed from Weekly Agenda.', 'Actividad eliminada de tu Agenda Semanal.'));
-        } catch (err) {
-            showToast('err', `${tUi('Failed to delete activity', 'Error al eliminar la actividad')}: ${tServer(err.message)}`);
-        }
-    }, { extraDisable: [ui.row, ui.checkBtn, ui.statusSelect, ui.postponeBtn, ui.skipBtn, ui.editBtn] });
-}
-
-const agendaModal = document.getElementById('agendaModal');
-const agendaForm = document.getElementById('agendaForm');
-
-let agendaOriginalSnapshot = null;
-
-function inferAgendaBlockClient(horaStr, categoria = 'personal') {
-    const m = /^(\d{2}):(\d{2})/.exec(String(horaStr || '').trim());
-    if (!m) return 'manana';
-    const hour = Number(m[1]);
-    if (categoria === 'universidad' && hour >= 7 && hour < 17) return 'cole';
-    if (hour >= 5 && hour < 12) return 'manana';
-    if (hour >= 12 && hour < 19) return 'tarde';
-    return 'noche';
-}
-
-function splitAgendaActividadClient(rawActividad, explicitTitulo = '', explicitDesc = '') {
-    const tExp = String(explicitTitulo || '').trim();
-    const dExp = String(explicitDesc || '').trim();
-    if (tExp) return { titulo: tExp, descripcion: dExp };
-    const clean = String(rawActividad || '').trim();
-    if (!clean) return { titulo: '', descripcion: '' };
-    const sepIdx = clean.indexOf(' — ');
-    if (sepIdx > 0) {
-        return {
-            titulo: clean.slice(0, sepIdx).trim(),
-            descripcion: clean.slice(sepIdx + 3).trim()
-        };
-    }
-    return { titulo: clean, descripcion: '' };
-}
-
-function composeAgendaActividadClient(titulo, descripcion) {
-    const t = String(titulo || '').replace(/\s+/g, ' ').trim();
-    const d = String(descripcion || '').replace(/\s+/g, ' ').trim();
-    if (!t) return d;
-    if (!d) return t;
-    return `${t} — ${d}`.slice(0, 255);
-}
-
-function syncAgendaBlockFromTimeUI() {
-    const horaEl = document.getElementById('agendaHora');
-    const catEl = document.getElementById('agendaCategoria');
-    const bloqueEl = document.getElementById('agendaBloque');
-    const hintEl = document.getElementById('agendaBloqueAutoHint');
-    if (!horaEl || !bloqueEl || !horaEl.value) return;
-    const autoBlock = inferAgendaBlockClient(horaEl.value, catEl ? catEl.value : 'personal');
-    bloqueEl.value = autoBlock;
-    if (hintEl) {
-        const blockLabels = {
-            manana: tUi('☕ Morning', '☕ Mañana'),
-            cole: tUi('🎓 School / University', '🎓 Escuela / Universidad'),
-            tarde: tUi('☀️ Afternoon', '☀️ Tarde'),
-            noche: tUi('🌙 Night', '🌙 Noche')
-        };
-        hintEl.textContent = tUi(
-            `Auto-selected ${blockLabels[autoBlock] || autoBlock} from ${horaEl.value.slice(0, 5)}`,
-            `Auto-seleccionado ${blockLabels[autoBlock] || autoBlock} por hora ${horaEl.value.slice(0, 5)}`
-        );
-    }
-}
-
-function syncAgendaMateriaFieldUI(preferredCourseId = null, preferredCourseName = '') {
-    const groupEl = document.getElementById('agendaMateriaGroup');
-    const selectEl = document.getElementById('agendaMateriaId');
-    const hintEl = document.getElementById('agendaMateriaHint');
-    const catEl = document.getElementById('agendaCategoria');
-    const tipoEl = document.getElementById('agendaTipo');
-    if (!groupEl || !selectEl) return;
-
-    const isUniversity = (catEl ? catEl.value : 'personal') === 'universidad';
-    if (!isUniversity) {
-        groupEl.hidden = true;
-        selectEl.value = '';
-        return;
-    }
-
-    groupEl.hidden = false;
-    const targetId = preferredCourseId !== null && preferredCourseId !== undefined
-        ? String(preferredCourseId).trim()
-        : String(selectEl.value || '').trim();
-    const courses = getActiveSemesterCourses();
-
-    selectEl.replaceChildren();
-    const defaultOpt = document.createElement('option');
-    defaultOpt.value = '';
-    defaultOpt.textContent = tUi('General University (no specific class)', 'Universidad general (sin clase específica)');
-    selectEl.appendChild(defaultOpt);
-
-    const seenIds = new Set();
-    courses.forEach(course => {
-        const cid = String(course?.id || '').trim();
-        const cname = String(course?.name || '').trim();
-        if (!cid || !cname || seenIds.has(cid)) return;
-        seenIds.add(cid);
-        const opt = document.createElement('option');
-        opt.value = cid;
-        protectUserNode(opt);
-        opt.textContent = `${course.code ? `${course.code} · ` : ''}${cname}${course.room ? ` (${course.room})` : ''}`;
-        selectEl.appendChild(opt);
-    });
-
-    if (targetId && !seenIds.has(targetId)) {
-        const archived = findPlannerCourseById(targetId);
-        const archName = archived?.name || String(preferredCourseName || '').trim() || targetId;
-        const optArch = document.createElement('option');
-        optArch.value = targetId;
-        protectUserNode(optArch);
-        optArch.textContent = `📚 ${archName}`;
-        selectEl.appendChild(optArch);
-    }
-
-    selectEl.value = targetId || '';
-
-    if (hintEl) {
-        const isTask = (tipoEl ? tipoEl.value : 'evento') === 'tarea';
-        if (courses.length === 0) {
-            hintEl.textContent = tUi(
-                'No classes in active semester yet — open Manage classes to add your schedule.',
-                'Aún no hay materias en tu semestre activo — abre Gestionar clases para agregar tu horario.'
-            );
-        } else if (isTask) {
-            hintEl.textContent = tUi(
-                'Links this university task to a current class so the card badge shows the class name.',
-                'Vincula esta tarea universitaria con una clase actual para que la etiqueta muestre el nombre de la clase.'
-            );
-        } else {
-            hintEl.textContent = tUi(
-                'Optional for university events (e.g. exam or lab) — hidden automatically for Personal items.',
-                'Opcional para eventos universitarios (ej. examen o laboratorio) — se oculta en actividades Personales.'
-            );
-        }
-    }
-}
-
-const agendaCalendarUiState = {
-    headerYear: new Date().getFullYear(),
-    headerMonth: new Date().getMonth(),
-    dotsByDate: {},
-    modalYear: new Date().getFullYear(),
-    modalMonth: new Date().getMonth(),
-    postponeItem: null,
-    postponeYear: new Date().getFullYear(),
-    postponeMonth: new Date().getMonth()
-};
-
-function formatShortHumanDateClient(ymd) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || '').trim())) return String(ymd || '');
-    const [y, m, d] = String(ymd).trim().split('-').map(Number);
-    const dt = new Date(y, m - 1, d);
-    return dt.toLocaleDateString(tLocale(), { day: 'numeric', month: 'short' });
-}
-
-function renderAgendaCalendarGrid(gridEl, {
-    year,
-    month,
-    selectedDate = '',
-    activeWeekDatesSet = null,
-    repeatDatesSet = null,
-    dotCountsByDate = null,
-    onSelectDate = null
-} = {}) {
-    if (!gridEl) return;
-    gridEl.replaceChildren();
-    const hoyStr = formatLocalDate(new Date());
-    const cells = buildMonthCalendarMatrix(year, month);
-    cells.forEach(cell => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'agenda-cal-day';
-        if (!cell.inMonth) btn.classList.add('is-other-month');
-        if (cell.ymd === hoyStr) btn.classList.add('is-today');
-        if (selectedDate && cell.ymd === selectedDate) btn.classList.add('is-selected');
-        if (activeWeekDatesSet && activeWeekDatesSet.has(cell.ymd)) btn.classList.add('is-in-week');
-        if (repeatDatesSet && repeatDatesSet.has(cell.ymd) && cell.ymd !== selectedDate) {
-            btn.classList.add('is-repeat-preview');
-        }
-        btn.dataset.date = cell.ymd;
-        btn.setAttribute('aria-label', cell.ymd);
-
-        const numSpan = document.createElement('span');
-        numSpan.className = 'agenda-cal-day-num';
-        numSpan.textContent = String(cell.dayNum);
-        btn.appendChild(numSpan);
-
-        const dotsInfo = dotCountsByDate ? dotCountsByDate[cell.ymd] : null;
-        if (dotsInfo && (dotsInfo.uni > 0 || dotsInfo.personal > 0 || dotsInfo.done > 0)) {
-            const dotsWrap = document.createElement('span');
-            dotsWrap.className = 'cal-dots';
-            if (dotsInfo.uni > 0) {
-                const dUni = document.createElement('i');
-                dUni.className = 'cal-dot is-uni';
-                dotsWrap.appendChild(dUni);
-            }
-            if (dotsInfo.personal > 0) {
-                const dPer = document.createElement('i');
-                dPer.className = 'cal-dot is-personal';
-                dotsWrap.appendChild(dPer);
-            }
-            if (dotsInfo.done > 0) {
-                const dDone = document.createElement('i');
-                dDone.className = 'cal-dot is-done';
-                dotsWrap.appendChild(dDone);
-            }
-            btn.appendChild(dotsWrap);
-        }
-
-        if (typeof onSelectDate === 'function') {
-            btn.addEventListener('click', () => onSelectDate(cell.ymd));
-        }
-        gridEl.appendChild(btn);
-    });
-}
-
-function getSelectedModalWeekdays() {
-    return Array.from(document.querySelectorAll('#agendaRepeatWeekdaysGroup .agenda-weekday-btn.active'))
-        .map(btn => Number.parseInt(btn.getAttribute('data-weekday'), 10))
-        .filter(n => Number.isInteger(n) && n >= 0 && n <= 6);
-}
-
-function getCurrentModalRepeatConfig() {
-    const startDate = document.getElementById('agendaFecha')?.value || formatLocalDate(new Date());
-    const mode = document.getElementById('agendaRepeatMode')?.value || 'none';
-    const intervalDays = Number.parseInt(document.getElementById('agendaRepetirCadaDias')?.value || '0', 10) || 1;
-    const endMode = document.getElementById('agendaRepeatEndMode')?.value || 'count';
-    const countExtra = Number.parseInt(document.getElementById('agendaRepetirVeces')?.value || '3', 10) || 1;
-    const untilDate = document.getElementById('agendaRepeatUntilDate')?.value || '';
-    const weekdays = getSelectedModalWeekdays();
-    return { startDate, mode, intervalDays, weekdays, endMode, countExtra, untilDate };
-}
-
-function renderAgendaModalCalendar() {
-    const box = document.getElementById('agendaModalCalendarBox');
-    const gridEl = document.getElementById('agendaModalCalGrid');
-    const labelEl = document.getElementById('agendaModalCalMonthLabel');
-    if (!box || box.hidden || !gridEl) return;
-
-    const monthDate = new Date(agendaCalendarUiState.modalYear, agendaCalendarUiState.modalMonth, 1);
-    if (labelEl) {
-        labelEl.textContent = monthDate.toLocaleDateString(tLocale(), { month: 'long', year: 'numeric' });
-    }
-    const cfg = getCurrentModalRepeatConfig();
-    const editId = document.getElementById('agendaEditId')?.value || '';
-    const repeatList = (!editId && cfg.mode !== 'none')
-        ? computeAgendaRepeatDates(cfg)
-        : [cfg.startDate];
-    const repeatDatesSet = new Set(repeatList);
-
-    renderAgendaCalendarGrid(gridEl, {
-        year: agendaCalendarUiState.modalYear,
-        month: agendaCalendarUiState.modalMonth,
-        selectedDate: cfg.startDate,
-        repeatDatesSet,
-        onSelectDate: (ymd) => {
-            const fechaEl = document.getElementById('agendaFecha');
-            if (fechaEl) {
-                fechaEl.value = ymd;
-                fechaEl.dispatchEvent(new Event('change'));
-            }
-            const [yy, mm] = ymd.split('-').map(Number);
-            agendaCalendarUiState.modalYear = yy;
-            agendaCalendarUiState.modalMonth = mm - 1;
-            updateAgendaRepeatPreviewUI();
-            renderAgendaModalCalendar();
-        }
-    });
-}
-
-function updateAgendaRepeatPreviewUI() {
-    const editId = document.getElementById('agendaEditId')?.value || '';
-    const repeatSection = document.getElementById('agendaRepeatSection');
-    const modeSel = document.getElementById('agendaRepeatMode');
-    const bodyEl = document.getElementById('agendaRepeatConfigBody');
-    const intervalGroup = document.getElementById('agendaRepeatIntervalGroup');
-    const intervalInput = document.getElementById('agendaRepetirCadaDias');
-    const weekdaysGroup = document.getElementById('agendaRepeatWeekdaysGroup');
-    const endModeSel = document.getElementById('agendaRepeatEndMode');
-    const countWrap = document.getElementById('agendaRepeatCountWrap');
-    const untilWrap = document.getElementById('agendaRepeatUntilWrap');
-    const summaryEl = document.getElementById('agendaRepeatSummaryPreview');
-
-    if (repeatSection) {
-        repeatSection.hidden = Boolean(editId);
-    }
-    if (!modeSel || editId) {
-        renderAgendaModalCalendar();
-        return;
-    }
-
-    const mode = modeSel.value || 'none';
-    if (bodyEl) bodyEl.hidden = mode === 'none';
-    if (intervalGroup) intervalGroup.hidden = mode !== 'interval';
-    if (weekdaysGroup) weekdaysGroup.hidden = mode !== 'weekdays';
-
-    if (mode === 'interval' && intervalInput && (Number(intervalInput.value) || 0) < 1) {
-        intervalInput.value = '2';
-    } else if (mode === 'none' && intervalInput) {
-        intervalInput.value = '0';
-    }
-
-    const endMode = endModeSel ? endModeSel.value : 'count';
-    if (countWrap) countWrap.hidden = endMode !== 'count';
-    if (untilWrap) untilWrap.hidden = endMode !== 'until';
-
-    const cfg = getCurrentModalRepeatConfig();
-    const dates = mode === 'none' ? [cfg.startDate] : computeAgendaRepeatDates(cfg);
-
-    if (summaryEl) {
-        if (mode === 'none' || dates.length <= 1) {
-            summaryEl.textContent = tUi(
-                `📅 Scheduled once on ${formatShortHumanDateClient(cfg.startDate)}.`,
-                `📅 Se programará una sola vez el ${formatShortHumanDateClient(cfg.startDate)}.`
-            );
-        } else {
-            const firstLabel = formatShortHumanDateClient(dates[0]);
-            const extraDates = dates.slice(1);
-            const shown = extraDates.slice(0, 6).map(formatShortHumanDateClient).join(', ');
-            const overflowNote = extraDates.length > 6
-                ? tUi(` (+${extraDates.length - 6} more)`, ` (+${extraDates.length - 6} más)`)
-                : '';
-            summaryEl.textContent = tUi(
-                `📅 Starts ${firstLabel} and repeats ${extraDates.length} more time(s): ${shown}${overflowNote}`,
-                `📅 Se creará el ${firstLabel} y se repetirá ${extraDates.length} veces más: ${shown}${overflowNote}`
-            );
-        }
-    }
-
-    renderAgendaModalCalendar();
-}
-
-function renderAgendaHeaderCalendar(fetchDots = false) {
-    const dropdown = document.getElementById('agendaCalendarDropdown');
-    const gridEl = document.getElementById('agendaCalGrid');
-    const labelEl = document.getElementById('agendaCalMonthLabel');
-    if (!dropdown || !gridEl) return;
-
-    const year = agendaCalendarUiState.headerYear;
-    const month = agendaCalendarUiState.headerMonth;
-    const monthDate = new Date(year, month, 1);
-    if (labelEl) {
-        labelEl.textContent = monthDate.toLocaleDateString(tLocale(), { month: 'long', year: 'numeric' });
-    }
-
-    const activeWeekSet = new Set(getVisibleAgendaDays().map(d => d.fecha));
-    const paintGrid = () => {
-        renderAgendaCalendarGrid(gridEl, {
-            year,
-            month,
-            selectedDate: agendaState.selectedDate,
-            activeWeekDatesSet: activeWeekSet,
-            dotCountsByDate: agendaCalendarUiState.dotsByDate,
-            onSelectDate: (ymd) => {
-                agendaState.weekOffset = computeWeekOffsetForDate(ymd);
-                agendaState.selectedDate = ymd;
-                cargarAgendaSemana();
-                dropdown.hidden = true;
-                const toggleBtn = document.getElementById('btnToggleAgendaCalendar');
-                if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
-            }
-        });
-    };
-
-    paintGrid();
-    if (fetchDots) {
-        const matrix = buildMonthCalendarMatrix(year, month);
-        const begin = matrix[0]?.ymd;
-        const end = matrix[matrix.length - 1]?.ymd;
-        if (begin && end) {
-            fetch(`/api/get-agenda?begin=${begin}&end=${end}`, { cache: 'no-store' })
-                .then(res => (res.ok ? res.json() : []))
-                .then(rows => {
-                    const dots = {};
-                    (Array.isArray(rows) ? rows : []).forEach(r => {
-                        if (!r || !r.fecha) return;
-                        if (!dots[r.fecha]) dots[r.fecha] = { uni: 0, personal: 0, done: 0 };
-                        const st = getAgendaItemStatus(r);
-                        if (st === 'done' || st === 'skipped') {
-                            dots[r.fecha].done += 1;
-                        } else if ((r.categoria || 'personal') === 'universidad') {
-                            dots[r.fecha].uni += 1;
-                        } else {
-                            dots[r.fecha].personal += 1;
-                        }
-                    });
-                    agendaCalendarUiState.dotsByDate = dots;
-                    if (!dropdown.hidden) paintGrid();
-                })
-                .catch(() => { });
-        }
-    }
-}
-
-function refreshOpenAgendaHeaderCalendar() {
-    const dropdown = document.getElementById('agendaCalendarDropdown');
-    if (dropdown && !dropdown.hidden) {
-        renderAgendaHeaderCalendar(true);
-    }
-}
-
-function renderPostponePopoverCalendar() {
-    const gridEl = document.getElementById('postponePopoverCalGrid');
-    const labelEl = document.getElementById('postponeCalMonthLabel');
-    const dateInput = document.getElementById('postponeTargetDateInput');
-    const item = agendaCalendarUiState.postponeItem;
-    if (!gridEl || !item) return;
-
-    const year = agendaCalendarUiState.postponeYear;
-    const month = agendaCalendarUiState.postponeMonth;
-    if (labelEl) {
-        labelEl.textContent = new Date(year, month, 1).toLocaleDateString(tLocale(), { month: 'long', year: 'numeric' });
-    }
-    const selectedDate = (dateInput && dateInput.value) || shiftYmdDateClient(item.fecha, 1);
-
-    renderAgendaCalendarGrid(gridEl, {
-        year,
-        month,
-        selectedDate,
-        onSelectDate: (ymd) => {
-            if (dateInput) dateInput.value = ymd;
-            posponerAgendaItem(item, { targetDate: ymd }, gridEl);
-        }
-    });
-}
-
-function openAgendaPostponePopover(item, anchorBtn) {
-    const popover = document.getElementById('agendaPostponePopover');
-    if (!popover || !item) return;
-
-    agendaCalendarUiState.postponeItem = item;
-    const tomorrowStr = shiftYmdDateClient(item.fecha, 1) || formatLocalDate(new Date());
-    const dateInput = document.getElementById('postponeTargetDateInput');
-    if (dateInput) dateInput.value = tomorrowStr;
-    const customInput = document.getElementById('postponeCustomDaysInput');
-    if (customInput) customInput.value = '4';
-
-    const titleEl = document.getElementById('postponePopoverTitle');
-    if (titleEl) {
-        const parsed = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
-        titleEl.textContent = `⏳ ${tUi('Postpone', 'Posponer')}: ${(parsed.titulo || item.actividad || '').slice(0, 26)}`;
-    }
-
-    const [yy, mm] = tomorrowStr.split('-').map(Number);
-    agendaCalendarUiState.postponeYear = yy;
-    agendaCalendarUiState.postponeMonth = mm - 1;
-    renderPostponePopoverCalendar();
-
-    popover.hidden = false;
-    const anchorRect = anchorBtn ? anchorBtn.getBoundingClientRect() : { left: 16, right: 16, top: 80, bottom: 100 };
-    const popRect = popover.getBoundingClientRect();
-    const popWidth = popRect.width || 290;
-    const popHeight = popRect.height || 340;
-    const vp = typeof getSafeViewportBounds === 'function'
-        ? getSafeViewportBounds()
-        : { width: window.innerWidth || 360, height: window.innerHeight || 640 };
-
-    let targetLeft = anchorRect.left - popWidth + 28;
-    if (targetLeft < 8) targetLeft = anchorRect.left;
-    let targetTop = anchorRect.bottom + 6;
-    if (targetTop + popHeight + 8 > vp.height) {
-        targetTop = anchorRect.top - popHeight - 6;
-    }
-    const clamped = typeof clampFixedElementCoords === 'function'
-        ? clampFixedElementCoords(popover, targetLeft, targetTop, 8)
-        : {
-            left: Math.round(Math.min(Math.max(8, targetLeft), Math.max(8, vp.width - popWidth - 8))),
-            top: Math.round(Math.min(Math.max(8, targetTop), Math.max(8, vp.height - popHeight - 8)))
-        };
-    popover.style.left = `${clamped.left}px`;
-    popover.style.top = `${clamped.top}px`;
-}
-
-function abrirAgendaModal(prefill = {}) {
-    if (!agendaModal || !agendaForm) return;
-    ensureAcademicPlannerLoaded();
-    const isEdit = Boolean(prefill.id);
-
-    const now = new Date();
-    const defaultDate = agendaState.layoutMode === 'day'
-        ? agendaState.selectedDate
-        : formatLocalDate(now);
-    const defaultTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
-    const resolvedFecha = prefill.fecha || defaultDate;
-    const resolvedHora = String(prefill.hora || defaultTime).slice(0, 5);
-    const resolvedCategoria = prefill.categoria === 'universidad'
-        ? 'universidad'
-        : prefill.categoria === 'personal'
-            ? 'personal'
-            : (agendaState.filterCategory !== 'all' ? agendaState.filterCategory : 'personal');
-    const resolvedBloque = prefill.bloque || inferAgendaBlockClient(resolvedHora, resolvedCategoria);
-    const splitAct = splitAgendaActividadClient(prefill.actividad, prefill.titulo, prefill.descripcion);
-    const resolvedTitulo = splitAct.titulo;
-    const resolvedDescripcion = splitAct.descripcion;
-    const resolvedActividad = composeAgendaActividadClient(resolvedTitulo, resolvedDescripcion);
-    const resolvedTipo = prefill.tipo === 'tarea' ? 'tarea' : 'evento';
-    const resolvedEstado = getAgendaItemStatus(prefill);
-    const resolvedRemMin = prefill.recordatorio_min !== undefined && prefill.recordatorio_min !== null && prefill.recordatorio_min !== ''
-        ? String(prefill.recordatorio_min)
-        : '';
-    const resolvedMateriaId = resolvedCategoria === 'universidad'
-        ? (prefill.materia_id
-            ? String(prefill.materia_id).trim()
-            : (!isEdit && agendaState.filterCourse && agendaState.filterCourse !== '__unlinked__' ? agendaState.filterCourse : ''))
-        : '';
-
-    document.getElementById('agendaModalTitle').textContent = isEdit
-        ? tUi('Edit Activity', 'Editar Actividad')
-        : tUi('New Activity', 'Nueva Actividad');
-    document.getElementById('agendaEditId').value = isEdit ? String(prefill.id) : '';
-    document.getElementById('agendaFecha').value = resolvedFecha;
-    document.getElementById('agendaBloque').value = resolvedBloque;
-    document.getElementById('agendaHora').value = resolvedHora;
-    document.getElementById('agendaActividad').value = resolvedTitulo;
-    const descInputEl = document.getElementById('agendaDescripcion');
-    if (descInputEl) descInputEl.value = resolvedDescripcion;
-
-    const tipoEl = document.getElementById('agendaTipo');
-    const catEl = document.getElementById('agendaCategoria');
-    const estadoEl = document.getElementById('agendaEstado');
-    const remEl = document.getElementById('agendaRecordatorioMin');
-    if (tipoEl) tipoEl.value = resolvedTipo;
-    if (catEl) catEl.value = resolvedCategoria;
-    if (estadoEl) estadoEl.value = resolvedEstado;
-    if (remEl) remEl.value = resolvedRemMin;
-
-    const subcatEl = document.getElementById('agendaSubcategoria');
-    const repeatModeEl = document.getElementById('agendaRepeatMode');
-    const repDiasEl = document.getElementById('agendaRepetirCadaDias');
-    const repVecesEl = document.getElementById('agendaRepetirVeces');
-    const repEndModeEl = document.getElementById('agendaRepeatEndMode');
-    const repUntilEl = document.getElementById('agendaRepeatUntilDate');
-    if (subcatEl) subcatEl.value = 'normal';
-    if (repeatModeEl) repeatModeEl.value = 'none';
-    if (repDiasEl) repDiasEl.value = '0';
-    if (repVecesEl) repVecesEl.value = '3';
-    if (repEndModeEl) repEndModeEl.value = 'count';
-    if (repUntilEl) repUntilEl.value = shiftYmdDateClient(resolvedFecha, 14);
-
-    // Preseleccionar día de la semana de la fecha base
-    const [ry, rm, rd] = String(resolvedFecha).split('-').map(Number);
-    const baseDow = new Date(Date.UTC(ry, rm - 1, rd)).getUTCDay();
-    document.querySelectorAll('#agendaRepeatWeekdaysGroup .agenda-weekday-btn').forEach(btn => {
-        const w = Number.parseInt(btn.getAttribute('data-weekday'), 10);
-        btn.classList.toggle('active', w === baseDow);
-    });
-
-    agendaCalendarUiState.modalYear = ry;
-    agendaCalendarUiState.modalMonth = rm - 1;
-    const modalCalBox = document.getElementById('agendaModalCalendarBox');
-    const modalCalToggleBtn = document.getElementById('btnToggleAgendaModalCalendar');
-    if (modalCalBox) modalCalBox.hidden = true;
-    if (modalCalToggleBtn) modalCalToggleBtn.setAttribute('aria-expanded', 'false');
-
-    syncAgendaMateriaFieldUI(resolvedMateriaId, prefill.materia_nombre || '');
-    updateAgendaRepeatPreviewUI();
-
-    const currentMateriaVal = resolvedCategoria === 'universidad'
-        ? (document.getElementById('agendaMateriaId')?.value || '')
-        : '';
-
-    agendaOriginalSnapshot = isEdit
-        ? {
-            fecha: resolvedFecha,
-            bloque: resolvedBloque,
-            hora: resolvedHora,
-            actividad: resolvedActividad.replace(/\s+/g, ' '),
-            tipo: resolvedTipo,
-            categoria: resolvedCategoria,
-            materia_id: currentMateriaVal,
-            estado: resolvedEstado,
-            recordatorio_min: resolvedRemMin
-        }
-        : null;
-
-    agendaModal.hidden = false;
-    setTimeout(() => document.getElementById('agendaActividad').focus(), 40);
-}
-
-function cerrarAgendaModal() {
-    agendaOriginalSnapshot = null;
-    if (agendaModal) agendaModal.hidden = true;
-}
-
-if (agendaForm) {
-    const btnOpenModal = document.getElementById('btnOpenAgendaModal');
-    const btnCloseModal = document.getElementById('btnCloseAgendaModal');
-    const btnCancelModal = document.getElementById('btnCancelAgenda');
-    const btnPrevWeek = document.getElementById('btnAgendaPrevWeek');
-    const btnNextWeek = document.getElementById('btnAgendaNextWeek');
-    const btnToday = document.getElementById('btnAgendaToday');
-    const btnToggleWeekend = document.getElementById('btnToggleWeekend');
-    const btnToggleLayout = document.getElementById('btnToggleAgendaLayout');
-
-    if (btnOpenModal) btnOpenModal.addEventListener('click', () => abrirAgendaModal());
-    if (btnCloseModal) btnCloseModal.addEventListener('click', cerrarAgendaModal);
-    if (btnCancelModal) btnCancelModal.addEventListener('click', cerrarAgendaModal);
-
-    if (agendaModal) {
-        agendaModal.addEventListener('click', (e) => {
-            if (e.target === agendaModal) cerrarAgendaModal();
-        });
-    }
-
-    if (btnPrevWeek) {
-        btnPrevWeek.addEventListener('click', () => {
-            agendaState.weekOffset -= 1;
-            cargarAgendaSemana();
-            refreshOpenAgendaHeaderCalendar();
-        });
-    }
-
-    if (btnNextWeek) {
-        btnNextWeek.addEventListener('click', () => {
-            agendaState.weekOffset += 1;
-            cargarAgendaSemana();
-            refreshOpenAgendaHeaderCalendar();
-        });
-    }
-
-    if (btnToday) {
-        btnToday.addEventListener('click', () => {
-            agendaState.weekOffset = 0;
-            agendaState.selectedDate = formatLocalDate(new Date());
-            cargarAgendaSemana();
-            refreshOpenAgendaHeaderCalendar();
-        });
-    }
-
-    // Calendario mensual desplegable en cabecera del planificador
-    const btnToggleCal = document.getElementById('btnToggleAgendaCalendar');
-    const headerCalDropdown = document.getElementById('agendaCalendarDropdown');
-    if (btnToggleCal && headerCalDropdown) {
-        btnToggleCal.addEventListener('click', () => {
-            const willOpen = headerCalDropdown.hidden;
-            headerCalDropdown.hidden = !willOpen;
-            btnToggleCal.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-            if (willOpen) {
-                const days = getVisibleAgendaDays();
-                const refDate = (days[0] && days[0].dateObj) || new Date();
-                agendaCalendarUiState.headerYear = refDate.getFullYear();
-                agendaCalendarUiState.headerMonth = refDate.getMonth();
-                renderAgendaHeaderCalendar(true);
-            }
-        });
-    }
-    document.getElementById('btnAgendaCalPrevMonth')?.addEventListener('click', () => {
-        const dt = new Date(agendaCalendarUiState.headerYear, agendaCalendarUiState.headerMonth - 1, 1);
-        agendaCalendarUiState.headerYear = dt.getFullYear();
-        agendaCalendarUiState.headerMonth = dt.getMonth();
-        renderAgendaHeaderCalendar(true);
-    });
-    document.getElementById('btnAgendaCalNextMonth')?.addEventListener('click', () => {
-        const dt = new Date(agendaCalendarUiState.headerYear, agendaCalendarUiState.headerMonth + 1, 1);
-        agendaCalendarUiState.headerYear = dt.getFullYear();
-        agendaCalendarUiState.headerMonth = dt.getMonth();
-        renderAgendaHeaderCalendar(true);
-    });
-    document.getElementById('btnAgendaCalToday')?.addEventListener('click', () => {
-        const nowDt = new Date();
-        agendaCalendarUiState.headerYear = nowDt.getFullYear();
-        agendaCalendarUiState.headerMonth = nowDt.getMonth();
-        agendaState.weekOffset = 0;
-        agendaState.selectedDate = formatLocalDate(nowDt);
-        cargarAgendaSemana();
-        renderAgendaHeaderCalendar(true);
-    });
-
-    // Controles del Popover Flotante de Posponer
-    const postponePopover = document.getElementById('agendaPostponePopover');
-    if (postponePopover) {
-        document.getElementById('btnClosePostponePopover')?.addEventListener('click', () => {
-            postponePopover.hidden = true;
-        });
-        postponePopover.querySelectorAll('[data-postpone-days]').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const days = Number.parseInt(btn.getAttribute('data-postpone-days'), 10);
-                if (agendaCalendarUiState.postponeItem && Number.isInteger(days)) {
-                    posponerAgendaItem(agendaCalendarUiState.postponeItem, { days }, btn);
-                }
-            });
-        });
-        document.getElementById('btnApplyPostponeCustomDays')?.addEventListener('click', (ev) => {
-            const daysVal = Number.parseInt(document.getElementById('postponeCustomDaysInput')?.value || '0', 10);
-            if (!Number.isInteger(daysVal) || daysVal <= 0 || daysVal > 365) {
-                showToast('err', tUi('Enter a valid number of days (1-365).', 'Ingresa una cantidad válida de días (1-365).'));
-                return;
-            }
-            if (agendaCalendarUiState.postponeItem) {
-                posponerAgendaItem(agendaCalendarUiState.postponeItem, { days: daysVal }, ev.currentTarget);
-            }
-        });
-        document.getElementById('btnApplyPostponeDate')?.addEventListener('click', (ev) => {
-            const targetDate = document.getElementById('postponeTargetDateInput')?.value || '';
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
-                showToast('err', tUi('Choose a valid date.', 'Elige una fecha válida.'));
-                return;
-            }
-            if (agendaCalendarUiState.postponeItem) {
-                posponerAgendaItem(agendaCalendarUiState.postponeItem, { targetDate }, ev.currentTarget);
-            }
-        });
-        document.getElementById('btnPostponeCalPrev')?.addEventListener('click', () => {
-            const dt = new Date(agendaCalendarUiState.postponeYear, agendaCalendarUiState.postponeMonth - 1, 1);
-            agendaCalendarUiState.postponeYear = dt.getFullYear();
-            agendaCalendarUiState.postponeMonth = dt.getMonth();
-            renderPostponePopoverCalendar();
-        });
-        document.getElementById('btnPostponeCalNext')?.addEventListener('click', () => {
-            const dt = new Date(agendaCalendarUiState.postponeYear, agendaCalendarUiState.postponeMonth + 1, 1);
-            agendaCalendarUiState.postponeYear = dt.getFullYear();
-            agendaCalendarUiState.postponeMonth = dt.getMonth();
-            renderPostponePopoverCalendar();
-        });
-        document.addEventListener('click', (ev) => {
-            if (!postponePopover.hidden && !postponePopover.contains(ev.target) && !ev.target.closest('.agenda-postpone-btn')) {
-                postponePopover.hidden = true;
-            }
-        });
-        document.addEventListener('keydown', (ev) => {
-            if (ev.key === 'Escape') {
-                if (!postponePopover.hidden) postponePopover.hidden = true;
-                const calDrop = document.getElementById('agendaCalendarDropdown');
-                if (calDrop && !calDrop.hidden) {
-                    calDrop.hidden = true;
-                    document.getElementById('btnToggleAgendaCalendar')?.setAttribute('aria-expanded', 'false');
-                }
-            }
-        });
-        const clampPostponeOnViewport = () => {
-            if (!postponePopover.hidden && typeof clampFloatingElementIntoViewport === 'function') {
-                clampFloatingElementIntoViewport(postponePopover, 8);
-            }
-        };
-        window.addEventListener('resize', clampPostponeOnViewport);
-        window.addEventListener('orientationchange', () => setTimeout(clampPostponeOnViewport, 80));
-    }
-
     // Controles de Posponer / Calendario y Repetición dentro del Modal
     document.querySelectorAll('#agendaModalQuickDateBar [data-shift-days]').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -13047,15 +12762,48 @@ function bindProofingSuite({ fields, badgeId, fixAllBtnId, listId }) {
     const evaluateSuite = () => {
         currentIssues = [];
         let hasText = false;
+        let combinedText = '';
         fields.forEach(f => {
             const el = document.getElementById(f.id);
             if (!el) return;
-            if (String(el.value || '').trim()) hasText = true;
+            const val = String(el.value || '');
+            if (val.trim()) {
+                hasText = true;
+                combinedText += ` ${val}`;
+            }
+            if (/[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\u3040-\u309F\u30A0-\u30FF]/.test(val)) {
+                return;
+            }
             const found = analyzeEnglishTextWordStyle(el.value, el, f.label);
             currentIssues.push(...found);
         });
 
         listEl.innerHTML = '';
+
+        if (badgeId === 'englishProofingBadge') {
+            const extraInputs = ['engWord', 'engGrammarTitle', 'engGrammarNotes', 'engNoteTitle', 'engNoteBody']
+                .map((id) => document.getElementById(id)?.value || '')
+                .join(' ');
+            const fullLangCheck = `${combinedText} ${extraInputs}`;
+            if (/[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]/.test(fullLangCheck)) {
+                badgeEl.className = 'proofing-status-badge is-ok';
+                badgeEl.textContent = tUi(
+                    '🇰🇷 Hangul / Korean detected — will save to Korean section',
+                    '🇰🇷 Hangul / Coreano detectado — se guardará en el apartado Coreano'
+                );
+                if (fixAllBtn) fixAllBtn.hidden = true;
+                return;
+            }
+            if (/[\u3040-\u309F\u30A0-\u30FF]/.test(fullLangCheck)) {
+                badgeEl.className = 'proofing-status-badge is-ok';
+                badgeEl.textContent = tUi(
+                    '🇯🇵 Japanese script detected — will save to Japanese section',
+                    '🇯🇵 Japonés detectado — se guardará en el apartado Japonés'
+                );
+                if (fixAllBtn) fixAllBtn.hidden = true;
+                return;
+            }
+        }
 
         if (!hasText) {
             badgeEl.className = 'proofing-status-badge is-ok';
@@ -13132,9 +12880,9 @@ function initWordStyleProofing() {
 
     bindProofingSuite({
         fields: [
-            { id: 'palabra', get label() { return tUi('Word', 'Palabra'); } },
-            { id: 'significado', get label() { return tUi('Meaning', 'Significado'); } },
-            { id: 'ejemplo', get label() { return tUi('Example', 'Ejemplo'); } }
+            { id: 'engWord', get label() { return tUi('Word', 'Palabra'); } },
+            { id: 'engSpanish', get label() { return tUi('Meaning', 'Significado'); } },
+            { id: 'engVocabExample', get label() { return tUi('Example', 'Ejemplo'); } }
         ],
         badgeId: 'englishProofingBadge',
         fixAllBtnId: 'btnEnglishFixAll',
@@ -15496,6 +15244,8 @@ function initStudyNotebookViewer() {
     const btnClose = document.getElementById('btnCloseStudyNotebookModal');
     const btnRefresh = document.getElementById('btnRefreshStudyViewer');
     const sectionSel = document.getElementById('studyViewerSectionFilter');
+    const nbLangSel = document.getElementById('studyViewerNotebookLangFilter');
+    const langAptBar = document.getElementById('studyViewerLanguageApartments');
     const artistSel = document.getElementById('studyViewerArtistFilter');
     const albumSel = document.getElementById('studyViewerAlbumFilter');
     const songSel = document.getElementById('studyViewerSongFilter');
@@ -15513,7 +15263,8 @@ function initStudyNotebookViewer() {
         offsetStack: [0],
         nextOffset: null,
         loading: false,
-        lastResult: null
+        lastResult: null,
+        nbLanguage: 'all'
     };
 
     const getSectionLabels = () => ({
@@ -15521,8 +15272,48 @@ function initStudyNotebookViewer() {
         grammar: tUi('2. Grammar', '2. Gramática'),
         phrasal_verb: tUi('3. Phrasal Verbs', '3. Phrasal Verbs'),
         music: tUi('4. Music & Lyrics', '4. Música y Letras'),
-        notes: tUi('5. Manual Notes', '5. Notas Manuales')
+        notes: tUi('5. Manual Notes', '5. Notas Manuales'),
+        alphabet: tUi('6. Alphabets & Rules', '6. Alfabetos y Reglas')
     });
+
+    const getLangApartmentMeta = (code = 'en') => {
+        const map = {
+            en: { label: tUi('🇺🇸 English Section', '🇺🇸 Apartado Inglés'), short: '🇺🇸 EN' },
+            ko: { label: tUi('🇰🇷 Korean Section (한국어)', '🇰🇷 Apartado Coreano (한국어)'), short: '🇰🇷 KO' },
+            ja: { label: tUi('🇯🇵 Japanese Section (日本語)', '🇯🇵 Apartado Japonés (日本語)'), short: '🇯🇵 JP' },
+            en_ko: { label: tUi('🎵 K-Pop Section (EN + KR)', '🎵 Apartado K-Pop (EN + KR)'), short: '🎵 K-Pop' },
+            en_ja: { label: tUi('🎌 J-Pop Section (EN + JP)', '🎌 Apartado J-Pop (EN + JP)'), short: '🎌 J-Pop' }
+        };
+        return map[code] || map.en;
+    };
+
+    function syncLanguageApartmentUi(activeCode = 'all', countsByLang = null) {
+        const safeCode = ['all', 'en', 'ko', 'ja', 'en_ko', 'en_ja'].includes(activeCode) ? activeCode : 'all';
+        viewerState.nbLanguage = safeCode;
+        if (nbLangSel && nbLangSel.value !== safeCode) nbLangSel.value = safeCode;
+        if (langAptBar) {
+            const baseNames = {
+                all: tUi('🌍 All', '🌍 Todos'),
+                en: tUi('🇺🇸 English', '🇺🇸 Inglés'),
+                ko: tUi('🇰🇷 Korean', '🇰🇷 Coreano'),
+                ja: tUi('🇯🇵 Japanese', '🇯🇵 Japonés'),
+                en_ko: '🎵 K-Pop',
+                en_ja: '🎌 J-Pop'
+            };
+            langAptBar.querySelectorAll('.study-viewer-lang-pill[data-nb-lang]').forEach((pill) => {
+                const code = pill.getAttribute('data-nb-lang') || 'all';
+                const isActive = code === safeCode;
+                pill.classList.toggle('active', isActive);
+                pill.setAttribute('aria-selected', String(isActive));
+                const base = baseNames[code] || code;
+                if (countsByLang && typeof countsByLang[code] === 'number') {
+                    pill.textContent = `${base} (${countsByLang[code]})`;
+                } else {
+                    pill.textContent = base;
+                }
+            });
+        }
+    }
 
     const getFieldLabels = () => ({
         focus_summary: tUi('Focus', 'Enfoque'),
@@ -15563,6 +15354,90 @@ function initStudyNotebookViewer() {
         });
     }
 
+    function buildEntryCard(entry, SECTION_LABELS, FIELD_LABELS) {
+        const card = document.createElement('article');
+        card.className = 'study-viewer-card';
+
+        const head = document.createElement('div');
+        head.className = 'study-viewer-card-head';
+
+        const title = document.createElement('h4');
+        title.textContent = entry.heading || entry.song || entry.title || tUi('Entry', 'Entrada');
+
+        const badgesWrap = document.createElement('div');
+        badgesWrap.className = 'study-viewer-card-badges';
+
+        const langBadge = document.createElement('span');
+        langBadge.className = 'study-viewer-lang-badge';
+        langBadge.textContent = getLangApartmentMeta(entry.languageCode || 'en').short;
+
+        const badge = document.createElement('span');
+        badge.className = 'english-badge';
+        badge.textContent = SECTION_LABELS[entry.section] || entry.section || tUi('Note', 'Nota');
+
+        badgesWrap.append(langBadge, badge);
+        head.append(title, badgesWrap);
+        card.appendChild(head);
+
+        if (entry.section === 'music') {
+            const metaLine = [entry.artist, entry.album, entry.language].filter(Boolean).join(' · ');
+            if (metaLine) {
+                const metaP = document.createElement('p');
+                metaP.className = 'study-viewer-meta muted-text';
+                metaP.textContent = metaLine;
+                card.appendChild(metaP);
+            }
+            const fields = entry.fields || {};
+            Object.entries(fields).forEach(([k, val]) => {
+                if (!val || SKIP_DETAIL_FIELDS.has(k)) return;
+                const block = document.createElement('details');
+                block.className = 'study-viewer-field';
+                if (k === 'lyrics_study' || k === 'focus_summary') block.open = true;
+
+                const sum = document.createElement('summary');
+                sum.textContent = FIELD_LABELS[k] || k;
+
+                block.appendChild(sum);
+                if (k === 'lyrics_study') {
+                    const lyricsBox = document.createElement('div');
+                    lyricsBox.className = 'lyrics-readonly-full-view';
+                    let activeCardLang = langSel?.value || 'all';
+                    const rerenderCardLyrics = (nextLang) => {
+                        activeCardLang = nextLang;
+                        renderLyricsSectionsIntoContainer(lyricsBox, String(val), activeCardLang, {
+                            onTabSelect: rerenderCardLyrics
+                        });
+                    };
+                    rerenderCardLyrics(activeCardLang);
+                    block.appendChild(lyricsBox);
+                } else {
+                    const pre = document.createElement('pre');
+                    pre.className = 'study-viewer-pre';
+                    pre.textContent = String(val);
+                    block.appendChild(pre);
+                }
+                card.appendChild(block);
+            });
+        } else {
+            const lines = Array.isArray(entry.lines) && entry.lines.length
+                ? entry.lines
+                : (entry.text ? [entry.text] : []);
+            if (lines.length) {
+                const pre = document.createElement('pre');
+                pre.className = 'study-viewer-pre';
+                pre.textContent = lines.join('\n');
+                card.appendChild(pre);
+            }
+            if (entry.added) {
+                const addedEl = document.createElement('p');
+                addedEl.className = 'study-viewer-meta muted-text';
+                addedEl.textContent = `${tUi('Added', 'Agregado')}: ${entry.added}`;
+                card.appendChild(addedEl);
+            }
+        }
+        return card;
+    }
+
     function renderEntries(data) {
         viewerState.lastResult = data || null;
         bodyEl.textContent = '';
@@ -15579,81 +15454,35 @@ function initStudyNotebookViewer() {
         }
         const SECTION_LABELS = getSectionLabels();
         const FIELD_LABELS = getFieldLabels();
+        const GROUP_ORDER = ['en', 'ko', 'ja', 'en_ko', 'en_ja'];
 
-        entries.forEach((entry) => {
-            const card = document.createElement('article');
-            card.className = 'study-viewer-card';
+        const buckets = new Map();
+        entries.forEach((e) => {
+            const code = GROUP_ORDER.includes(e.languageCode) ? e.languageCode : 'en';
+            if (!buckets.has(code)) buckets.set(code, []);
+            buckets.get(code).push(e);
+        });
 
-            const head = document.createElement('div');
-            head.className = 'study-viewer-card-head';
+        GROUP_ORDER.forEach((code) => {
+            const groupEntries = buckets.get(code);
+            if (!groupEntries || !groupEntries.length) return;
+            const grpWrap = document.createElement('section');
+            grpWrap.className = 'study-viewer-lang-group';
 
-            const title = document.createElement('h4');
-            title.textContent = entry.heading || entry.song || entry.title || tUi('Entry', 'Entrada');
+            const grpHead = document.createElement('div');
+            grpHead.className = 'study-viewer-lang-group-head';
+            const grpTitle = document.createElement('span');
+            grpTitle.textContent = getLangApartmentMeta(code).label;
+            const grpCount = document.createElement('span');
+            grpCount.className = 'muted-text small-note';
+            grpCount.textContent = `${groupEntries.length}`;
+            grpHead.append(grpTitle, grpCount);
+            grpWrap.appendChild(grpHead);
 
-            const badge = document.createElement('span');
-            badge.className = 'english-badge';
-            badge.textContent = SECTION_LABELS[entry.section] || entry.section || tUi('Note', 'Nota');
-
-            head.append(title, badge);
-            card.appendChild(head);
-
-            if (entry.section === 'music') {
-                const metaLine = [entry.artist, entry.album, entry.language].filter(Boolean).join(' · ');
-                if (metaLine) {
-                    const metaP = document.createElement('p');
-                    metaP.className = 'study-viewer-meta muted-text';
-                    metaP.textContent = metaLine;
-                    card.appendChild(metaP);
-                }
-                const fields = entry.fields || {};
-                Object.entries(fields).forEach(([k, val]) => {
-                    if (!val || SKIP_DETAIL_FIELDS.has(k)) return;
-                    const block = document.createElement('details');
-                    block.className = 'study-viewer-field';
-                    if (k === 'lyrics_study' || k === 'focus_summary') block.open = true;
-
-                    const sum = document.createElement('summary');
-                    sum.textContent = FIELD_LABELS[k] || k;
-
-                    block.appendChild(sum);
-                    if (k === 'lyrics_study') {
-                        const lyricsBox = document.createElement('div');
-                        lyricsBox.className = 'lyrics-readonly-full-view';
-                        let activeCardLang = langSel?.value || 'all';
-                        const rerenderCardLyrics = (nextLang) => {
-                            activeCardLang = nextLang;
-                            renderLyricsSectionsIntoContainer(lyricsBox, String(val), activeCardLang, {
-                                onTabSelect: rerenderCardLyrics
-                            });
-                        };
-                        rerenderCardLyrics(activeCardLang);
-                        block.appendChild(lyricsBox);
-                    } else {
-                        const pre = document.createElement('pre');
-                        pre.className = 'study-viewer-pre';
-                        pre.textContent = String(val);
-                        block.appendChild(pre);
-                    }
-                    card.appendChild(block);
-                });
-            } else {
-                const lines = Array.isArray(entry.lines) && entry.lines.length
-                    ? entry.lines
-                    : (entry.text ? [entry.text] : []);
-                if (lines.length) {
-                    const pre = document.createElement('pre');
-                    pre.className = 'study-viewer-pre';
-                    pre.textContent = lines.join('\n');
-                    card.appendChild(pre);
-                }
-                if (entry.added) {
-                    const addedEl = document.createElement('p');
-                    addedEl.className = 'study-viewer-meta muted-text';
-                    addedEl.textContent = `${tUi('Added', 'Agregado')}: ${entry.added}`;
-                    card.appendChild(addedEl);
-                }
-            }
-            bodyEl.appendChild(card);
+            groupEntries.forEach((entry) => {
+                grpWrap.appendChild(buildEntryCard(entry, SECTION_LABELS, FIELD_LABELS));
+            });
+            bodyEl.appendChild(grpWrap);
         });
     }
 
@@ -15665,17 +15494,17 @@ function initStudyNotebookViewer() {
             method: 'POST',
             buildBody: () => ({
                 encryptedRequest: encriptarTextoE2EE(JSON.stringify(payload), llaveTexto),
-                timeoutMs: 30000
+                timeoutMs: 35000
             }),
             parseJson: true,
-            timeoutMs: 12000
+            timeoutMs: 25000
         });
         if (!createResp?.jobId) return null;
         for (let i = 0; i < 3; i++) {
             const pollResp = await resilientFetchJson(
-                `/api/english/music/pc-jobs/${encodeURIComponent(createResp.jobId)}?waitMs=12000`,
+                `/api/english/music/pc-jobs/${encodeURIComponent(createResp.jobId)}?waitMs=15000`,
                 { method: 'GET' },
-                { timeoutMs: 16000 }
+                { timeoutMs: 28000 }
             );
             if (pollResp.ok && pollResp.data?.status === 'completed' && pollResp.data.encryptedResult) {
                 return JSON.parse(desencriptarTextoE2EE(pollResp.data.encryptedResult, llaveTexto));
@@ -15691,6 +15520,7 @@ function initStudyNotebookViewer() {
         if (statusBar) statusBar.textContent = tUi('Loading Word notebook (read-only)...', 'Cargando cuaderno Word (solo lectura)...');
         try {
             const sectionVal = sectionSel?.value || 'all';
+            const nbLangVal = nbLangSel?.value || viewerState.nbLanguage || 'all';
             const artistVal = artistSel?.value || '';
             const albumVal = albumSel?.value || '';
             const songVal = songSel?.value || '';
@@ -15698,6 +15528,7 @@ function initStudyNotebookViewer() {
 
             const params = new URLSearchParams();
             if (sectionVal && sectionVal !== 'all') params.set('section', sectionVal);
+            if (nbLangVal && nbLangVal !== 'all') params.set('language', nbLangVal);
             if (artistVal) params.set('artist', artistVal);
             if (albumVal) params.set('album', albumVal);
             if (songVal) params.set('song', songVal);
@@ -15712,7 +15543,7 @@ function initStudyNotebookViewer() {
                 const serverResp = await resilientFetchJson(
                     `/api/english/study-notebook?${params.toString()}`,
                     { method: 'GET' },
-                    { timeoutMs: 14000 }
+                    { timeoutMs: 30000 }
                 );
                 if (serverResp.ok && serverResp.data?.ok && serverResp.data.available) {
                     result = serverResp.data;
@@ -15731,6 +15562,7 @@ function initStudyNotebookViewer() {
                 const pcPayload = {
                     action: 'read_study_notebook',
                     section: sectionVal,
+                    language: nbLangVal,
                     artist: artistVal,
                     album: albumVal,
                     song: songVal,
@@ -15741,7 +15573,7 @@ function initStudyNotebookViewer() {
                     const serverRefresh = await resilientFetchJson(
                         `/api/english/study-notebook?${params.toString()}`,
                         { method: 'GET' },
-                        { timeoutMs: 18000 }
+                        { timeoutMs: 35000 }
                     );
                     if (serverRefresh.ok && serverRefresh.data?.ok && serverRefresh.data.available) {
                         result = serverRefresh.data;
@@ -15782,13 +15614,14 @@ function initStudyNotebookViewer() {
             populateSelectOptions(artistSel, result.facets?.artists || [], tUi('All artists', 'Todos los artistas'));
             populateSelectOptions(albumSel, result.facets?.albums || [], tUi('All albums', 'Todos los álbumes'));
             populateSelectOptions(songSel, result.facets?.songs || [], tUi('All songs', 'Todas las canciones'));
+            syncLanguageApartmentUi(nbLangVal, result.countsByLanguage || null);
             renderEntries(result);
 
             const counts = result.counts || {};
             if (statusBar) {
                 statusBar.textContent = tUi(
-                    `${sourceLabel} · Showing ${result.entries?.length || 0} of ${result.total || 0} results · Vocab: ${counts.vocabulary || 0} · Grammar: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Songs: ${counts.music || 0} · Notes: ${counts.notes || 0}`,
-                    `${sourceLabel} · Mostrando ${result.entries?.length || 0} de ${result.total || 0} resultados · Vocab: ${counts.vocabulary || 0} · Gramática: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Canciones: ${counts.music || 0} · Notas: ${counts.notes || 0}`
+                    `${sourceLabel} · Showing ${result.entries?.length || 0} of ${result.total || 0} results · Vocab: ${counts.vocabulary || 0} · Grammar: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Songs: ${counts.music || 0} · Notes: ${counts.notes || 0} · Alphabets: ${counts.alphabet || 0}`,
+                    `${sourceLabel} · Mostrando ${result.entries?.length || 0} de ${result.total || 0} resultados · Vocab: ${counts.vocabulary || 0} · Gramática: ${counts.grammar || 0} · Phrasal: ${counts.phrasal_verb || 0} · Canciones: ${counts.music || 0} · Notas: ${counts.notes || 0} · Alfabetos: ${counts.alphabet || 0}`
                 );
             }
             if (pagBar) {
@@ -15806,15 +15639,19 @@ function initStudyNotebookViewer() {
         }
     }
 
-    function openModal({ defaultSection = null } = {}) {
+    function openModal({ defaultSection = null, defaultLanguage = null } = {}) {
         if (defaultSection && sectionSel) {
             sectionSel.value = defaultSection;
+        }
+        if (defaultLanguage) {
+            syncLanguageApartmentUi(defaultLanguage, viewerState.lastResult?.countsByLanguage || null);
         }
         modal.hidden = false;
         viewerState.offsetStack = [0];
         viewerState.nextOffset = null;
         loadStudyPage(0);
     }
+    window.openStudyNotebookViewer = openModal;
 
     function closeModal() {
         modal.hidden = true;
@@ -15837,6 +15674,17 @@ function initStudyNotebookViewer() {
     };
     btnRefresh?.addEventListener('click', () => resetAndReload(true));
     sectionSel?.addEventListener('change', () => resetAndReload(false));
+    nbLangSel?.addEventListener('change', () => {
+        syncLanguageApartmentUi(nbLangSel.value, viewerState.lastResult?.countsByLanguage || null);
+        resetAndReload(false);
+    });
+    langAptBar?.querySelectorAll('.study-viewer-lang-pill[data-nb-lang]').forEach((pill) => {
+        pill.addEventListener('click', () => {
+            const nextLang = pill.getAttribute('data-nb-lang') || 'all';
+            syncLanguageApartmentUi(nextLang, viewerState.lastResult?.countsByLanguage || null);
+            resetAndReload(false);
+        });
+    });
     artistSel?.addEventListener('change', () => resetAndReload(false));
     albumSel?.addEventListener('change', () => resetAndReload(false));
     songSel?.addEventListener('change', () => resetAndReload(false));

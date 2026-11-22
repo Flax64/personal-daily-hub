@@ -21,7 +21,9 @@ const {
 const {
     RECOMMENDED_GEMINI_MODELS,
     DEFAULT_CURRICULUM_LESSONS,
+    ALPHABET_COMPOSITION_GUIDES,
     getLanguageRegistry,
+    getLanguageSectionMeta,
     normalizeStudyLanguage,
     validateGeminiModelId,
     hangulToRomanization,
@@ -40,6 +42,7 @@ const {
     translateLyricsToSpanishWithGemini,
     getAvailableGeminiModelsForUser,
     generatePracticalLessonForWord,
+    generateAlphabetGuideWithAi,
     evaluatePronunciation,
     testGeminiConnection,
     stripAiSpanishLyricsSection,
@@ -2624,7 +2627,7 @@ async function runWithDocxLock(lockName, taskFn) {
         withMySqlAdvisoryLock({
             pool: db,
             lockName,
-            timeoutSec: 25,
+            timeoutSec: 40,
             taskFn,
             onWarn: (msg) => serverLogger.warn('DOCX_LOCK', msg, { replicaId: REPLICA_ID, lockName })
         })
@@ -8130,7 +8133,7 @@ function updateStudyNotebookCacheFromBuffer(docxBuffer, source = 'word', diskMet
     return parsed;
 }
 
-async function getStudyNotebookDataForUser({ forceRefresh = false } = {}) {
+async function getStudyNotebookDataForUser({ forceRefresh = false, fastLocalOnly = false } = {}) {
     if (
         !forceRefresh
         && studyNotebookCache.parsed
@@ -8164,6 +8167,10 @@ async function getStudyNotebookDataForUser({ forceRefresh = false } = {}) {
         return null;
     };
 
+    if (fastLocalOnly) {
+        return readLocalMirror() || studyNotebookCache.parsed || null;
+    }
+
     const probeRclone = resolveRcloneConfigPath({ preferStudy: true });
     const hasConfiguredRclone = Boolean(probeRclone?.confPath && fs.existsSync(probeRclone.confPath));
     if (probeRclone?.cleanup && probeRclone.confPath && fs.existsSync(probeRclone.confPath)) {
@@ -8196,7 +8203,7 @@ async function getStudyNotebookDataForUser({ forceRefresh = false } = {}) {
                 const lsRaw = await serverNotesService.runRcloneCommand({
                     rcloneConf,
                     args: ['lsjson', remoteTarget],
-                    timeout: 15000
+                    timeout: 7000
                 });
                 const entries = JSON.parse(String(lsRaw || '[]'));
                 if (!Array.isArray(entries) || entries.length === 0) {
@@ -8222,7 +8229,7 @@ async function getStudyNotebookDataForUser({ forceRefresh = false } = {}) {
             await serverNotesService.runRcloneCommand({
                 rcloneConf,
                 args: ['copyto', '--retries', '1', remoteTarget, tmpDocxPath],
-                timeout: 25000
+                timeout: 15000
             });
             const buf = fs.readFileSync(tmpDocxPath);
             if (buf.length < 64 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
@@ -8321,7 +8328,8 @@ app.get('/api/english/study-notebook', apiReadLimiter.middleware, requireAdmin, 
                 total: 0,
                 offset: 0,
                 nextOffset: null,
-                counts: { total: 0, vocabulary: 0, grammar: 0, phrasal_verb: 0, music: 0, notes: 0 },
+                counts: { total: 0, vocabulary: 0, grammar: 0, phrasal_verb: 0, music: 0, notes: 0, alphabet: 0 },
+                countsByLanguage: { all: 0, en: 0, ko: 0, ja: 0, en_ko: 0, en_ja: 0 },
                 facets: { artists: [], albums: [], songs: [] },
                 entries: []
             });
@@ -8329,6 +8337,7 @@ app.get('/api/english/study-notebook', apiReadLimiter.middleware, requireAdmin, 
         syncNotebookSongsOrderToMysql(parsedBase, req.user.id).catch(() => {});
         const filtered = filterStudyNotebookData(parsedBase, {
             section: req.query.section,
+            language: req.query.language,
             artist: req.query.artist,
             album: req.query.album,
             song: req.query.song,
@@ -9205,6 +9214,51 @@ app.post('/api/language/romanize', apiReadLimiter.middleware, requireAdmin, requ
     });
 });
 
+app.get('/api/language/alphabet-guide', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
+    try {
+        const settings = await loadUserSettings(req.user.id);
+        const uiLang = req.headers['x-ui-lang'] === 'en' ? 'en' : 'es';
+        const language = normalizeStudyLanguage(req.query.language || settings.preferredStudyLanguage || 'ko');
+        const guide = ALPHABET_COMPOSITION_GUIDES[language] || ALPHABET_COMPOSITION_GUIDES.ko;
+        return res.json({
+            ok: true,
+            languageCode: language,
+            language: getLanguageSectionMeta(language, uiLang).label,
+            guide,
+            availableLanguages: Object.keys(ALPHABET_COMPOSITION_GUIDES)
+        });
+    } catch (err) {
+        console.error('[ALPHABET_GUIDE_GET_ERR]', err.message);
+        return res.status(500).send('Error loading alphabet & composition guide.');
+    }
+});
+
+app.post('/api/language/alphabet-guide', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
+    try {
+        const settings = await loadUserSettings(req.user.id);
+        const uiLang = req.headers['x-ui-lang'] === 'en' ? 'en' : 'es';
+        const language = normalizeStudyLanguage(req.body.language || settings.preferredStudyLanguage || 'ko');
+        const customFocus = String(req.body.customFocus || req.body.focus || '').trim().slice(0, 500);
+        const mode = String(req.body.mode || 'auto').trim().toLowerCase();
+        const apiKey = String(settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
+        const model = validateGeminiModelId(req.body.model || settings.geminiModel);
+
+        const result = await generateAlphabetGuideWithAi({
+            apiKey,
+            model,
+            language,
+            customFocus,
+            mode,
+            learningMemory: settings.languageMemory,
+            uiLang
+        });
+        return res.json(result);
+    } catch (err) {
+        console.error('[ALPHABET_GUIDE_POST_ERR]', err.message);
+        return res.status(500).send('Error generating AI alphabet & composition guide.');
+    }
+});
+
 async function loadUserRepertoireForAi(uid) {
     try {
         const [songs, songArtists] = await Promise.all([
@@ -9328,7 +9382,7 @@ app.post('/api/language/analyze', apiWriteLimiter.middleware, requireAdmin, requ
             : null;
         let notebookMatch = null;
         if (!ramHit && !exactMemHit && !forceRefresh && !question && mode !== 'offline') {
-            const notebookData = await getStudyNotebookDataForUser();
+            const notebookData = await getStudyNotebookDataForUser({ fastLocalOnly: true });
             if (notebookData && notebookData.ok) {
                 notebookMatch = findNotebookTranslationMatch(notebookData, {
                     text,
@@ -9602,7 +9656,7 @@ app.post('/api/language/translate', apiWriteLimiter.middleware, requireAdmin, re
             : null;
         let notebookMatch = null;
         if (!cachedTrans && !exactMemHit && !forceRefresh && mode !== 'offline' && cacheableTransDirs.includes(direction)) {
-            const notebookData = await getStudyNotebookDataForUser();
+            const notebookData = await getStudyNotebookDataForUser({ fastLocalOnly: true });
             if (notebookData && notebookData.ok) {
                 notebookMatch = findNotebookTranslationMatch(notebookData, { text, mode: 'text' });
             }
@@ -9799,7 +9853,7 @@ app.post('/api/english/music/translate-lyrics', apiWriteLimiter.middleware, requ
         } else {
             let nbMatch = null;
             if (!forceRefresh && mode !== 'offline') {
-                const notebookData = await getStudyNotebookDataForUser();
+                const notebookData = await getStudyNotebookDataForUser({ fastLocalOnly: true });
                 if (notebookData && notebookData.ok) {
                     nbMatch = findNotebookTranslationMatch(notebookData, {
                         text: baseLyrics,
