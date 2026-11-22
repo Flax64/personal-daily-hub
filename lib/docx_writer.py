@@ -507,9 +507,149 @@ def _texto_parrafo_ooxml(p_elem: ET.Element) -> str:
     return "".join(chunks).replace("\r", "").strip()
 
 
+_RE_TOC_STYLE_ID = re.compile(
+    r"^(?:toc\s*\d*|tocheading|tabla\s*de\s*contenido.*|indice\s*\d*|índice\s*\d*|tdc\s*\d*)$",
+    re.IGNORECASE,
+)
+
+
+def _es_titulo_toc_ingles(el: ET.Element) -> bool:
+    if el.tag != _w_tag("p"):
+        return False
+    return _texto_parrafo_ooxml(el).strip().lower() in (
+        "table of contents",
+        "tabla de contenido",
+        "índice",
+        "indice",
+    )
+
+
+def _es_elemento_residuo_toc_ingles(el: ET.Element, estilo_ids: dict | None = None) -> bool:
+    if el.tag == _w_tag("sdt"):
+        full_instr = " ".join(it.text or "" for it in el.iter(_w_tag("instrText"))).upper()
+        if "TOC" in full_instr or "PAGEREF" in full_instr:
+            return True
+        val_attr = _w_tag("val")
+        for g in el.iter(_w_tag("docPartGallery")):
+            gval = g.attrib.get(val_attr, "").strip().lower()
+            if "table of contents" in gval or "tabla de contenido" in gval:
+                return True
+        for p in el.iter(_w_tag("p")):
+            if _es_titulo_toc_ingles(p) or _es_elemento_residuo_toc_ingles(p, estilo_ids):
+                return True
+        return False
+
+    if el.tag != _w_tag("p"):
+        return False
+
+    val_attr = _w_tag("val")
+    toc_style_ids = set()
+    if estilo_ids:
+        for k in ("toc_1", "toc_2", "toc_3"):
+            v = str(estilo_ids.get(k) or "").strip().lower()
+            if v:
+                toc_style_ids.add(v)
+
+    ppr = el.find(_w_tag("pPr"))
+    if ppr is not None:
+        pstyle_el = ppr.find(_w_tag("pStyle"))
+        if pstyle_el is not None:
+            sid = pstyle_el.attrib.get(val_attr, "").strip()
+            if _RE_TOC_STYLE_ID.match(sid) or sid.lower() in toc_style_ids:
+                return True
+
+    for it in el.iter(_w_tag("instrText")):
+        upper = (it.text or "").upper()
+        if any(tok in upper for tok in ("TOC", "PAGEREF", "_TOC", "BOOKMARK=ID")):
+            return True
+
+    for hl in el.iter(_w_tag("hyperlink")):
+        for aval in hl.attrib.values():
+            low_a = str(aval or "").lower()
+            if "_toc" in low_a or "bookmark=id" in low_a:
+                return True
+
+    if any(True for _ in el.iter(_w_tag("fldChar"))):
+        return True
+
+    low_txt = _texto_parrafo_ooxml(el).lower()
+    if any(
+        marker in low_txt
+        for marker in (
+            "content not found",
+            "#bookmark=id",
+            "bookmark=id.",
+            "error! bookmark not defined",
+            "¡error! marcador no definido",
+        )
+    ):
+        return True
+    return False
+
+
+def _tiene_marcador_toc_roto(el: ET.Element) -> bool:
+    for hl in el.iter(_w_tag("hyperlink")):
+        for aval in hl.attrib.values():
+            if "bookmark=id" in str(aval or "").lower():
+                return True
+    low_txt = _texto_parrafo_ooxml(el).lower()
+    return any(
+        marker in low_txt
+        for marker in (
+            "content not found",
+            "#bookmark=id",
+            "bookmark=id.",
+            "error! bookmark not defined",
+            "¡error! marcador no definido",
+        )
+    )
+
+
+def _es_heading_real_para_corte_toc(el: ET.Element, style_levels: dict | None = None) -> bool:
+    if el.tag != _w_tag("p"):
+        return False
+    if _es_elemento_residuo_toc_ingles(el) or _es_titulo_toc_ingles(el):
+        return False
+    val_attr = _w_tag("val")
+    ppr = el.find(_w_tag("pPr"))
+    if ppr is None:
+        return False
+    pstyle_el = ppr.find(_w_tag("pStyle"))
+    if pstyle_el is not None:
+        sid = pstyle_el.attrib.get(val_attr, "")
+        if style_levels and sid in style_levels and style_levels[sid] in (1, 2, 3):
+            return True
+        if re.search(r"heading\s*[1-3]|t[ií]tulo\s*[1-3]", sid.lower()):
+            return True
+    lvl_el = ppr.find(_w_tag("outlineLvl"))
+    if lvl_el is not None:
+        try:
+            lvl = int(lvl_el.attrib.get(val_attr, "-1")) + 1
+            if 1 <= lvl <= 3:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 def _nivel_parrafo_ooxml(p_elem: ET.Element, style_levels: dict) -> int:
     val_attr = _w_tag("val")
     ppr = p_elem.find(_w_tag("pPr"))
+    if ppr is not None:
+        pstyle_el = ppr.find(_w_tag("pStyle"))
+        if pstyle_el is not None:
+            sid = pstyle_el.attrib.get(val_attr, "").strip()
+            if _RE_TOC_STYLE_ID.match(sid):
+                return 0
+    for it in p_elem.iter(_w_tag("instrText")):
+        upper = (it.text or "").upper()
+        if "TOC" in upper or "PAGEREF" in upper:
+            return 0
+    for hl in p_elem.iter(_w_tag("hyperlink")):
+        for aval in hl.attrib.values():
+            low_a = str(aval or "").lower()
+            if "_toc" in low_a or "bookmark=id" in low_a:
+                return 0
     if ppr is None:
         return 0
     pstyle_el = ppr.find(_w_tag("pStyle"))
@@ -684,28 +824,54 @@ def _indice_sectpr(body: ET.Element) -> int:
 
 def _encontrar_rango_toc(body_children: list[ET.Element]):
     p_tag = _w_tag("p")
+    sdt_tag = _w_tag("sdt")
     fld_tag = _w_tag("fldChar")
     instr_tag = _w_tag("instrText")
     ftype_attr = _w_tag("fldCharType")
+    val_attr = _w_tag("val")
 
     for idx, child in enumerate(body_children):
-        if child.tag == _w_tag("sdt"):
+        if child.tag == sdt_tag:
             full_txt = " ".join(t.text or "" for t in child.iter(instr_tag))
-            if "TOC" in full_txt.upper():
+            has_toc_gallery = any(
+                "table of contents" in (g.attrib.get(val_attr, "")).lower()
+                or "tabla de contenido" in (g.attrib.get(val_attr, "")).lower()
+                for g in child.iter(_w_tag("docPartGallery"))
+            )
+            if re.search(r"\bTOC\b", full_txt, re.IGNORECASE) or has_toc_gallery:
                 return (idx, idx + 1)
 
-    toc_start = None
+    depth = 0
     in_toc = False
+    pending_start = None
+    toc_start = None
+
     for idx, child in enumerate(body_children):
         if child.tag != p_tag:
             continue
-        has_toc_instr = any("TOC" in (it.text or "").upper() for it in child.iter(instr_tag))
-        fld_types = [fc.attrib.get(ftype_attr, "") for fc in child.iter(fld_tag)]
-        if has_toc_instr and not in_toc:
-            toc_start = idx
-            in_toc = True
-        if in_toc and "end" in fld_types:
-            return (toc_start, idx + 1)
+        if in_toc and _es_heading_real_para_corte_toc(child):
+            return (toc_start, idx)
+        for elem in child.iter():
+            if elem.tag == fld_tag:
+                ftype = elem.attrib.get(ftype_attr, "")
+                if ftype == "begin":
+                    depth += 1
+                    if not in_toc and depth == 1:
+                        pending_start = idx
+                elif ftype == "end":
+                    if depth > 0:
+                        depth -= 1
+                    if in_toc and depth == 0:
+                        return (toc_start, idx + 1)
+                    if not in_toc and depth == 0:
+                        pending_start = None
+            elif elem.tag == instr_tag and pending_start is not None:
+                instr_txt = elem.text or ""
+                if re.search(r"\bTOC\b", instr_txt, re.IGNORECASE) and "PAGEREF" not in instr_txt.upper():
+                    in_toc = True
+                    toc_start = pending_start
+    if in_toc and toc_start is not None:
+        return (toc_start, len(body_children))
     return None
 
 
@@ -962,23 +1128,136 @@ def _asegurar_bookmark_en_parrafo(p_elem: ET.Element, alloc_bm_fn) -> str:
     return bm_name
 
 
-def _reconstruir_toc_con_enlaces(body: ET.Element, style_levels: dict, estilo_ids: dict) -> None:
-    """Asegura marcadores _Toc en Heading 1..3 y reconstruye la TOC con hipervínculos para todas las secciones y canciones."""
+def _tiene_residuos_toc_corrupta(body: ET.Element, style_levels: dict, estilo_ids: dict) -> bool:
+    p_tag = _w_tag("p")
+    children = list(body)
+    first_h1_idx = next(
+        (
+            idx
+            for idx, child in enumerate(children)
+            if child.tag == p_tag
+            and _nivel_parrafo_ooxml(child, style_levels) == 1
+            and not _es_elemento_residuo_toc_ingles(child, estilo_ids)
+            and not _es_titulo_toc_ingles(child)
+        ),
+        None,
+    )
+    pre_limit = first_h1_idx if first_h1_idx is not None else _indice_sectpr(body)
+    pre_children = children[:pre_limit]
+    toc_range = _encontrar_rango_toc(pre_children)
+    toc_start, toc_end = toc_range if toc_range is not None else (-1, -1)
+
+    title_count = 0
+    for idx, el in enumerate(pre_children):
+        if _es_titulo_toc_ingles(el):
+            title_count += 1
+            if title_count > 1:
+                return True
+        if toc_start <= idx < toc_end:
+            if _tiene_marcador_toc_roto(el):
+                return True
+            if el.tag == _w_tag("sdt"):
+                for p in el.iter(p_tag):
+                    if _tiene_marcador_toc_roto(p):
+                        return True
+        elif _es_elemento_residuo_toc_ingles(el, estilo_ids):
+            return True
+    return False
+
+
+def _reconstruir_toc_con_enlaces(body: ET.Element, style_levels: dict, estilo_ids: dict) -> dict:
+    """Asegura marcadores _Toc en Heading 1..3 y reconstruye una única TOC limpia auto-sanando residuos previos al primer H1."""
     p_tag = _w_tag("p")
     bm_start_tag = _w_tag("bookmarkStart")
     id_attr = _w_tag("id")
     name_attr = _w_tag("name")
 
+    children = list(body)
+    sect_idx = _indice_sectpr(body)
+    first_h1_idx = next(
+        (
+            idx
+            for idx in range(sect_idx)
+            if children[idx].tag == p_tag
+            and _nivel_parrafo_ooxml(children[idx], style_levels) == 1
+            and not _es_elemento_residuo_toc_ingles(children[idx], estilo_ids)
+            and not _es_titulo_toc_ingles(children[idx])
+        ),
+        None,
+    )
+    pre_limit = first_h1_idx if first_h1_idx is not None else sect_idx
+    pre_children = children[:pre_limit]
+    toc_range = _encontrar_rango_toc(pre_children)
+    toc_start, toc_end = toc_range if toc_range is not None else (-1, -1)
+
+    toc_titles_seen = 0
+    blank_outside_count = 0
+    corrupted_removed = 0
+    seen_inside_toc = set()
+    to_remove = []
+
+    for idx, el in enumerate(pre_children):
+        in_main_toc = toc_start <= idx < toc_end
+        if in_main_toc:
+            to_remove.append(el)
+            if el.tag == _w_tag("sdt"):
+                for p in el.iter(p_tag):
+                    ptxt = _texto_parrafo_ooxml(p)
+                    if _tiene_marcador_toc_roto(p) or (ptxt and ptxt in seen_inside_toc):
+                        corrupted_removed += 1
+                    elif ptxt:
+                        seen_inside_toc.add(ptxt)
+            elif el.tag == p_tag:
+                ptxt = _texto_parrafo_ooxml(el)
+                if _tiene_marcador_toc_roto(el) or (ptxt and ptxt in seen_inside_toc):
+                    corrupted_removed += 1
+                elif ptxt:
+                    seen_inside_toc.add(ptxt)
+            continue
+
+        if _es_titulo_toc_ingles(el):
+            toc_titles_seen += 1
+            if toc_titles_seen > 1:
+                corrupted_removed += 1
+            to_remove.append(el)
+        elif _es_elemento_residuo_toc_ingles(el, estilo_ids):
+            corrupted_removed += 1
+            to_remove.append(el)
+        elif el.tag == p_tag and not _texto_parrafo_ooxml(el) and not _elemento_tiene_contenido_no_textual(el):
+            blank_outside_count += 1
+            to_remove.append(el)
+
+    if blank_outside_count > 1 and (corrupted_removed > 0 or toc_titles_seen > 1 or toc_range is not None):
+        corrupted_removed += blank_outside_count - 1
+
+    for old_el in to_remove:
+        if old_el in body:
+            body.remove(old_el)
+
+    children = list(body)
+    sect_idx = _indice_sectpr(body)
+    first_h1_after = next(
+        (
+            i
+            for i in range(sect_idx)
+            if children[i].tag == p_tag
+            and _nivel_parrafo_ooxml(children[i], style_levels) == 1
+        ),
+        None,
+    )
+    body_scan_start = first_h1_after if first_h1_after is not None else 0
+
     max_id = 0
     max_toc_num = 245632084
-    for elem in body.iter():
-        if elem.tag == bm_start_tag:
-            raw_id = elem.attrib.get(id_attr, "")
-            if raw_id.isdigit():
-                max_id = max(max_id, int(raw_id))
-            bname = elem.attrib.get(name_attr, "")
-            if bname.startswith("_Toc") and bname[4:].isdigit():
-                max_toc_num = max(max_toc_num, int(bname[4:]))
+    for ch in children[body_scan_start:sect_idx]:
+        for elem in ch.iter():
+            if elem.tag == bm_start_tag:
+                raw_id = elem.attrib.get(id_attr, "")
+                if raw_id.isdigit():
+                    max_id = max(max_id, int(raw_id))
+                bname = elem.attrib.get(name_attr, "")
+                if bname.startswith("_Toc") and bname[4:].isdigit():
+                    max_toc_num = max(max_toc_num, int(bname[4:]))
 
     bm_state = [max_id, max_toc_num]
 
@@ -987,20 +1266,12 @@ def _reconstruir_toc_con_enlaces(body: ET.Element, style_levels: dict, estilo_id
         bm_state[1] += 1
         return bm_state[0], f"_Toc{bm_state[1]}"
 
-    children = list(body)
-    toc_range = _encontrar_rango_toc(children)
-    toc_start, toc_end = toc_range if toc_range is not None else (None, None)
-
     toc_entries = []
-    first_h1_idx = None
-    for idx, child in enumerate(children):
-        if toc_start is not None and toc_start <= idx < toc_end:
-            continue
+    for idx in range(body_scan_start, sect_idx):
+        child = children[idx]
         if child.tag != p_tag:
             continue
         lvl = _nivel_parrafo_ooxml(child, style_levels)
-        if lvl == 1 and first_h1_idx is None:
-            first_h1_idx = idx
         if lvl in (1, 2, 3):
             txt = _texto_parrafo_ooxml(child)
             if txt:
@@ -1030,27 +1301,17 @@ def _reconstruir_toc_con_enlaces(body: ET.Element, style_levels: dict, estilo_id
     end_p.append(r_end)
     new_toc_ps.append(end_p)
 
-    if toc_start is not None:
-        # Si el bloque TOC está envuelto en <w:sdt>, reemplazar el sdt completo con los párrafos actualizados
-        for old_el in children[toc_start:toc_end]:
-            body.remove(old_el)
-        for offset, new_el in enumerate(new_toc_ps):
-            body.insert(toc_start + offset, new_el)
-    else:
-        children = list(body)
-        # Evitar doble título "Table of Contents" si un .docx mínimo tenía el título sin campo TOC
-        pre_limit = first_h1_idx if first_h1_idx is not None else len(children)
-        for p_idx in range(pre_limit - 1, -1, -1):
-            el = children[p_idx]
-            if el.tag == p_tag and _texto_parrafo_ooxml(el).strip().lower() in ("table of contents", "tabla de contenido"):
-                body.remove(el)
-        children = list(body)
-        first_h1_after = next((i for i, ch in enumerate(children) if ch.tag == p_tag and _nivel_parrafo_ooxml(ch, style_levels) == 1), None)
-        insert_pos = first_h1_after if first_h1_after is not None else min(2, len(children))
-        toc_title_p = _crear_parrafo_texto(text="Table of Contents", font_size=13, bold_all=True)
-        block = [toc_title_p, *new_toc_ps, _w_el("p")]
-        for offset, new_el in enumerate(block):
-            body.insert(insert_pos + offset, new_el)
+    insert_pos = first_h1_after if first_h1_after is not None else min(2, sect_idx)
+    toc_title_p = _crear_parrafo_texto(text="Table of Contents", font_size=13, bold_all=True)
+    block = [toc_title_p, *new_toc_ps, _w_el("p")]
+    for offset, new_el in enumerate(block):
+        body.insert(insert_pos + offset, new_el)
+
+    return {
+        "corrupted_removed": corrupted_removed,
+        "toc_entries_count": len(toc_entries),
+        "toc_paragraphs_count": len(new_toc_ps),
+    }
 
 
 def _serializar_documento(doc_root: ET.Element, orig_xml_bytes: bytes) -> bytes:
@@ -2051,18 +2312,19 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
             for offset, el in enumerate(bloque):
                 body.insert(insert_pos + offset, el)
 
-    if deduplicated:
+    if deduplicated and not _tiene_residuos_toc_corrupta(body, style_levels, estilo_ids):
         return orig_bytes, {
             "category": spec["category"],
             "heading": spec["heading"],
             "language": spec.get("language", ""),
             "languageCode": spec.get("language_code", ""),
             "deduplicated": True,
+            "removedTocParagraphs": 0,
         }
 
     _reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
     _normalizar_saltos_pagina(body, style_levels)
-    _reconstruir_toc_con_enlaces(body, style_levels, estilo_ids)
+    toc_stats = _reconstruir_toc_con_enlaces(body, style_levels, estilo_ids)
     new_doc_bytes = _serializar_documento(doc_root, orig_doc_bytes)
     new_styles_bytes = _asegurar_estilos_headings_y_toc(orig_styles_bytes, estilo_ids)
 
@@ -2085,7 +2347,97 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
         "heading": spec["heading"],
         "language": spec.get("language", ""),
         "languageCode": spec.get("language_code", ""),
-        "deduplicated": False,
+        "deduplicated": deduplicated,
+        "removedTocParagraphs": toc_stats["corrupted_removed"],
+        "tocEntriesCount": toc_stats["toc_entries_count"],
+    }
+
+
+def _contar_entradas_y_secciones_english(body: ET.Element, style_levels: dict) -> tuple[dict, list[str]]:
+    toc_range = _encontrar_rango_toc(list(body))
+    counts = {cat: 0 for cat in SECCIONES_INGLES}
+    sections_present = []
+    p_tag = _w_tag("p")
+    sect_idx = _indice_sectpr(body)
+    for idx, child in enumerate(list(body)[:sect_idx]):
+        if toc_range and toc_range[0] <= idx < toc_range[1]:
+            continue
+        if child.tag == p_tag and _nivel_parrafo_ooxml(child, style_levels) == 1:
+            txt = _texto_parrafo_ooxml(child)
+            if txt:
+                sections_present.append(txt)
+
+    for cat in SECCIONES_INGLES:
+        sec_start, sec_end, items = _buscar_rango_seccion(body, style_levels, cat, toc_range)
+        if sec_start is None:
+            continue
+        if cat == "music":
+            groups = _agrupar_musica_desde_items(items, sec_start, sec_end)
+            counts["music"] = sum(len(g["tracks"]) for g in groups)
+        else:
+            counts[cat] = sum(1 for i in range(sec_start + 1, sec_end) if items[i][0] == 2 and items[i][1])
+    return counts, sections_present
+
+
+def repair_english_docx_bytes(orig_bytes: bytes) -> tuple[bytes, dict]:
+    """Repara en frío un English_Learning_Notebook.docx existente sin insertar entradas ficticias."""
+    if not orig_bytes:
+        raise ValueError("Se requieren bytes de un archivo English_Learning_Notebook.docx existente.")
+
+    with zipfile.ZipFile(io.BytesIO(orig_bytes), "r") as zin:
+        estilos = _ooxml_cargar_estilos_mapa(zin)
+        orig_doc_bytes = zin.read("word/document.xml")
+        orig_styles_bytes = zin.read("word/styles.xml") if "word/styles.xml" in zin.namelist() else None
+
+    style_levels = estilos["levels"]
+    estilo_ids = estilos["ids"]
+    doc_root = ET.fromstring(orig_doc_bytes)
+    body = doc_root.find(_w_tag("body"))
+    if body is None:
+        raise ValueError("word/document.xml sin elemento w:body")
+
+    _asegurar_secciones_y_final(body, style_levels, estilo_ids)
+    _reparar_encabezados_musica_huerfanos(body, style_levels, estilo_ids)
+    _normalizar_saltos_pagina(body, style_levels)
+    toc_stats = _reconstruir_toc_con_enlaces(body, style_levels, estilo_ids)
+
+    counts, sections_present = _contar_entradas_y_secciones_english(body, style_levels)
+    sections_low = [s.lower() for s in sections_present]
+    sections_intact = all(
+        any(h.startswith(pref) for h in sections_low)
+        for pref in _PREFIJOS_SECCION_INGLES.values()
+    )
+
+    new_doc_bytes = _serializar_documento(doc_root, orig_doc_bytes)
+    new_styles_bytes = _asegurar_estilos_headings_y_toc(orig_styles_bytes, estilo_ids)
+
+    out_buf = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(orig_bytes), "r") as zin, zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        has_styles = False
+        for info in zin.infolist():
+            if info.filename == "word/document.xml":
+                payload = new_doc_bytes
+            elif info.filename == "word/styles.xml":
+                payload = new_styles_bytes
+                has_styles = True
+            else:
+                payload = zin.read(info.filename)
+            zout.writestr(info, payload)
+        if not has_styles:
+            zout.writestr("word/styles.xml", new_styles_bytes)
+
+    return out_buf.getvalue(), {
+        "ok": True,
+        "repaired": True,
+        "removedTocParagraphs": toc_stats["corrupted_removed"],
+        "corruptedTocRemoved": toc_stats["corrupted_removed"],
+        "tocEntriesCount": toc_stats["toc_entries_count"],
+        "validTocEntries": toc_stats["toc_entries_count"],
+        "tocParagraphsCount": toc_stats["toc_paragraphs_count"],
+        "sectionsCount": len(sections_present),
+        "sectionsIntact": sections_intact,
+        "sections": sections_present,
+        "counts": counts,
     }
 
 
@@ -2968,25 +3320,38 @@ def main() -> int:
             pass
 
     mode = ""
+    cli_docx_path = ""
+    cli_no_backup = False
     args = sys.argv[1:]
     for i, a in enumerate(args):
         if a == "--mode" and i + 1 < len(args):
             mode = args[i + 1].strip().lower()
-    if mode not in ("english", "journal", "journal-inspect", "journal-verify"):
+        elif a == "--docx-path" and i + 1 < len(args):
+            cli_docx_path = args[i + 1].strip()
+        elif a == "--no-backup":
+            cli_no_backup = True
+    if mode not in ("english", "repair-english", "english-repair", "journal", "journal-inspect", "journal-verify"):
         print(
             json.dumps(
                 {
                     "ok": False,
                     "reason": "INVALID_MODE",
-                    "error": "Use --mode english|journal|journal-inspect|journal-verify",
+                    "error": "Use --mode english|repair-english|journal|journal-inspect|journal-verify",
                 }
             )
         )
         return 2
 
     try:
-        raw_stdin = sys.stdin.buffer.read().decode("utf-8") if hasattr(sys.stdin, "buffer") else sys.stdin.read()
-        payload = json.loads(raw_stdin or "{}")
+        if cli_docx_path and sys.stdin.isatty():
+            payload = {}
+        else:
+            raw_stdin = sys.stdin.buffer.read().decode("utf-8") if hasattr(sys.stdin, "buffer") else sys.stdin.read()
+            payload = json.loads(raw_stdin or "{}")
+        if cli_docx_path and not payload.get("docxPath"):
+            payload["docxPath"] = cli_docx_path
+        if cli_no_backup:
+            payload["backup"] = False
     except Exception as exc:
         print(json.dumps({"ok": False, "reason": "INVALID_JSON", "error": str(exc)}))
         return 1
@@ -3008,6 +3373,31 @@ def main() -> int:
                 fout.flush()
             os.replace(tmp_out, docx_path)
             print(json.dumps({"ok": True, "bytes": len(new_bytes), **meta}, ensure_ascii=True))
+            return 0
+
+        if mode in ("repair-english", "english-repair"):
+            docx_path = os.path.abspath(str(payload.get("docxPath") or ""))
+            if not docx_path:
+                raise ValueError("Missing docxPath")
+            if not os.path.exists(docx_path) or os.path.getsize(docx_path) == 0:
+                raise FileNotFoundError(f"Missing or empty docxPath: {docx_path}")
+            with open(docx_path, "rb") as fh:
+                orig = fh.read()
+            new_bytes, stats = repair_english_docx_bytes(orig)
+            bak_path = ""
+            if payload.get("backup", True):
+                bak_path = f"{docx_path}.bak"
+                tmp_bak = f"{bak_path}.tmp.{os.getpid()}"
+                with open(tmp_bak, "wb") as fbak:
+                    fbak.write(orig)
+                    fbak.flush()
+                os.replace(tmp_bak, bak_path)
+            tmp_out = f"{docx_path}.tmp.{os.getpid()}"
+            with open(tmp_out, "wb") as fout:
+                fout.write(new_bytes)
+                fout.flush()
+            os.replace(tmp_out, docx_path)
+            print(json.dumps({"bytes": len(new_bytes), "backupPath": bak_path, **stats}, ensure_ascii=True))
             return 0
 
         if mode == "journal-inspect":

@@ -859,4 +859,166 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
         assert.ok(fetchCalls.some((u) => u.startsWith('/api/language/korean-practice-drive')), `fetchCalls=${JSON.stringify(fetchCalls)}`);
         assert.ok(fetchCalls.some((u) => u.startsWith('/api/language/korean-symbol-compare')), `fetchCalls=${JSON.stringify(fetchCalls)}`);
     });
+
+    it('mantiene 1 sola TOC tras 5+ guardados, auto-sana TOCs corruptas (repair-english / update) y endurece lectura en language-studio.js', () => {
+        const pyCmd = resolvePythonCmd();
+        assert.ok(pyCmd, 'Python 3 debe estar disponible para probar lib/docx_writer.py');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-toc-selfheal-'));
+        const docxPath = path.join(tmpDir, 'English_Learning_Notebook.docx');
+        const corruptPath = path.join(tmpDir, 'Corrupt_English_Learning_Notebook.docx');
+        try {
+            const utf8Env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+            const runWriter = (entry, targetPath = docxPath) => spawnSync(
+                pyCmd,
+                [path.join(ROOT, 'lib', 'docx_writer.py'), '--mode', 'english'],
+                { input: JSON.stringify({ docxPath: targetPath, entry }), encoding: 'utf8', env: utf8Env }
+            );
+
+            // 1) Guardar 6 entradas consecutivas (vocabulario, gramática, phrasal verb, nota y 2 canciones)
+            const entries = [
+                { category: 'vocabulary', language: 'English', word: 'resilient', part_of_speech: 'adjective', spanish: 'resiliente', example: 'Stay resilient.' },
+                { category: 'vocabulary', language: 'English', word: 'eloquent', part_of_speech: 'adjective', spanish: 'elocuente', example: 'An eloquent speech.' },
+                { category: 'grammar', language: 'English', title: 'Third Conditional', notes: 'If + past perfect, would have + past participle.' },
+                { category: 'phrasal_verb', language: 'English', verb: 'figure out', meaning_es: 'descifrar / resolver' },
+                { category: 'notes', language: 'English', title: 'Listening Tip', notes: 'Shadow native audio daily.' },
+                { category: 'music', language: 'English', song_title: 'Midnight Rain', artists_display: 'Taylor Swift', album_title: 'Midnights', album_type: 'Album', release_year: '2022', track_number: 6, lyrics_study: '[EN]\nHe wanted it comfortable' },
+                { category: 'music', language: 'English', song_title: 'Anti-Hero', artists_display: 'Taylor Swift', album_title: 'Midnights', album_type: 'Album', release_year: '2022', track_number: 3, lyrics_study: '[EN]\nIt is me, hi' }
+            ];
+            for (const entry of entries) {
+                const res = runWriter(entry);
+                assert.strictEqual(res.status, 0, res.stderr || res.stdout);
+                const parsedRes = JSON.parse(res.stdout.trim());
+                assert.strictEqual(parsedRes.ok, true);
+            }
+
+            // Verificar que después de 7 guardados solo existe 1 TOC exacta y sin campos abiertos/duplicados
+            const pyVerify = spawnSync(
+                pyCmd,
+                [
+                    '-c',
+                    [
+                        'import io, json, sys, zipfile, xml.etree.ElementTree as ET',
+                        `sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'lib'))})`,
+                        'import docx_writer as dw',
+                        'docx_path, corrupt_path = sys.argv[1], sys.argv[2]',
+                        'W = dw.W_NS_URI',
+                        'w_tag = dw._w_tag',
+                        'with open(docx_path, "rb") as fh: clean_bytes = fh.read()',
+                        'def inspect_doc(b):',
+                        '    with zipfile.ZipFile(io.BytesIO(b), "r") as zf:',
+                        '        st = dw._ooxml_cargar_estilos_mapa(zf)',
+                        '        root = ET.fromstring(zf.read("word/document.xml"))',
+                        '    body = root.find(w_tag("body"))',
+                        '    headings, toc_paras, toc_links, toc_titles, toc_instrs, broken = [], [], [], 0, 0, []',
+                        '    depth, in_toc, closed_toc, orphan_ends = 0, False, 0, 0',
+                        '    for ch in list(body):',
+                        '        if ch.tag != w_tag("p"): continue',
+                        '        txt = dw._texto_parrafo_ooxml(ch)',
+                        '        if txt.strip().lower() in ("table of contents", "tabla de contenido"): toc_titles += 1',
+                        '        ppr = ch.find(w_tag("pPr"))',
+                        '        sid = ppr.find(w_tag("pStyle")).attrib.get(w_tag("val"), "") if ppr is not None and ppr.find(w_tag("pStyle")) is not None else ""',
+                        '        if sid.upper().startswith("TOC"): toc_paras.append(txt)',
+                        '        if "content not found" in txt.lower() or "bookmark=id" in txt.lower(): broken.append(txt)',
+                        '        for hl in ch.iter(w_tag("hyperlink")):',
+                        '            anc = hl.attrib.get(w_tag("anchor"), "")',
+                        '            if "bookmark=id" in anc.lower(): broken.append(anc)',
+                        '            elif anc.startswith("_Toc"): toc_links.append(anc)',
+                        '        for el in ch.iter():',
+                        '            if el.tag == w_tag("instrText"):',
+                        '                up = (el.text or "").upper()',
+                        '                if "TOC \\\\O" in up or ("TOC" in up and "PAGEREF" not in up): toc_instrs += 1',
+                        '            elif el.tag == w_tag("fldChar"):',
+                        '                ft = el.attrib.get(w_tag("fldCharType"), "")',
+                        '                if ft == "begin": depth += 1',
+                        '                elif ft == "end":',
+                        '                    if depth == 0: orphan_ends += 1',
+                        '                    else:',
+                        '                        depth -= 1',
+                        '                        if in_toc and depth == 0: in_toc = False; closed_toc += 1',
+                        '            if el.tag == w_tag("instrText") and "TOC" in (el.text or "").upper() and "PAGEREF" not in (el.text or "").upper() and depth == 1: in_toc = True',
+                        '        lvl = dw._nivel_parrafo_ooxml(ch, st["levels"])',
+                        '        if lvl in (1, 2, 3) and txt: headings.append((lvl, txt))',
+                        '    return {"headings": headings, "toc_paras": len(toc_paras), "toc_links": len(toc_links), "toc_titles": toc_titles, "toc_instrs": toc_instrs, "broken": broken, "depth": depth, "closed_toc": closed_toc, "orphan_ends": orphan_ends}',
+                        'c_info = inspect_doc(clean_bytes)',
+                        'assert c_info["toc_titles"] == 1 and c_info["toc_instrs"] == 1, c_info',
+                        'assert c_info["closed_toc"] == 1 and c_info["depth"] == 0 and c_info["orphan_ends"] == 0, c_info',
+                        'assert c_info["toc_paras"] == len(c_info["headings"]) == c_info["toc_links"], c_info',
+                        '# 2) Construir un .docx corrupto simulando TOC repetida en cascada, PAGEREF huérfanos y enlaces rotos de Google Docs',
+                        'with zipfile.ZipFile(io.BytesIO(clean_bytes), "r") as zin:',
+                        '    orig_xml = zin.read("word/document.xml")',
+                        '    others = {i.filename: zin.read(i.filename) for i in zin.infolist() if i.filename != "word/document.xml"}',
+                        'root_m = ET.fromstring(orig_xml)',
+                        'body_m = root_m.find(w_tag("body"))',
+                        'h1_idx = next(i for i, ch in enumerate(list(body_m)) if ch.tag == w_tag("p") and dw._nivel_parrafo_ooxml(ch, {"Heading1": 1}) == 1)',
+                        'junk = [',
+                        '    dw._crear_parrafo_texto(text="Table of Contents", font_size=13, bold_all=True),',
+                        '    dw._crear_parrafo_texto(text="Tabla de contenido", font_size=13, bold_all=True),',
+                        '    dw._crear_parrafo_toc(1, "1. Glossary & New Words", "_Toc1", {"toc_1": "TOC1", "hyperlink": "Hyperlink"}, is_first=False),',
+                        '    dw._crear_parrafo_toc(2, "resilient (adjective) — resiliente", "_Toc2", {"toc_2": "TOC2", "hyperlink": "Hyperlink"}, is_first=False),',
+                        '    dw._crear_parrafo_toc(1, "1. Glossary & New Words", "_Toc1", {"toc_1": "TOC1", "hyperlink": "Hyperlink"}, is_first=False),',
+                        '    ET.fromstring(f\'<w:p xmlns:w="{W}"><w:pPr><w:pStyle w:val="TOC2"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc888 \\\\h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Content not found</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>\'),',
+                        '    ET.fromstring(f\'<w:p xmlns:w="{W}"><w:hyperlink w:anchor="bookmark=id.bad999"><w:r><w:t>#bookmark=id.bad999 Content not found</w:t></w:r></w:hyperlink></w:p>\'),',
+                        '    ET.fromstring(f\'<w:p xmlns:w="{W}"><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>\'),',
+                        '    dw._w_el("p"),',
+                        ']',
+                        'for off, j_el in enumerate(junk): body_m.insert(h1_idx + off, j_el)',
+                        'buf_corrupt = io.BytesIO()',
+                        'with zipfile.ZipFile(buf_corrupt, "w", compression=zipfile.ZIP_DEFLATED) as zout:',
+                        '    for fn, pl in others.items(): zout.writestr(fn, pl)',
+                        '    zout.writestr("word/document.xml", dw._serializar_documento(root_m, orig_xml))',
+                        'with open(corrupt_path, "wb") as fh: fh.write(buf_corrupt.getvalue())',
+                        'healed_bytes, umeta = dw.update_english_docx_bytes(buf_corrupt.getvalue(), {"category": "notes", "language": "English", "title": "Extra Note", "notes": "Preserved after healing."})',
+                        'h_info = inspect_doc(healed_bytes)',
+                        'assert umeta["removedTocParagraphs"] >= 7, umeta',
+                        'assert h_info["toc_titles"] == 1 and h_info["toc_instrs"] == 1 and h_info["broken"] == [], h_info',
+                        'assert h_info["closed_toc"] == 1 and h_info["depth"] == 0 and h_info["orphan_ends"] == 0, h_info',
+                        'assert h_info["toc_paras"] == len(h_info["headings"]) == h_info["toc_links"], h_info',
+                        'print(json.dumps({"cleanHeadings": len(c_info["headings"]), "healedHeadings": len(h_info["headings"])}))'
+                    ].join('\n'),
+                    docxPath,
+                    corruptPath
+                ],
+                { encoding: 'utf8', env: utf8Env }
+            );
+            assert.strictEqual(pyVerify.status, 0, pyVerify.stderr || pyVerify.stdout);
+
+            // 3) Verificar que lib/language-studio.js filtra TOC basadas en fldChar/TOC1/PAGEREF/Content not found incluso ANTES de reparar
+            const corruptBuf = fs.readFileSync(corruptPath);
+            const parsedCorrupt = langStudio.parseStudyNotebookDocxBuffer(corruptBuf, { includeAllEntries: true });
+            assert.strictEqual(parsedCorrupt.ok, true);
+            assert.strictEqual(parsedCorrupt.counts.vocabulary, 2);
+            assert.strictEqual(parsedCorrupt.counts.grammar, 1);
+            assert.strictEqual(parsedCorrupt.counts.phrasal_verb, 1);
+            assert.strictEqual(parsedCorrupt.counts.notes, 1);
+            assert.strictEqual(parsedCorrupt.counts.music, 2);
+            assert.ok(parsedCorrupt.allEntries.every((e) => !/Content not found|Table of Contents|bookmark=id/i.test(`${e.title} ${e.text}`)));
+
+            // 4) Probar el modo CLI --mode repair-english con respaldo .bak sobre el archivo corrupto
+            const repairCli = spawnSync(
+                pyCmd,
+                [path.join(ROOT, 'lib', 'docx_writer.py'), '--mode', 'repair-english'],
+                { input: JSON.stringify({ docxPath: corruptPath }), encoding: 'utf8', env: utf8Env }
+            );
+            assert.strictEqual(repairCli.status, 0, repairCli.stderr || repairCli.stdout);
+            const repairStats = JSON.parse(repairCli.stdout.trim());
+            assert.strictEqual(repairStats.ok, true);
+            assert.strictEqual(repairStats.repaired, true);
+            assert.ok(repairStats.removedTocParagraphs >= 7, JSON.stringify(repairStats));
+            assert.strictEqual(repairStats.sectionsIntact, true);
+            assert.strictEqual(fs.existsSync(`${corruptPath}.bak`), true);
+            assert.strictEqual(repairStats.counts.vocabulary, 2);
+            assert.strictEqual(repairStats.counts.music, 2);
+
+            const parsedRepaired = langStudio.parseStudyNotebookDocxBuffer(fs.readFileSync(corruptPath), { includeAllEntries: true });
+            assert.strictEqual(parsedRepaired.ok, true);
+            assert.strictEqual(parsedRepaired.counts.vocabulary, 2);
+            assert.strictEqual(parsedRepaired.counts.grammar, 1);
+            assert.strictEqual(parsedRepaired.counts.phrasal_verb, 1);
+            assert.strictEqual(parsedRepaired.counts.notes, 1);
+            assert.strictEqual(parsedRepaired.counts.music, 2);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });
