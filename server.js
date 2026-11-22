@@ -143,7 +143,7 @@ app.use((req, res, next) => {
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     res.setHeader('X-DNS-Prefetch-Control', 'off');
     const isHttps = isRequestHttps(req);
-    const baseCsp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; media-src 'self'; frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; connect-src 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'";
+    const baseCsp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com https://tile.openstreetmap.org https://*.tile.openstreetmap.org; media-src 'self'; frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; connect-src 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'";
     res.setHeader(
         'Content-Security-Policy',
         isHttps ? `${baseCsp}; upgrade-insecure-requests` : baseCsp
@@ -3829,17 +3829,75 @@ function withRoomAliases(obj) {
     };
 }
 
-function resolveItsClassroom(rawRoom = '') {
+function getEffectiveCampusDirectory(planner = null) {
+    const campusesSrc = planner && typeof planner === 'object' && planner.locations && planner.locations.campuses && typeof planner.locations.campuses === 'object'
+        ? planner.locations.campuses
+        : {};
+    const uniFallback = planner && typeof planner === 'object' && planner.locations && planner.locations.university && typeof planner.locations.university === 'object'
+        ? planner.locations.university
+        : null;
+    const out = {};
+    for (const key of ['principal', 'miravalle', 'boillot']) {
+        const base = ITS_CAMPUS_DIRECTORY[key];
+        const directOverride = campusesSrc[key] && typeof campusesSrc[key] === 'object' ? campusesSrc[key] : null;
+        const directCoords = parseCoordinatesFromInput(directOverride || {});
+        const uniCoords = key === 'principal' ? parseCoordinatesFromInput(uniFallback || {}) : null;
+
+        let chosenOverride = directOverride;
+        let chosenCoords = directCoords;
+        if (key === 'principal' && uniCoords) {
+            const directDiffers = Boolean(directCoords && (Math.abs(directCoords.lat - base.lat) > 0.00001 || Math.abs(directCoords.lng - base.lng) > 0.00001));
+            const uniDiffers = Math.abs(uniCoords.lat - base.lat) > 0.00001 || Math.abs(uniCoords.lng - base.lng) > 0.00001;
+            if (!directCoords || (!directDiffers && uniDiffers)) {
+                chosenCoords = uniCoords;
+                chosenOverride = uniFallback;
+            }
+        }
+
+        const lat = chosenCoords ? chosenCoords.lat : base.lat;
+        const lng = chosenCoords ? chosenCoords.lng : base.lng;
+        const isCustom = Boolean(
+            Math.abs(lat - base.lat) > 0.00001 ||
+            Math.abs(lng - base.lng) > 0.00001
+        );
+        const rawAddr = chosenOverride && typeof chosenOverride.address === 'string' ? chosenOverride.address.trim() : '';
+        const address = rawAddr || base.address;
+        const mapsUrl = (chosenOverride && typeof chosenOverride.mapsUrl === 'string' && /^https?:\/\//i.test(chosenOverride.mapsUrl.trim()))
+            ? chosenOverride.mapsUrl.trim().slice(0, 500)
+            : `https://www.google.com/maps?q=${lat},${lng}`;
+
+        out[key] = {
+            ...base,
+            address,
+            lat,
+            lng,
+            defaultLat: base.lat,
+            defaultLng: base.lng,
+            defaultAddress: base.address,
+            isCustom,
+            mapsUrl
+        };
+    }
+    return out;
+}
+
+function resolveItsClassroom(rawRoom = '', campusDirectoryOrPlanner = null) {
+    const dir = campusDirectoryOrPlanner && campusDirectoryOrPlanner.locations
+        ? getEffectiveCampusDirectory(campusDirectoryOrPlanner)
+        : (campusDirectoryOrPlanner && campusDirectoryOrPlanner.principal && campusDirectoryOrPlanner.miravalle && campusDirectoryOrPlanner.boillot
+            ? campusDirectoryOrPlanner
+            : ITS_CAMPUS_DIRECTORY);
+
     const clean = String(rawRoom || '').trim().toUpperCase().replace(/\s+/g, '');
     if (!clean) {
         return withRoomAliases({
             room: 'S/A',
             campusId: 'principal',
-            campusName: ITS_CAMPUS_DIRECTORY.principal.name,
+            campusName: dir.principal.name,
             plano: 'CTO-002',
             building: 'Campus General ITS',
-            lat: ITS_CAMPUS_DIRECTORY.principal.lat,
-            lng: ITS_CAMPUS_DIRECTORY.principal.lng
+            lat: dir.principal.lat,
+            lng: dir.principal.lng
         });
     }
 
@@ -3850,11 +3908,11 @@ function resolveItsClassroom(rawRoom = '') {
         return withRoomAliases({
             room: `R${String(num).padStart(2, '0')}`,
             campusId: 'boillot',
-            campusName: ITS_CAMPUS_DIRECTORY.boillot.name,
+            campusName: dir.boillot.name,
             plano: 'CTO-004',
             building: 'Edif. 78 Sistemas y Computación (Aulas R-1 a R-14)',
-            lat: ITS_CAMPUS_DIRECTORY.boillot.lat,
-            lng: ITS_CAMPUS_DIRECTORY.boillot.lng
+            lat: dir.boillot.lat,
+            lng: dir.boillot.lng
         });
     }
 
@@ -3862,11 +3920,11 @@ function resolveItsClassroom(rawRoom = '') {
         return withRoomAliases({
             room: normalized,
             campusId: 'boillot',
-            campusName: ITS_CAMPUS_DIRECTORY.boillot.name,
+            campusName: dir.boillot.name,
             plano: 'CTO-004',
             building: 'Edif. 79 Ingeniería Mecatrónica (Aulas S-13 a S-20 / CLO)',
-            lat: ITS_CAMPUS_DIRECTORY.boillot.lat,
-            lng: ITS_CAMPUS_DIRECTORY.boillot.lng
+            lat: dir.boillot.lat,
+            lng: dir.boillot.lng
         });
     }
 
@@ -3874,11 +3932,11 @@ function resolveItsClassroom(rawRoom = '') {
         return withRoomAliases({
             room: normalized,
             campusId: 'boillot',
-            campusName: ITS_CAMPUS_DIRECTORY.boillot.name,
+            campusName: dir.boillot.name,
             plano: 'CTO-004',
             building: 'Edif. 80 Educación a Distancia (Aulas ED1 a ED4)',
-            lat: ITS_CAMPUS_DIRECTORY.boillot.lat,
-            lng: ITS_CAMPUS_DIRECTORY.boillot.lng
+            lat: dir.boillot.lat,
+            lng: dir.boillot.lng
         });
     }
 
@@ -3886,11 +3944,11 @@ function resolveItsClassroom(rawRoom = '') {
         return withRoomAliases({
             room: normalized,
             campusId: 'boillot',
-            campusName: ITS_CAMPUS_DIRECTORY.boillot.name,
+            campusName: dir.boillot.name,
             plano: 'CTO-004',
             building: 'Edif. 81 Gestión Tecnológica y Vinculación (AV1 - AV2)',
-            lat: ITS_CAMPUS_DIRECTORY.boillot.lat,
-            lng: ITS_CAMPUS_DIRECTORY.boillot.lng
+            lat: dir.boillot.lat,
+            lng: dir.boillot.lng
         });
     }
 
@@ -3906,11 +3964,11 @@ function resolveItsClassroom(rawRoom = '') {
         return withRoomAliases({
             room: `N${String(num).padStart(2, '0')}`,
             campusId: 'miravalle',
-            campusName: ITS_CAMPUS_DIRECTORY.miravalle.name,
+            campusName: dir.miravalle.name,
             plano: 'CTO-003',
             building: edif,
-            lat: ITS_CAMPUS_DIRECTORY.miravalle.lat,
-            lng: ITS_CAMPUS_DIRECTORY.miravalle.lng
+            lat: dir.miravalle.lat,
+            lng: dir.miravalle.lng
         });
     }
 
@@ -3918,11 +3976,11 @@ function resolveItsClassroom(rawRoom = '') {
         return withRoomAliases({
             room: normalized,
             campusId: 'miravalle',
-            campusName: ITS_CAMPUS_DIRECTORY.miravalle.name,
+            campusName: dir.miravalle.name,
             plano: 'CTO-003',
             building: 'Laboratorios y Aulas Especializadas Campus Miravalle (Edif. 50-66)',
-            lat: ITS_CAMPUS_DIRECTORY.miravalle.lat,
-            lng: ITS_CAMPUS_DIRECTORY.miravalle.lng
+            lat: dir.miravalle.lat,
+            lng: dir.miravalle.lng
         });
     }
 
@@ -3932,22 +3990,22 @@ function resolveItsClassroom(rawRoom = '') {
         return withRoomAliases({
             room: normalized,
             campusId: 'principal',
-            campusName: ITS_CAMPUS_DIRECTORY.principal.name,
+            campusName: dir.principal.name,
             plano: 'CTO-002',
             building: `Aulas ${letter} · ${piso}`,
-            lat: ITS_CAMPUS_DIRECTORY.principal.lat,
-            lng: ITS_CAMPUS_DIRECTORY.principal.lng
+            lat: dir.principal.lat,
+            lng: dir.principal.lng
         });
     }
 
     return withRoomAliases({
         room: normalized,
         campusId: 'principal',
-        campusName: ITS_CAMPUS_DIRECTORY.principal.name,
+        campusName: dir.principal.name,
         plano: 'CTO-002',
         building: 'Campus Principal ITS (CR / AM / TM / SM / LAC)',
-        lat: ITS_CAMPUS_DIRECTORY.principal.lat,
-        lng: ITS_CAMPUS_DIRECTORY.principal.lng
+        lat: dir.principal.lat,
+        lng: dir.principal.lng
     });
 }
 
@@ -4219,6 +4277,29 @@ function getDefaultAcademicPlanner() {
                 lat: 25.4414,
                 lng: -100.9922
             },
+            campuses: {
+                principal: {
+                    label: ITS_CAMPUS_DIRECTORY.principal.name,
+                    address: ITS_CAMPUS_DIRECTORY.principal.address,
+                    mapsUrl: `https://www.google.com/maps?q=${ITS_CAMPUS_DIRECTORY.principal.lat},${ITS_CAMPUS_DIRECTORY.principal.lng}`,
+                    lat: ITS_CAMPUS_DIRECTORY.principal.lat,
+                    lng: ITS_CAMPUS_DIRECTORY.principal.lng
+                },
+                miravalle: {
+                    label: ITS_CAMPUS_DIRECTORY.miravalle.name,
+                    address: ITS_CAMPUS_DIRECTORY.miravalle.address,
+                    mapsUrl: `https://www.google.com/maps?q=${ITS_CAMPUS_DIRECTORY.miravalle.lat},${ITS_CAMPUS_DIRECTORY.miravalle.lng}`,
+                    lat: ITS_CAMPUS_DIRECTORY.miravalle.lat,
+                    lng: ITS_CAMPUS_DIRECTORY.miravalle.lng
+                },
+                boillot: {
+                    label: ITS_CAMPUS_DIRECTORY.boillot.name,
+                    address: ITS_CAMPUS_DIRECTORY.boillot.address,
+                    mapsUrl: `https://www.google.com/maps?q=${ITS_CAMPUS_DIRECTORY.boillot.lat},${ITS_CAMPUS_DIRECTORY.boillot.lng}`,
+                    lat: ITS_CAMPUS_DIRECTORY.boillot.lat,
+                    lng: ITS_CAMPUS_DIRECTORY.boillot.lng
+                }
+            },
             current: {
                 label: 'Ubicación actual',
                 lat: null,
@@ -4359,6 +4440,20 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
         locations: {
             home: sanitizeLocationObject(src.locations?.home, prev.locations?.home || def.locations.home),
             university: sanitizeLocationObject(src.locations?.university, prev.locations?.university || def.locations.university),
+            campuses: {
+                principal: sanitizeLocationObject(
+                    src.locations?.campuses?.principal,
+                    prev.locations?.campuses?.principal || def.locations.campuses.principal
+                ),
+                miravalle: sanitizeLocationObject(
+                    src.locations?.campuses?.miravalle,
+                    prev.locations?.campuses?.miravalle || def.locations.campuses.miravalle
+                ),
+                boillot: sanitizeLocationObject(
+                    src.locations?.campuses?.boillot,
+                    prev.locations?.campuses?.boillot || def.locations.campuses.boillot
+                )
+            },
             current: {
                 label: typeof src.locations?.current?.label === 'string' && src.locations.current.label.trim()
                     ? src.locations.current.label.trim().slice(0, 80)
@@ -4378,6 +4473,36 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
         work: {}
     };
 
+    // Mantener sincronizado locations.university <-> locations.campuses.principal
+    const prevPrincipalCoords = parseCoordinatesFromInput(prev?.locations?.campuses?.principal || {});
+    const prevUniCoords = parseCoordinatesFromInput(prev?.locations?.university || {});
+    const rawCampusPrincipal = src.locations?.campuses?.principal;
+    const rawUniLoc = src.locations?.university;
+    const rawCampusPrincipalCoords = parseCoordinatesFromInput(rawCampusPrincipal || {});
+    const rawUniCoords = parseCoordinatesFromInput(rawUniLoc || {});
+    const campusPrincipalChanged = Boolean(rawCampusPrincipalCoords && (!prevPrincipalCoords || Math.abs(rawCampusPrincipalCoords.lat - prevPrincipalCoords.lat) > 0.00001 || Math.abs(rawCampusPrincipalCoords.lng - prevPrincipalCoords.lng) > 0.00001));
+    const uniLocChanged = Boolean(rawUniCoords && (!prevUniCoords || Math.abs(rawUniCoords.lat - prevUniCoords.lat) > 0.00001 || Math.abs(rawUniCoords.lng - prevUniCoords.lng) > 0.00001));
+    if (campusPrincipalChanged || (rawCampusPrincipalCoords && !uniLocChanged)) {
+        out.locations.university = sanitizeLocationObject({
+            ...out.locations.university,
+            address: out.locations.campuses.principal.address || out.locations.university.address,
+            mapsUrl: out.locations.campuses.principal.mapsUrl || `https://www.google.com/maps?q=${rawCampusPrincipalCoords.lat},${rawCampusPrincipalCoords.lng}`,
+            lat: rawCampusPrincipalCoords.lat,
+            lng: rawCampusPrincipalCoords.lng
+        }, out.locations.university);
+    } else if (uniLocChanged || rawUniCoords) {
+        const chosenUni = rawUniCoords || parseCoordinatesFromInput(out.locations.university || {});
+        if (chosenUni) {
+            out.locations.campuses.principal = sanitizeLocationObject({
+                ...out.locations.campuses.principal,
+                address: out.locations.university.address || out.locations.campuses.principal.address,
+                mapsUrl: out.locations.university.mapsUrl || `https://www.google.com/maps?q=${chosenUni.lat},${chosenUni.lng}`,
+                lat: chosenUni.lat,
+                lng: chosenUni.lng
+            }, out.locations.campuses.principal);
+        }
+    }
+
     const currCoords = parseCoordinatesFromInput(src.locations?.current || prev.locations?.current || {});
     if (currCoords) {
         out.locations.current.lat = currCoords.lat;
@@ -4389,12 +4514,13 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
         out.locations.current.source = 'none';
     }
 
+    const effectiveCampusDir = getEffectiveCampusDirectory(out);
     const rawSemesters = Array.isArray(src.semesters) ? src.semesters : (Array.isArray(prev.semesters) ? prev.semesters : def.semesters);
     out.semesters = rawSemesters.slice(0, 16).map((sem, idx) => {
         const sId = typeof sem?.id === 'string' && sem.id.trim() ? sem.id.trim().slice(0, 60) : `sem-${idx + 1}`;
         const rawCourses = Array.isArray(sem?.courses) ? sem.courses : [];
         const courses = rawCourses.slice(0, 30).map((c, cIdx) => {
-            const roomInfo = resolveItsClassroom(c?.room || '');
+            const roomInfo = resolveItsClassroom(c?.room || '', effectiveCampusDir);
             const days = Array.isArray(c?.days)
                 ? Array.from(new Set(c.days.map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))).sort((a, b) => a - b)
                 : [1, 2, 3, 4, 5];
@@ -4834,9 +4960,10 @@ function isDateInVacation(dateStr, vacations = []) {
 function resolveUserOriginCoords(planner, isFirstClassOrShift = true) {
     const curr = parseCoordinatesFromInput(planner?.locations?.current || {});
     const home = parseCoordinatesFromInput(planner?.locations?.home || {});
+    const campusDir = getEffectiveCampusDirectory(planner);
     const uni = parseCoordinatesFromInput(planner?.locations?.university || {}) || {
-        lat: ITS_CAMPUS_DIRECTORY.principal.lat,
-        lng: ITS_CAMPUS_DIRECTORY.principal.lng
+        lat: campusDir.principal.lat,
+        lng: campusDir.principal.lng
     };
 
     if (curr) {
@@ -5035,6 +5162,7 @@ function computeCandidateReminders({
 
     // 4. Smart Academic Semester Classes (Tec de Saltillo), Residencias & Work Schedule Commute Alerts
     const planner = sanitizeAcademicPlanner(settings.academicPlanner);
+    const effectiveCampusDir = getEffectiveCampusDirectory(planner);
     const activeVacation = isDateInVacation(dateStr, planner.vacations);
 
     if (planner.classRemindersEnabled && !activeVacation) {
@@ -5053,8 +5181,8 @@ function computeCandidateReminders({
                 const prevEndMin = prevCourse ? hhmmToMinutes(prevCourse.endTime) : -999;
                 const isFirstOrAfterLongBreak = idx === 0 || (startMin - prevEndMin >= 120);
 
-                const roomMeta = resolveItsClassroom(course.room);
-                const prevRoomMeta = prevCourse ? resolveItsClassroom(prevCourse.room) : null;
+                const roomMeta = resolveItsClassroom(course.room, effectiveCampusDir);
+                const prevRoomMeta = prevCourse ? resolveItsClassroom(prevCourse.room, effectiveCampusDir) : null;
 
                 let originInfo;
                 if (!isFirstOrAfterLongBreak && prevRoomMeta && !parseCoordinatesFromInput(planner.locations?.current || {})) {
@@ -5108,8 +5236,8 @@ function computeCandidateReminders({
     if (planner.residencias && planner.residencias.enabled && Array.isArray(planner.residencias.days) && planner.residencias.days.includes(weekday)) {
         const resStartMin = hhmmToMinutes(planner.residencias.startTime);
         const destCoords = parseCoordinatesFromInput(planner.residencias.location || {}) || {
-            lat: ITS_CAMPUS_DIRECTORY.principal.lat,
-            lng: ITS_CAMPUS_DIRECTORY.principal.lng
+            lat: effectiveCampusDir.principal.lat,
+            lng: effectiveCampusDir.principal.lng
         };
         const originInfo = resolveUserOriginCoords(planner, true);
         const commute = estimateCommuteDetails({
@@ -5752,9 +5880,10 @@ function buildLiveCommutePreview(planner, localNow) {
     const currCoords = parseCoordinatesFromInput(planner?.locations?.current || {});
     const homeCoords = parseCoordinatesFromInput(planner?.locations?.home || {});
     const originKind = currCoords ? 'current' : (homeCoords ? 'home' : 'none');
+    const campusDirectory = getEffectiveCampusDirectory(planner);
     const campuses = {};
     const commutes = [];
-    for (const [key, campus] of Object.entries(ITS_CAMPUS_DIRECTORY)) {
+    for (const [key, campus] of Object.entries(campusDirectory)) {
         const comm = estimateCommuteDetails({
             originCoords,
             destCoords: { lat: campus.lat, lng: campus.lng },
@@ -5830,7 +5959,7 @@ app.get('/api/planner', apiReadLimiter.middleware, requireAdmin, async (req, res
         const localNow = getLocalNowParts(settings.timezone);
         res.json({
             planner: sanitizePlannerForClient(planner),
-            campusDirectory: ITS_CAMPUS_DIRECTORY,
+            campusDirectory: getEffectiveCampusDirectory(planner),
             mindboxPreset: getItsMindboxPresetCourses(),
             activeVacation: isDateInVacation(localNow.dateStr, planner.vacations),
             commutePreview: buildLiveCommutePreview(planner, localNow)
@@ -5884,6 +6013,7 @@ app.put('/api/planner', apiWriteLimiter.middleware, requireAdmin, requireNonEmpt
         res.json({
             message: 'Academic, Residencias & Work schedule saved.',
             planner: sanitizePlannerForClient(nextPlanner),
+            campusDirectory: getEffectiveCampusDirectory(nextPlanner),
             activeVacation: isDateInVacation(localNow.dateStr, nextPlanner.vacations),
             commutePreview: buildLiveCommutePreview(nextPlanner, localNow)
         });
@@ -6039,6 +6169,18 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
         const planner = sanitizeAcademicPlanner(current.academicPlanner);
         const target = String(req.body.target || 'current').trim();
 
+        const campusResetTargetMap = {
+            reset_campus_principal: 'principal',
+            reset_campus_miravalle: 'miravalle',
+            reset_campus_boillot: 'boillot'
+        };
+        const campusTargetMap = {
+            university: 'principal',
+            campus_principal: 'principal',
+            campus_miravalle: 'miravalle',
+            campus_boillot: 'boillot'
+        };
+
         if (target === 'clear_current') {
             planner.locations.current = {
                 label: 'Ubicación actual',
@@ -6054,6 +6196,41 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             return res.json({
                 message: 'Live GPS cleared. Commutes now use your Saved Home as origin.',
                 planner: sanitizePlannerForClient(planner),
+                campusDirectory: getEffectiveCampusDirectory(planner),
+                commutePreview: preview,
+                commutes: preview.commutes
+            });
+        }
+
+        const resetCampusKey = campusResetTargetMap[target] || (req.body.reset === true ? campusTargetMap[target] : '');
+        if (resetCampusKey && ITS_CAMPUS_DIRECTORY[resetCampusKey]) {
+            const baseCampus = ITS_CAMPUS_DIRECTORY[resetCampusKey];
+            const defaultLoc = {
+                label: baseCampus.name,
+                address: baseCampus.address,
+                mapsUrl: `https://www.google.com/maps?q=${baseCampus.lat},${baseCampus.lng}`,
+                lat: baseCampus.lat,
+                lng: baseCampus.lng
+            };
+            planner.locations.campuses = planner.locations.campuses || {};
+            planner.locations.campuses[resetCampusKey] = sanitizeLocationObject(defaultLoc, defaultLoc);
+            if (resetCampusKey === 'principal') {
+                planner.locations.university = sanitizeLocationObject({
+                    ...defaultLoc,
+                    label: 'Instituto Tecnológico de Saltillo (Blvd. V. Carranza #2400)'
+                }, defaultLoc);
+            }
+            const nextSettings = { ...current, academicPlanner: planner };
+            await saveUserSettings(req.user.id, nextSettings);
+            const localNow = getLocalNowParts(nextSettings.timezone);
+            const preview = buildLiveCommutePreview(planner, localNow);
+            return res.json({
+                message: `${baseCampus.name} restored to official croquis coordinates.`,
+                target,
+                resolvedCoords: { lat: baseCampus.lat, lng: baseCampus.lng },
+                resolutionSource: 'default_croquis',
+                planner: sanitizePlannerForClient(planner),
+                campusDirectory: getEffectiveCampusDirectory(planner),
                 commutePreview: preview,
                 commutes: preview.commutes
             });
@@ -6106,13 +6283,36 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
                 mapsUrl: req.body.mapsUrl ? resolvedMapsUrl : (planner.locations.home.mapsUrl || resolvedMapsUrl),
                 ...coords
             }, planner.locations.home);
-        } else if (target === 'university') {
-            planner.locations.university = sanitizeLocationObject({
-                ...planner.locations.university,
+        } else if (campusTargetMap[target]) {
+            const campusKey = campusTargetMap[target];
+            const baseCampus = ITS_CAMPUS_DIRECTORY[campusKey];
+            planner.locations.campuses = planner.locations.campuses || {};
+            const existingCampus = planner.locations.campuses[campusKey] || {
+                label: baseCampus.name,
+                address: baseCampus.address,
+                mapsUrl: `https://www.google.com/maps?q=${baseCampus.lat},${baseCampus.lng}`,
+                lat: baseCampus.lat,
+                lng: baseCampus.lng
+            };
+            const cleanAddr = typeof req.body.address === 'string' && req.body.address.trim()
+                ? req.body.address.trim().slice(0, 200)
+                : (geocodedMeta ? rawTextInput.slice(0, 200) : existingCampus.address);
+            const updatedCampusLoc = sanitizeLocationObject({
+                ...existingCampus,
                 ...req.body,
-                mapsUrl: req.body.mapsUrl ? resolvedMapsUrl : (planner.locations.university.mapsUrl || resolvedMapsUrl),
+                label: customLabel || existingCampus.label || baseCampus.name,
+                address: cleanAddr,
+                mapsUrl: req.body.mapsUrl ? resolvedMapsUrl : `https://www.google.com/maps?q=${coords.lat},${coords.lng}`,
                 ...coords
-            }, planner.locations.university);
+            }, existingCampus);
+            planner.locations.campuses[campusKey] = updatedCampusLoc;
+            if (campusKey === 'principal') {
+                planner.locations.university = sanitizeLocationObject({
+                    ...planner.locations.university,
+                    ...updatedCampusLoc,
+                    label: customLabel || planner.locations.university?.label || baseCampus.name
+                }, planner.locations.university);
+            }
         } else if (target === 'residencias') {
             planner.residencias.location = sanitizeLocationObject({
                 ...planner.residencias.location,
@@ -6148,6 +6348,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             resolvedCoords: coords,
             geocodedDisplayName: geocodedMeta?.displayName || null,
             planner: sanitizePlannerForClient(planner),
+            campusDirectory: getEffectiveCampusDirectory(planner),
             commutePreview: preview,
             commutes: preview.commutes
         });
@@ -6320,16 +6521,310 @@ app.post('/api/planner/request-phone-gps', apiWriteLimiter.middleware, requireAd
     }
 });
 
-app.post('/api/planner/resolve-room', apiReadLimiter.middleware, requireAdmin, (req, res) => {
-    const room = String((req.body && req.body.room) || (req.query && req.query.room) || '').trim();
-    const classroom = resolveItsClassroom(room);
-    res.json({ classroom, resolved: classroom });
+const SALTILLO_LOCAL_LANDMARKS = [
+    {
+        label: 'ITS Campus Principal (CTO-002)',
+        displayName: 'Tec de Saltillo — Campus Principal, Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo',
+        address: 'Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo, Coahuila',
+        lat: 25.4414,
+        lng: -100.9922,
+        keywords: 'tec de saltillo its principal campus cto-002 blvd venustiano carranza 2400 tecnologico'
+    },
+    {
+        label: 'ITS Campus Blvd / Glorieta (CTO-004)',
+        displayName: 'Tec de Saltillo — Campus Blvd (Glorieta), Blvd. V. Carranza esq. Av. Universidad, Saltillo',
+        address: 'Blvd. Venustiano Carranza esq. Av. Universidad (Glorieta), Saltillo, Coahuila',
+        lat: 25.4385,
+        lng: -100.9940,
+        keywords: 'tec de saltillo its boillot blvd glorieta sistemas mecatronica cto-004 universidad'
+    },
+    {
+        label: 'ITS Campus Miravalle (CTO-003)',
+        displayName: 'Tec de Saltillo — Campus Miravalle, Blvd. Vito Alessio Robles, Col. Miravalle, Saltillo',
+        address: 'Blvd. Vito Alessio Robles, Col. Miravalle, Saltillo, Coahuila',
+        lat: 25.4194,
+        lng: -101.0232,
+        keywords: 'tec de saltillo its miravalle vito alessio robles cto-003 aulas n'
+    },
+    {
+        label: 'Centro Histórico / Plaza de Armas Saltillo',
+        displayName: 'Centro Histórico / Plaza de Armas, Saltillo, Coahuila',
+        address: 'Zona Centro, Saltillo, Coahuila',
+        lat: 25.4232,
+        lng: -100.9997,
+        keywords: 'centro historico plaza de armas catedral saltillo zona centro'
+    },
+    {
+        label: 'Alameda Zaragoza Saltillo',
+        displayName: 'Alameda Zaragoza, Calle Purcell / Victoria, Zona Centro, Saltillo, Coahuila',
+        address: 'Calle Purcell y Victoria, Zona Centro, Saltillo, Coahuila',
+        lat: 25.4212,
+        lng: -101.0063,
+        keywords: 'alameda zaragoza purcell victoria saltillo'
+    },
+    {
+        label: 'Galerías Saltillo / Parque Centro',
+        displayName: 'Galerías Saltillo & Parque Centro, Blvd. Nazario Ortiz Garza, Saltillo, Coahuila',
+        address: 'Blvd. Nazario Ortiz Garza, Saltillo, Coahuila',
+        lat: 25.4581,
+        lng: -100.9855,
+        keywords: 'galerias saltillo parque centro nazario ortiz garza'
+    },
+    {
+        label: 'Zona Industrial Ramos Arizpe',
+        displayName: 'Zona Industrial Ramos Arizpe / Blvd. Miguel Ramos Arizpe, Coahuila',
+        address: 'Blvd. Miguel Ramos Arizpe, Ramos Arizpe, Coahuila',
+        lat: 25.5428,
+        lng: -100.9478,
+        keywords: 'ramos arizpe parque industrial zona industrial magna gm stellantis'
+    },
+    {
+        label: 'Derramadero / Parque Industrial Saltillo Sur',
+        displayName: 'Parque Industrial Derramadero, Saltillo, Coahuila',
+        address: 'Carretera Saltillo - Derramadero Km 19, Saltillo, Coahuila',
+        lat: 25.2528,
+        lng: -101.1489,
+        keywords: 'derramadero stellantis chrysler parque industrial sur saltillo'
+    },
+    {
+        label: 'Arteaga Centro / Campus UADEC Arteaga',
+        displayName: 'Arteaga, Coahuila (Blvd. Fundadores / Libramiento Óscar Flores Tapia)',
+        address: 'Arteaga, Coahuila',
+        lat: 25.4461,
+        lng: -100.8473,
+        keywords: 'arteaga fundadores uadec ciudad universitaria'
+    }
+];
+
+function stripSearchAccents(str = '') {
+    return String(str || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+}
+
+function findMatchingSaltilloLandmarks(queryText, campusDir = ITS_CAMPUS_DIRECTORY) {
+    const cleanNorm = stripSearchAccents(queryText).trim();
+    const tokens = cleanNorm.split(/\s+/).filter(Boolean);
+    const campusExtraKeywords = {
+        principal: 'tec tecnm tec de saltillo instituto tecnologico de saltillo cto-002 blvd venustiano carranza',
+        boillot: 'tec tecnm tec de saltillo its boillot glorieta blvd sistemas mecatronica cto-004 universidad',
+        miravalle: 'tec tecnm tec de saltillo its miravalle vito alessio robles cto-003 aulas n'
+    };
+    const dynamicCampuses = ['principal', 'boillot', 'miravalle'].map((k) => {
+        const c = (campusDir && campusDir[k]) || ITS_CAMPUS_DIRECTORY[k];
+        return {
+            label: `${c.name} (${c.plano})`,
+            displayName: `${c.name} — ${c.address}`,
+            address: c.address,
+            lat: Number(c.lat),
+            lng: Number(c.lng),
+            source: 'croquis',
+            keywords: `${c.name} ${c.plano} ${c.address} ${campusExtraKeywords[k] || ''} ${k}`
+        };
+    });
+    const combined = [...dynamicCampuses, ...SALTILLO_LOCAL_LANDMARKS.slice(3).map(item => ({ ...item, source: 'landmark' }))];
+    if (!tokens.length) return combined.slice(0, 5);
+    return combined
+        .filter((entry) => {
+            const hay = stripSearchAccents(`${entry.label} ${entry.displayName} ${entry.address} ${entry.keywords || ''}`);
+            return tokens.every(tok => hay.includes(tok)) || hay.includes(cleanNorm);
+        })
+        .slice(0, 6)
+        .map(({ keywords: _kw, ...rest }) => rest);
+}
+
+app.get('/api/planner/geocode-search', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
+    try {
+        const q = typeof req.query?.q === 'string' ? req.query.q.trim().slice(0, 220) : '';
+        if (!q || q.length < 2) {
+            return res.status(400).json({ ok: false, error: 'Ingresa al menos 2 caracteres para buscar.' });
+        }
+
+        const current = await loadUserSettings(req.user.id);
+        const planner = sanitizeAcademicPlanner(current.academicPlanner);
+        const campusDir = getEffectiveCampusDirectory(planner);
+
+        const results = [];
+        const directCoords = parseCoordinatesFromInput({ mapsUrl: q, input: q });
+        if (directCoords) {
+            results.push({
+                label: 'Coordenadas exactas',
+                displayName: `Punto exacto en mapa (${directCoords.lat.toFixed(5)}, ${directCoords.lng.toFixed(5)})`,
+                address: `${directCoords.lat.toFixed(5)}, ${directCoords.lng.toFixed(5)}`,
+                lat: directCoords.lat,
+                lng: directCoords.lng,
+                source: 'coordinates'
+            });
+        }
+
+        const localHits = findMatchingSaltilloLandmarks(q, campusDir);
+        for (const hit of localHits) {
+            results.push(hit);
+        }
+
+        const shouldQueryNominatim = !directCoords && (!isAutomatedTestEnv() || process.env.ALLOW_TEST_NOMINATIM === 'true');
+        if (shouldQueryNominatim) {
+            try {
+                const hasRegionHint = /\b(saltillo|coahuila|mexico|méxico|ramos|arteaga)\b/i.test(q);
+                const queryText = hasRegionHint ? q : `${q}, Saltillo, Coahuila, México`;
+                const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=mx&addressdetails=1&q=${encodeURIComponent(queryText)}`;
+                const resp = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': 'PersonalDailyHub-ITS-Saltillo/1.0 (self-hosted academic planner)',
+                        Accept: 'application/json'
+                    },
+                    signal: AbortSignal.timeout(3500)
+                });
+                if (resp.ok) {
+                    const list = await resp.json();
+                    if (Array.isArray(list)) {
+                        for (const item of list) {
+                            const lat = Number(item?.lat);
+                            const lng = Number(item?.lon);
+                            if (!isValidNonZeroCoords(lat, lng)) continue;
+                            const addrObj = item.address || {};
+                            const shortParts = [
+                                [addrObj.road, addrObj.house_number].filter(Boolean).join(' '),
+                                addrObj.neighbourhood || addrObj.suburb || addrObj.quarter,
+                                addrObj.city || addrObj.town || addrObj.municipality || addrObj.state
+                            ].filter(Boolean);
+                            const displayName = String(item.display_name || shortParts.join(', ') || q).slice(0, 200);
+                            const alreadyNear = results.some(r => calculateHaversineKm(r.lat, r.lng, lat, lng) < 0.08);
+                            if (!alreadyNear) {
+                                results.push({
+                                    label: shortParts[0] || String(item.name || q).slice(0, 80),
+                                    displayName,
+                                    address: (shortParts.join(', ') || displayName).slice(0, 200),
+                                    lat: Number(lat.toFixed(6)),
+                                    lng: Number(lng.toFixed(6)),
+                                    source: 'nominatim'
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (_err) {
+                // Offline o límite de Nominatim: conservar resultados locales
+            }
+        }
+
+        return res.json({
+            ok: true,
+            query: q,
+            results: results.slice(0, 8)
+        });
+    } catch (err) {
+        console.error('[GEOCODE_SEARCH_ERROR]', err);
+        return res.status(500).json({ ok: false, error: 'Error searching places.' });
+    }
+});
+
+app.get('/api/planner/reverse-geocode', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
+    try {
+        const lat = Number(req.query?.lat);
+        const lng = Number(req.query?.lng);
+        if (!isValidNonZeroCoords(lat, lng)) {
+            return res.status(400).json({ ok: false, error: 'Valid non-zero lat and lng query parameters are required.' });
+        }
+        const safeLat = Number(lat.toFixed(6));
+        const safeLng = Number(lng.toFixed(6));
+
+        const current = await loadUserSettings(req.user.id);
+        const planner = sanitizeAcademicPlanner(current.academicPlanner);
+        const campusDir = getEffectiveCampusDirectory(planner);
+        const localCandidates = [
+            ...['principal', 'boillot', 'miravalle'].map((k) => {
+                const c = campusDir[k];
+                return { label: c.name, address: c.address, lat: c.lat, lng: c.lng };
+            }),
+            ...SALTILLO_LOCAL_LANDMARKS.slice(3)
+        ];
+
+        let nearest = null;
+        let nearestKm = Infinity;
+        for (const item of localCandidates) {
+            const d = calculateHaversineKm(safeLat, safeLng, item.lat, item.lng);
+            if (d < nearestKm) {
+                nearestKm = d;
+                nearest = item;
+            }
+        }
+
+        let displayName = nearest && nearestKm <= 0.45
+            ? `Cerca de ${nearest.label} (${nearest.address})`
+            : 'Ubicación seleccionada en Saltillo, Coahuila';
+        let address = nearest && nearestKm <= 0.45 ? nearest.address : 'Saltillo, Coahuila';
+        let source = 'local_fallback';
+
+        if (!isAutomatedTestEnv() || process.env.ALLOW_TEST_NOMINATIM === 'true') {
+            try {
+                const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=${safeLat}&lon=${safeLng}`;
+                const resp = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': 'PersonalDailyHub-ITS-Saltillo/1.0 (self-hosted academic planner)',
+                        Accept: 'application/json'
+                    },
+                    signal: AbortSignal.timeout(3000)
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const a = data?.address || {};
+                    const roadLine = [a.road, a.house_number].filter(Boolean).join(' ');
+                    const hoodLine = a.neighbourhood || a.suburb || a.quarter || a.industrial || '';
+                    const cityLine = a.city || a.town || a.municipality || a.state || 'Coahuila';
+                    const concise = [roadLine, hoodLine, cityLine].filter(Boolean).join(', ');
+                    if (concise) {
+                        displayName = concise.slice(0, 200);
+                        address = concise.slice(0, 200);
+                        source = 'nominatim';
+                    } else if (data?.display_name) {
+                        displayName = String(data.display_name).slice(0, 200);
+                        address = displayName;
+                        source = 'nominatim';
+                    }
+                }
+            } catch (_err) {
+                // Conservar descripción local sin bloquear al usuario
+            }
+        }
+
+        return res.json({
+            ok: true,
+            lat: safeLat,
+            lng: safeLng,
+            displayName,
+            address,
+            source
+        });
+    } catch (err) {
+        console.error('[REVERSE_GEOCODE_ERROR]', err);
+        return res.status(500).json({ ok: false, error: 'Error resolving location address.' });
+    }
+});
+
+app.post('/api/planner/resolve-room', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
+    try {
+        const room = String((req.body && req.body.room) || (req.query && req.query.room) || '').trim();
+        const settings = await loadUserSettings(req.user.id);
+        const planner = sanitizeAcademicPlanner(settings.academicPlanner);
+        const campusDir = getEffectiveCampusDirectory(planner);
+        const classroom = resolveItsClassroom(room, campusDir);
+        res.json({ classroom, resolved: classroom });
+    } catch (_err) {
+        const room = String((req.body && req.body.room) || (req.query && req.query.room) || '').trim();
+        const classroom = resolveItsClassroom(room);
+        res.json({ classroom, resolved: classroom });
+    }
 });
 
 app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 2000 }), async (req, res) => {
     try {
         const settings = await loadUserSettings(req.user.id);
         const planner = sanitizeAcademicPlanner(settings.academicPlanner);
+        const effectiveCampusDir = getEffectiveCampusDirectory(planner);
         const localNow = getLocalNowParts(settings.timezone);
 
         const rawStart = String(req.body?.begin || req.body?.weekStartDate || '');
@@ -6380,7 +6875,7 @@ app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, p
 
                 for (let idx = 0; idx < dayCourses.length; idx++) {
                     const c = dayCourses[idx];
-                    const roomMeta = resolveItsClassroom(c.room);
+                    const roomMeta = resolveItsClassroom(c.room, effectiveCampusDir);
                     const isFirst = idx === 0 || (hhmmToMinutes(c.startTime) - hhmmToMinutes(dayCourses[idx - 1].endTime) >= 120);
                     const originInfo = resolveUserOriginCoords(planner, isFirst);
                     const commute = estimateCommuteDetails({

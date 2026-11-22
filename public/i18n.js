@@ -1795,7 +1795,57 @@
         ['Frequent confusable pairs to compare:', 'Pares frecuentes para comparar:'],
         ['⌨️ Virtual Hangul Keypad (tap symbols if on PC without Korean keyboard)', '⌨️ Teclado Virtual Hangul (toca símbolos si estás en PC sin teclado coreano)'],
         ['Compare this symbol in zero-save comparator', 'Comparar este símbolo sin guardar nada'],
-        ['Click to hear and inspect in comparator (no save)', 'Haz clic para escuchar y comparar sin guardar nada']
+        ['Click to hear and inspect in comparator (no save)', 'Haz clic para escuchar y comparar sin guardar nada'],
+
+        // --- ITS Course Modal, Custom Campuses & Interactive Mini-Map Picker ---
+        ['+ Add Class', '+ Agregar Clase'],
+        ['Add a new ITS class to this semester', 'Agregar una nueva materia ITS a este semestre'],
+        ['Click 📍 Pin on Map on any ITS campus to adjust its exact coordinates interactively on the map without typing latitude or longitude.', 'Presiona 📍 Fijar en Mapa en cualquier campus ITS para ajustar su ubicación exacta de forma interactiva sin escribir latitud ni longitud.'],
+        ['📍 Company Location (Map Pin for Driving Traffic Route)', '📍 Ubicación de la Empresa (Pin en Mapa para Ruta y Tráfico)'],
+        ['⚠️ Pin not set yet', '⚠️ Pin sin fijar aún'],
+        ['🗺️ Choose on Map', '🗺️ Elegir en el Mapa'],
+        ['Choose Residencias company location on interactive map', 'Elegir ubicación de la empresa de Residencias en el mapa interactivo'],
+        ['🗺️ Open Maps', '🗺️ Abrir Mapa'],
+        ['📍 Workplace Location (Map Pin for Driving Traffic Route)', '📍 Ubicación del Trabajo (Pin en Mapa para Ruta y Tráfico)'],
+        ['Choose workplace location on interactive map', 'Elegir ubicación del trabajo en el mapa interactivo'],
+        ['Pick your Home on the interactive map or enter your Saltillo street address, without typing latitude or longitude.', 'Elige tu Casa en el mapa interactivo o ingresa tu dirección en Saltillo, sin escribir latitud ni longitud.'],
+        ['🗺️ Choose Home on Map', '🗺️ Elegir Casa en el Mapa'],
+        ['Choose Home location on interactive map', 'Elegir ubicación de Casa en el mapa interactivo'],
+        ['🎓 ITS Campuses (Instituto Tecnológico de Saltillo Croquis)', '🎓 Campus ITS (Croquis Instituto Tecnológico de Saltillo)'],
+        ['Adjust the exact map pin for any of the 3 official ITS campuses without typing coordinates:', 'Ajusta el pin exacto en el mapa para cualquiera de los 3 campus oficiales del ITS sin escribir coordenadas:'],
+        ['📍 Pin Campus Principal (CTO-002)', '📍 Fijar Campus Principal (CTO-002)'],
+        ['📍 Pin Campus Blvd / Glorieta (CTO-004)', '📍 Fijar Campus Blvd / Glorieta (CTO-004)'],
+        ['📍 Pin Campus Miravalle (CTO-003)', '📍 Fijar Campus Miravalle (CTO-003)'],
+        ['Adjust Campus Principal location on map', 'Ajustar ubicación del Campus Principal en el mapa'],
+        ['Adjust Campus Blvd / Glorieta location on map', 'Ajustar ubicación del Campus Blvd / Glorieta en el mapa'],
+        ['Adjust Campus Miravalle location on map', 'Ajustar ubicación del Campus Miravalle en el mapa'],
+        ['🗺️ Choose on Interactive Map', '🗺️ Elegir en Mapa Interactivo'],
+        ['Open interactive mini map to pick exact pin', 'Abrir mini mapa interactivo para fijar el pin exacto'],
+        ['🗺️ Select Location on Map', '🗺️ Seleccionar Ubicación en el Mapa'],
+        ['📍 Location', '📍 Ubicación'],
+        ['Search street, neighborhood, company, or ITS campus in Saltillo...', 'Buscar calle, colonia, empresa o campus ITS en Saltillo...'],
+        ['🔍 Search', '🔍 Buscar'],
+        ['Search address or place in Saltillo', 'Buscar dirección o lugar en Saltillo'],
+        ['📍 Use My GPS', '📍 Usar mi GPS'],
+        ['Center map on my current device GPS', 'Centrar el mapa en el GPS actual de mi dispositivo'],
+        ['Quick map landmarks', 'Accesos rápidos del mapa'],
+        ['Interactive street map to click or drag and place location pin', 'Mapa interactivo para arrastrar o tocar y colocar el pin exacto'],
+        ['Selected location pin', 'Pin de ubicación seleccionada'],
+        ['Zoom in', 'Acercar mapa'],
+        ['Zoom out', 'Alejar mapa'],
+        ['Center map on pin', 'Centrar mapa en el pin'],
+        ['Center map on selected pin', 'Centrar el mapa en el pin seleccionado'],
+        ['Drag the map or tap any spot to move the pin', 'Arrastra el mapa o toca cualquier punto para mover el pin'],
+        ['Move or tap on the map to choose a location.', 'Mueve o toca en el mapa para elegir una ubicación.'],
+        ['Reference / Place Name (optional):', 'Referencia / Nombre del lugar (opcional):'],
+        ['e.g. Mi Casa, Edif. Sistemas R, Planta Norte...', 'ej. Mi Casa, Edif. Sistemas R, Planta Norte...'],
+        ['↺ Restore Official Croquis', '↺ Restaurar Croquis Oficial'],
+        ['Restore official TecNM Saltillo croquis coordinates', 'Restaurar coordenadas oficiales del croquis TecNM Saltillo'],
+        ['✅ Confirm This Location', '✅ Confirmar esta Ubicación'],
+        ['📍 Pin on Map', '📍 Fijar en Mapa'],
+        ['↺ Restore', '↺ Restaurar'],
+        ['📐 Official Croquis', '📐 Croquis Oficial'],
+        ['📍 Custom Pin', '📍 Pin Personalizado']
     ];
 
     var EN_FROM_KEY = new Map();
@@ -1850,8 +1900,8 @@
             es: 'Si estás en Casa o lejos del Tec (o es tu primera clase del día), Daily Hub te avisa <strong>al menos 30 minutos antes</strong> (o más temprano si el tráfico tarda más). Si ya estás dentro o cerca del Tec, te avisa <strong>10 minutos antes</strong> considerando la caminata entre edificios.'
         },
         home_loc_hint: {
-            en: 'Enter your Saltillo street address or paste a Google Maps link, then click <strong>Save &amp; Find Home Location</strong>.',
-            es: 'Ingresa tu dirección en Saltillo o pega un enlace de Google Maps, luego presiona <strong>💾 Guardar y 🔍 Ubicar Casa</strong>.'
+            en: 'Pick your Home on the interactive map or enter your Saltillo street address, then click <strong>Save &amp; Find Home Location</strong>.',
+            es: 'Elige tu Casa en el mapa interactivo o ingresa tu dirección en Saltillo y presiona <strong>💾 Guardar y 🔍 Ubicar Casa</strong>.'
         },
         phone_gps_http_hint: {
             en: 'Because this server uses plain <code>http://</code> without a domain, Chrome/OPPO A79 blocks silent background browser GPS unless you either: (1) tap <strong>📲 Ping Phone GPS (ntfy)</strong>, (2) whitelist this HTTP origin once in Chrome flags, or (3) paste this signed webhook URL into Android <strong>MacroDroid / Automate</strong> to send real phone GPS automatically.',

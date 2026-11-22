@@ -14667,14 +14667,31 @@ function renderItsCroquisDirectory(directory) {
     const grid = document.getElementById('itsCroquisDirectoryCards');
     if (!grid || !directory) return;
     grid.replaceChildren();
-    Object.values(directory).forEach(camp => {
+    Object.entries(directory).forEach(([key, camp]) => {
+        const campId = camp.id || key;
         const card = document.createElement('div');
         card.className = 'its-croquis-card';
 
         const meta = document.createElement('div');
         meta.className = 'planner-course-meta';
+        const titleRow = document.createElement('div');
+        titleRow.style.display = 'flex';
+        titleRow.style.alignItems = 'center';
+        titleRow.style.gap = '8px';
+        titleRow.style.flexWrap = 'wrap';
+
         const title = document.createElement('h4');
+        title.style.margin = '0';
         title.textContent = `🏫 ${camp.name || 'Campus ITS'} (${camp.plano || ''})`;
+
+        const statusBadge = document.createElement('span');
+        statusBadge.className = `planner-loc-status-pill ${camp.isCustom ? 'is-custom' : 'is-default'}`;
+        statusBadge.textContent = camp.isCustom
+            ? tUi('📍 Custom Pin', '📍 Pin Personalizado')
+            : tUi('📐 Official Croquis', '📐 Croquis Oficial');
+
+        titleRow.append(title, statusBadge);
+
         const addr = document.createElement('p');
         addr.className = 'form-hint';
         addr.style.margin = '0';
@@ -14685,9 +14702,24 @@ function renderItsCroquisDirectory(directory) {
         buildings.textContent = Array.isArray(camp.buildings)
             ? camp.buildings.map(b => `${b.code} · ${b.name}`).join(' | ')
             : String(camp.buildings || '');
-        meta.append(title, addr, buildings);
+        meta.append(titleRow, addr, buildings);
 
         const actions = document.createElement('div');
+        actions.style.display = 'flex';
+        actions.style.gap = '6px';
+        actions.style.flexWrap = 'wrap';
+        actions.style.alignItems = 'center';
+
+        const pinMapBtn = document.createElement('button');
+        pinMapBtn.type = 'button';
+        pinMapBtn.className = 'btn-primary btn-small';
+        pinMapBtn.style.width = 'auto';
+        pinMapBtn.style.margin = '0';
+        pinMapBtn.setAttribute('data-open-map-picker', `campus_${campId}`);
+        pinMapBtn.textContent = tUi('📍 Pin on Map', '📍 Fijar en Mapa');
+        pinMapBtn.addEventListener('click', () => openLocationMapPicker(`campus_${campId}`));
+        actions.appendChild(pinMapBtn);
+
         const mapLink = document.createElement('a');
         mapLink.href = `https://www.google.com/maps/search/?api=1&query=${camp.lat},${camp.lng}`;
         mapLink.target = '_blank';
@@ -14697,9 +14729,58 @@ function renderItsCroquisDirectory(directory) {
         mapLink.textContent = tUi('🗺️ Open Maps', '🗺️ Abrir Mapa');
         actions.appendChild(mapLink);
 
+        if (camp.isCustom) {
+            const resetBtn = document.createElement('button');
+            resetBtn.type = 'button';
+            resetBtn.className = 'btn-secondary btn-small';
+            resetBtn.textContent = tUi('↺ Restore', '↺ Restaurar');
+            resetBtn.addEventListener('click', () => {
+                runWithButtonLock(resetBtn, async () => {
+                    try {
+                        const resData = await submitMutationRequest({
+                            url: '/api/planner/location',
+                            method: 'POST',
+                            scopeKey: `planner-loc-reset-${campId}`,
+                            signature: `reset:${campId}:${Date.now()}`,
+                            buildBody: () => ({ target: `reset_campus_${campId}` }),
+                            parseJson: true
+                        });
+                        if (resData?.planner) academicPlannerState = resData.planner;
+                        if (resData?.campusDirectory) {
+                            academicPlannerDirectory = resData.campusDirectory;
+                            renderItsCroquisDirectory(academicPlannerDirectory);
+                        }
+                        if (resData?.planner) renderPlannerResidenciasAndWorkUI();
+                        if (resData?.commutePreview) renderLiveCommuteCards(resData.commutePreview);
+                        showToast('ok', tServer(resData?.message) || tUi('Official croquis restored.', 'Croquis oficial restaurado.'));
+                    } catch (err) {
+                        showToast('err', err.message || 'Could not restore campus location.');
+                    }
+                }, { loadingText: tUi('Updating...', 'Actualizando...') });
+            });
+            actions.appendChild(resetBtn);
+        }
+
         card.append(meta, actions);
         grid.appendChild(card);
     });
+}
+
+function openPlannerCourseModal() {
+    const modal = document.getElementById('plannerCourseModal');
+    if (!modal) return;
+    modal.hidden = false;
+    setTimeout(() => {
+        const nameEl = document.getElementById('courseName');
+        const codeEl = document.getElementById('courseCode');
+        if (codeEl && !codeEl.value) codeEl.focus();
+        else if (nameEl) nameEl.focus();
+    }, 20);
+}
+
+function closePlannerCourseModal() {
+    const modal = document.getElementById('plannerCourseModal');
+    if (modal) modal.hidden = true;
 }
 
 function getActiveSemesterObj() {
@@ -14750,7 +14831,7 @@ function loadCourseIntoEditForm(course) {
     if (saveBtn) saveBtn.textContent = tUi('Update Class', 'Actualizar Materia');
     const cancelBtn = document.getElementById('btnCancelCourseEdit');
     if (cancelBtn) cancelBtn.hidden = false;
-    document.getElementById('plannerCourseForm')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    openPlannerCourseModal();
 }
 
 function renderPlannerSemesterUI() {
@@ -14794,8 +14875,8 @@ function renderPlannerSemesterUI() {
         const empty = document.createElement('div');
         empty.className = 'agenda-empty';
         empty.textContent = tUi(
-            'No classes in this semester yet. Add one on the left or click "Load MindBox 9th Sem Preset".',
-            'Aún no hay materias en este semestre. Agrega una a la izquierda o presiona "Cargar Plantilla MindBox 9°".'
+            'No classes in this semester yet. Click "+ Add Class" or "Load MindBox 9th Sem Preset".',
+            'Aún no hay materias en este semestre. Presiona "+ Agregar Clase" o "Cargar Plantilla MindBox 9°".'
         );
         coursesList.appendChild(empty);
         return;
@@ -14960,6 +15041,50 @@ function extractCoordsFromMapsUrlClient(rawUrl = '') {
     };
 }
 
+function updatePlannerLocationStatusBadge(prefix, emptyMsgEn, emptyMsgEs, setMsgEn, setMsgEs) {
+    const latNum = Number(document.getElementById(`${prefix}LocationLat`)?.value);
+    const lngNum = Number(document.getElementById(`${prefix}LocationLng`)?.value);
+    const latRaw = String(document.getElementById(`${prefix}LocationLat`)?.value || '').trim();
+    const lngRaw = String(document.getElementById(`${prefix}LocationLng`)?.value || '').trim();
+    const addr = String(document.getElementById(`${prefix}LocationAddress`)?.value || '').trim();
+    const badgeEl = document.getElementById(`${prefix}LocationStatusBadge`);
+    const verifyLink = document.getElementById(`${prefix}LocationVerifyLink`);
+    const valid = Boolean(latRaw && lngRaw && isValidNonZeroCoordPair(latNum, lngNum));
+
+    if (verifyLink) {
+        if (valid) {
+            verifyLink.href = `https://www.google.com/maps?q=${latNum.toFixed(6)},${lngNum.toFixed(6)}`;
+            verifyLink.hidden = false;
+        } else {
+            verifyLink.href = '#';
+            verifyLink.hidden = true;
+        }
+    }
+    if (badgeEl) {
+        badgeEl.className = `planner-loc-status-pill ${valid ? 'is-set' : 'is-unset'}`;
+        badgeEl.textContent = valid
+            ? tUi(`${setMsgEn}${addr ? ` · ${addr}` : ''}`, `${setMsgEs}${addr ? ` · ${addr}` : ''}`)
+            : tUi(emptyMsgEn, emptyMsgEs);
+    }
+}
+
+function updatePlannerLocationStatusBadges() {
+    updatePlannerLocationStatusBadge(
+        'res',
+        '⚠️ Pin not set yet',
+        '⚠️ Pin sin fijar aún',
+        '📍 Company pinned on map',
+        '📍 Empresa fijada en mapa'
+    );
+    updatePlannerLocationStatusBadge(
+        'work',
+        '⚠️ Pin not set yet',
+        '⚠️ Pin sin fijar aún',
+        '📍 Workplace pinned on map',
+        '📍 Trabajo fijado en mapa'
+    );
+}
+
 function updateHomeLocationVerifyUI() {
     const latNum = Number(document.getElementById('homeLocationLat')?.value);
     const lngNum = Number(document.getElementById('homeLocationLng')?.value);
@@ -14983,13 +15108,13 @@ function updateHomeLocationVerifyUI() {
     if (summaryEl) {
         if (valid) {
             summaryEl.textContent = tUi(
-                `✅ Home saved (${label || 'Mi Casa'}${addr ? ` · ${addr}` : ''}): ${latNum.toFixed(6)}, ${lngNum.toFixed(6)}`,
-                `✅ Casa guardada (${label || 'Mi Casa'}${addr ? ` · ${addr}` : ''}): ${latNum.toFixed(6)}, ${lngNum.toFixed(6)}`
+                `✅ Home pinned on map: ${label || 'Mi Casa'}${addr ? ` · ${addr}` : ''}`,
+                `✅ Casa fijada en mapa: ${label || 'Mi Casa'}${addr ? ` · ${addr}` : ''}`
             );
         } else {
             summaryEl.textContent = tUi(
-                'Enter your Saltillo street address or paste a Google Maps link, then click "Save & Find Home Location".',
-                'Ingresa tu calle/colonia en Saltillo o pega un enlace de Google Maps y presiona "Guardar y Ubicar Casa".'
+                'Pick your Home on the interactive map or enter your Saltillo street address, then click "Save & Find Home Location".',
+                'Elige tu Casa en el mapa interactivo o ingresa tu dirección en Saltillo y presiona "💾 Guardar y 🔍 Ubicar Casa".'
             );
         }
     }
@@ -15119,6 +15244,7 @@ function renderPlannerResidenciasAndWorkUI() {
     setVal('uniLocationLat', locs.university?.lat ?? 25.4414);
     setVal('uniLocationLng', locs.university?.lng ?? -100.9922);
     updateHomeLocationVerifyUI();
+    updatePlannerLocationStatusBadges();
 }
 
 function collectPlannerStateFromDOM() {
@@ -15200,6 +15326,12 @@ function collectPlannerStateFromDOM() {
     const homeCoords = cleanCoordPair('homeLocationLat', 'homeLocationLng');
     const uniCoords = cleanCoordPair('uniLocationLat', 'uniLocationLng');
 
+    const prevCampuses = academicPlannerState.locations?.campuses && typeof academicPlannerState.locations.campuses === 'object'
+        ? academicPlannerState.locations.campuses
+        : {};
+    const nextUniLat = uniCoords.lat ?? prevCampuses.principal?.lat ?? 25.4414;
+    const nextUniLng = uniCoords.lng ?? prevCampuses.principal?.lng ?? -100.9922;
+
     academicPlannerState.locations = {
         ...academicPlannerState.locations,
         home: {
@@ -15210,13 +15342,22 @@ function collectPlannerStateFromDOM() {
             lng: homeCoords.lng
         },
         university: {
-            label: 'TecNM Saltillo — Campus Principal (Blvd. V. Carranza #2400)',
-            address: 'Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo, Coahuila',
-            mapsUrl: (uniCoords.lat !== null && uniCoords.lng !== null)
-                ? `https://www.google.com/maps?q=${uniCoords.lat},${uniCoords.lng}`
-                : 'https://www.google.com/maps?q=25.4414,-100.9922',
-            lat: uniCoords.lat ?? 25.4414,
-            lng: uniCoords.lng ?? -100.9922
+            label: academicPlannerState.locations?.university?.label || 'TecNM Saltillo — Campus Principal (Blvd. V. Carranza #2400)',
+            address: academicPlannerState.locations?.university?.address || 'Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo, Coahuila',
+            mapsUrl: `https://www.google.com/maps?q=${nextUniLat},${nextUniLng}`,
+            lat: nextUniLat,
+            lng: nextUniLng
+        },
+        campuses: {
+            ...prevCampuses,
+            principal: {
+                ...(prevCampuses.principal || {}),
+                label: prevCampuses.principal?.label || 'ITS Campus Principal',
+                address: prevCampuses.principal?.address || 'Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo, Coahuila.',
+                mapsUrl: `https://www.google.com/maps?q=${nextUniLat},${nextUniLng}`,
+                lat: nextUniLat,
+                lng: nextUniLng
+            }
         }
     };
 
@@ -15350,8 +15491,8 @@ function renderLiveCommuteCards(previewOrList = []) {
     });
 }
 
-function applyCapturedLocationToTarget(target, coords, label, source = 'gps') {
-    if (!coords) return;
+function applyCapturedLocationToTarget(target, coords, label, source = 'gps', address = '') {
+    if (!coords) return Promise.reject(new Error('Missing coordinates.'));
     const lat = Number(coords.lat);
     const lng = Number(coords.lng);
     if (!isValidNonZeroCoordPair(lat, lng)) {
@@ -15365,25 +15506,41 @@ function applyCapturedLocationToTarget(target, coords, label, source = 'gps') {
         setVal('homeLocationLat', lat.toFixed(6));
         setVal('homeLocationLng', lng.toFixed(6));
         setVal('homeLocationMapsUrl', mapUrl);
+        if (address) setVal('homeLocationAddress', address);
+        if (label && label !== 'Current Location') setVal('homeLocationLabel', label);
         updateHomeLocationVerifyUI();
     } else if (target === 'residencias') {
         setVal('resLocationLat', lat.toFixed(6));
         setVal('resLocationLng', lng.toFixed(6));
         setVal('resLocationMapsUrl', mapUrl);
+        if (address) setVal('resLocationAddress', address);
+        updatePlannerLocationStatusBadges();
     } else if (target === 'work') {
         setVal('workLocationLat', lat.toFixed(6));
         setVal('workLocationLng', lng.toFixed(6));
         setVal('workLocationMapsUrl', mapUrl);
+        if (address) setVal('workLocationAddress', address);
+        updatePlannerLocationStatusBadges();
+    } else if (target === 'campus_principal' || target === 'university') {
+        setVal('uniLocationLat', lat.toFixed(6));
+        setVal('uniLocationLng', lng.toFixed(6));
     }
+
+    const payloadBody = { target, lat, lng, mapsUrl: mapUrl, label: label || 'Current Location', source };
+    if (address) payloadBody.address = address;
 
     return submitMutationRequest({
         url: '/api/planner/location',
         method: 'POST',
         scopeKey: `planner-loc:${target}`,
         signature: `${target}:${lat}:${lng}:${Date.now()}`,
-        buildBody: () => ({ target, lat, lng, mapsUrl: mapUrl, label: label || 'Current Location', source }),
+        buildBody: () => payloadBody,
         parseJson: true
     }).then(data => {
+        if (data?.campusDirectory) {
+            academicPlannerDirectory = data.campusDirectory;
+            renderItsCroquisDirectory(academicPlannerDirectory);
+        }
         if (data?.planner) {
             academicPlannerState = data.planner;
             renderPlannerResidenciasAndWorkUI();
@@ -15484,6 +15641,756 @@ function openQuickLocationModal(target = 'current', { showHttpNotice = false, er
     } else {
         modal.hidden = false;
     }
+
+    const btnQuickOpenMap = document.getElementById('btnQuickLocOpenMapPicker');
+    if (btnQuickOpenMap) {
+        btnQuickOpenMap.onclick = () => {
+            modal.hidden = true;
+            openLocationMapPicker(target);
+        };
+    }
+}
+
+const mapPickerState = {
+    isOpen: false,
+    target: 'home',
+    centerLat: 25.4414,
+    centerLng: -100.9922,
+    pinLat: 25.4414,
+    pinLng: -100.9922,
+    zoom: 15,
+    resolvedAddress: '',
+    labelDirty: false,
+    draggingMap: false,
+    draggingPin: false,
+    pointerMoved: false,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragStartCenterWorldX: 0,
+    dragStartCenterWorldY: 0,
+    reverseTimer: null,
+    reverseSeq: 0,
+    tileElements: new Map()
+};
+
+function mapLatLngToWorldPx(lat, lng, zoom) {
+    const scale = 256 * Math.pow(2, zoom);
+    const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, Number(lat) || 0));
+    const sinLat = Math.sin((clampedLat * Math.PI) / 180);
+    const safeSin = Math.max(-0.999999, Math.min(0.999999, sinLat));
+    const x = (((Number(lng) || 0) + 180) / 360) * scale;
+    const y = (0.5 - Math.log((1 + safeSin) / (1 - safeSin)) / (4 * Math.PI)) * scale;
+    return { x, y };
+}
+
+function mapWorldPxToLatLng(px, py, zoom) {
+    const scale = 256 * Math.pow(2, zoom);
+    const lng = (px / scale) * 360 - 180;
+    const n = Math.PI - (2 * Math.PI * py) / scale;
+    const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+    return {
+        lat: Number(Math.max(-85, Math.min(85, lat)).toFixed(6)),
+        lng: Number(Math.max(-180, Math.min(180, lng)).toFixed(6))
+    };
+}
+
+function getEffectiveCampusEntryClient(key) {
+    const dir = academicPlannerDirectory || {};
+    const defaults = {
+        principal: { id: 'principal', name: 'ITS Campus Principal', plano: 'CTO-002', address: 'Blvd. Venustiano Carranza #2400, Col. Tecnológico, Saltillo', lat: 25.4414, lng: -100.9922 },
+        boillot: { id: 'boillot', name: 'ITS Campus Blvd (Glorieta)', plano: 'CTO-004', address: 'Blvd. V. Carranza esq. Av. Universidad, Saltillo', lat: 25.4385, lng: -100.9940 },
+        miravalle: { id: 'miravalle', name: 'ITS Campus Miravalle', plano: 'CTO-003', address: 'Blvd. Vito Alessio Robles, Col. Miravalle, Saltillo', lat: 25.4194, lng: -101.0232 }
+    };
+    return dir[key] || defaults[key] || defaults.principal;
+}
+
+function getMapTargetInitialConfig(target) {
+    const locs = academicPlannerState?.locations || {};
+    const homeLoc = locs.home || {};
+    const resLoc = academicPlannerState?.residencias?.location || {};
+    const workLoc = academicPlannerState?.work?.location || {};
+    const currLoc = locs.current || {};
+
+    if (target === 'campus_principal' || target === 'university') {
+        const c = getEffectiveCampusEntryClient('principal');
+        return { badge: `🏫 ${c.name} (${c.plano})`, campusKey: 'principal', lat: Number(c.lat), lng: Number(c.lng), label: c.name, address: c.address, zoom: 16 };
+    }
+    if (target === 'campus_boillot') {
+        const c = getEffectiveCampusEntryClient('boillot');
+        return { badge: `🏛️ ${c.name} (${c.plano})`, campusKey: 'boillot', lat: Number(c.lat), lng: Number(c.lng), label: c.name, address: c.address, zoom: 16 };
+    }
+    if (target === 'campus_miravalle') {
+        const c = getEffectiveCampusEntryClient('miravalle');
+        return { badge: `🏢 ${c.name} (${c.plano})`, campusKey: 'miravalle', lat: Number(c.lat), lng: Number(c.lng), label: c.name, address: c.address, zoom: 16 };
+    }
+    if (target === 'residencias') {
+        const lat = isValidNonZeroCoordPair(Number(resLoc.lat), Number(resLoc.lng)) ? Number(resLoc.lat) : 25.4414;
+        const lng = isValidNonZeroCoordPair(Number(resLoc.lat), Number(resLoc.lng)) ? Number(resLoc.lng) : -100.9922;
+        return {
+            badge: tUi('🏢 Residencias Company', '🏢 Empresa Residencias'),
+            lat,
+            lng,
+            label: academicPlannerState?.residencias?.companyName || resLoc.label || 'Empresa de Residencias',
+            address: document.getElementById('resLocationAddress')?.value?.trim() || resLoc.address || '',
+            zoom: isValidNonZeroCoordPair(Number(resLoc.lat), Number(resLoc.lng)) ? 16 : 13
+        };
+    }
+    if (target === 'work') {
+        const lat = isValidNonZeroCoordPair(Number(workLoc.lat), Number(workLoc.lng)) ? Number(workLoc.lat) : 25.4414;
+        const lng = isValidNonZeroCoordPair(Number(workLoc.lat), Number(workLoc.lng)) ? Number(workLoc.lng) : -100.9922;
+        return {
+            badge: tUi('💼 Workplace', '💼 Lugar de Trabajo'),
+            lat,
+            lng,
+            label: academicPlannerState?.work?.companyName || workLoc.label || 'Lugar de Trabajo',
+            address: document.getElementById('workLocationAddress')?.value?.trim() || workLoc.address || '',
+            zoom: isValidNonZeroCoordPair(Number(workLoc.lat), Number(workLoc.lng)) ? 16 : 13
+        };
+    }
+    if (target === 'current') {
+        const lat = isValidNonZeroCoordPair(Number(currLoc.lat), Number(currLoc.lng))
+            ? Number(currLoc.lat)
+            : (isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng)) ? Number(homeLoc.lat) : 25.4414);
+        const lng = isValidNonZeroCoordPair(Number(currLoc.lat), Number(currLoc.lng))
+            ? Number(currLoc.lng)
+            : (isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng)) ? Number(homeLoc.lng) : -100.9922);
+        return {
+            badge: tUi('📍 My Current Location', '📍 Mi Ubicación Actual'),
+            lat,
+            lng,
+            label: currLoc.label || tUi('Selected Location', 'Ubicación Seleccionada'),
+            address: '',
+            zoom: 15
+        };
+    }
+    const domHomeLat = Number(document.getElementById('homeLocationLat')?.value);
+    const domHomeLng = Number(document.getElementById('homeLocationLng')?.value);
+    const hasHome = isValidNonZeroCoordPair(domHomeLat, domHomeLng) || isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng));
+    const lat = isValidNonZeroCoordPair(domHomeLat, domHomeLng) ? domHomeLat : (isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng)) ? Number(homeLoc.lat) : 25.4320);
+    const lng = isValidNonZeroCoordPair(domHomeLat, domHomeLng) ? domHomeLng : (isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng)) ? Number(homeLoc.lng) : -100.9950);
+    return {
+        badge: tUi('🏠 Home / Base Location', '🏠 Casa / Ubicación Base'),
+        lat,
+        lng,
+        label: document.getElementById('homeLocationLabel')?.value?.trim() || homeLoc.label || 'Mi Casa',
+        address: document.getElementById('homeLocationAddress')?.value?.trim() || homeLoc.address || '',
+        zoom: hasHome ? 16 : 14
+    };
+}
+
+function renderMapPickerCanvas(width, height, viewLeft, viewTop, zoom) {
+    const canvas = document.getElementById('mapPickerCanvas');
+    if (!canvas || typeof canvas.getContext !== 'function') return;
+    if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = '#0d1526';
+    ctx.fillRect(0, 0, width, height);
+
+    // Subtle Web Mercator tile grid as clean background & offline vector fallback
+    const startTileX = Math.floor(viewLeft / 256);
+    const endTileX = Math.floor((viewLeft + width) / 256);
+    const startTileY = Math.floor(viewTop / 256);
+    const endTileY = Math.floor((viewTop + height) / 256);
+
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.14)';
+    ctx.lineWidth = 1;
+    for (let tx = startTileX; tx <= endTileX + 1; tx++) {
+        const sx = tx * 256 - viewLeft;
+        ctx.beginPath();
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, height);
+        ctx.stroke();
+        const midX = sx + 128;
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.06)';
+        ctx.beginPath();
+        ctx.moveTo(midX, 0);
+        ctx.lineTo(midX, height);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.14)';
+    }
+    for (let ty = startTileY; ty <= endTileY + 1; ty++) {
+        const sy = ty * 256 - viewTop;
+        ctx.beginPath();
+        ctx.moveTo(0, sy);
+        ctx.lineTo(width, sy);
+        ctx.stroke();
+        const midY = sy + 128;
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.06)';
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(width, midY);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.14)';
+    }
+
+    // Draw Saltillo reference arterial corridors on the canvas fallback
+    const corridors = [
+        { name: 'Blvd. V. Carranza', color: 'rgba(96, 165, 250, 0.35)', pts: [[25.475, -100.976], [25.4414, -100.9922], [25.4232, -100.9997]] },
+        { name: 'Blvd. Vito Alessio', color: 'rgba(52, 211, 153, 0.3)', pts: [[25.458, -101.008], [25.438, -101.015], [25.4194, -101.0232]] },
+        { name: 'Av. Universidad / Periférico', color: 'rgba(251, 191, 36, 0.28)', pts: [[25.4385, -101.025], [25.4385, -100.994], [25.436, -100.960]] }
+    ];
+    corridors.forEach(road => {
+        ctx.strokeStyle = road.color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        road.pts.forEach(([lt, lg], idx) => {
+            const p = mapLatLngToWorldPx(lt, lg, zoom);
+            const rx = p.x - viewLeft;
+            const ry = p.y - viewTop;
+            if (idx === 0) ctx.moveTo(rx, ry);
+            else ctx.lineTo(rx, ry);
+        });
+        ctx.stroke();
+    });
+}
+
+function renderMapPickerViewport() {
+    const viewport = document.getElementById('mapPickerViewport');
+    const tilesLayer = document.getElementById('mapPickerTilesLayer');
+    const refLayer = document.getElementById('mapPickerRefMarkers');
+    const pinEl = document.getElementById('mapPickerPinMarker');
+    if (!viewport || !tilesLayer || !pinEl) return;
+
+    const width = viewport.clientWidth || 720;
+    const height = viewport.clientHeight || 340;
+    const z = Math.max(11, Math.min(18, Math.round(mapPickerState.zoom)));
+    const centerWorld = mapLatLngToWorldPx(mapPickerState.centerLat, mapPickerState.centerLng, z);
+    const viewLeft = centerWorld.x - width / 2;
+    const viewTop = centerWorld.y - height / 2;
+
+    renderMapPickerCanvas(width, height, viewLeft, viewTop, z);
+
+    // Sync OpenStreetMap tiles (img-src allows tile.openstreetmap.org)
+    const minTileX = Math.floor(viewLeft / 256);
+    const maxTileX = Math.floor((viewLeft + width) / 256);
+    const minTileY = Math.floor(viewTop / 256);
+    const maxTileY = Math.floor((viewTop + height) / 256);
+    const nTiles = Math.pow(2, z);
+    const visibleKeys = new Set();
+
+    for (let tx = minTileX; tx <= maxTileX; tx++) {
+        for (let ty = minTileY; ty <= maxTileY; ty++) {
+            if (ty < 0 || ty >= nTiles) continue;
+            const wrappedX = ((tx % nTiles) + nTiles) % nTiles;
+            const cacheKey = `${z}/${tx}/${ty}`;
+            visibleKeys.add(cacheKey);
+            let img = mapPickerState.tileElements.get(cacheKey);
+            if (!img) {
+                img = document.createElement('img');
+                img.className = 'map-picker-tile';
+                img.alt = '';
+                img.draggable = false;
+                img.loading = 'eager';
+                img.referrerPolicy = 'no-referrer';
+                img.src = `https://tile.openstreetmap.org/${z}/${wrappedX}/${ty}.png`;
+                img.addEventListener('error', () => {
+                    img.style.opacity = '0';
+                });
+                img.addEventListener('load', () => {
+                    img.style.opacity = '0.92';
+                });
+                mapPickerState.tileElements.set(cacheKey, img);
+                tilesLayer.appendChild(img);
+            }
+            const leftPx = Math.round(tx * 256 - viewLeft);
+            const topPx = Math.round(ty * 256 - viewTop);
+            img.style.transform = `translate3d(${leftPx}px, ${topPx}px, 0)`;
+        }
+    }
+
+    for (const [k, el] of Array.from(mapPickerState.tileElements.entries())) {
+        if (!visibleKeys.has(k)) {
+            el.remove();
+            mapPickerState.tileElements.delete(k);
+        }
+    }
+
+    // Reference Campus & Home markers
+    if (refLayer) {
+        refLayer.replaceChildren();
+        const refs = [
+            { tag: '🏫 Principal', lat: Number(getEffectiveCampusEntryClient('principal').lat), lng: Number(getEffectiveCampusEntryClient('principal').lng) },
+            { tag: '🏛️ Blvd/Glorieta', lat: Number(getEffectiveCampusEntryClient('boillot').lat), lng: Number(getEffectiveCampusEntryClient('boillot').lng) },
+            { tag: '🏢 Miravalle', lat: Number(getEffectiveCampusEntryClient('miravalle').lat), lng: Number(getEffectiveCampusEntryClient('miravalle').lng) }
+        ];
+        const homeLoc = academicPlannerState?.locations?.home;
+        if (homeLoc && isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng))) {
+            refs.push({ tag: '🏠 Casa', lat: Number(homeLoc.lat), lng: Number(homeLoc.lng) });
+        }
+        refs.forEach(ref => {
+            const p = mapLatLngToWorldPx(ref.lat, ref.lng, z);
+            const rx = p.x - viewLeft;
+            const ry = p.y - viewTop;
+            if (rx < -40 || rx > width + 40 || ry < -40 || ry > height + 40) return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'map-picker-ref-dot';
+            btn.style.left = `${Math.round(rx)}px`;
+            btn.style.top = `${Math.round(ry)}px`;
+            btn.textContent = ref.tag;
+            btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                setMapPickerPin(ref.lat, ref.lng, { recenter: true });
+            });
+            refLayer.appendChild(btn);
+        });
+    }
+
+    const pinWorld = mapLatLngToWorldPx(mapPickerState.pinLat, mapPickerState.pinLng, z);
+    pinEl.style.left = `${(pinWorld.x - viewLeft).toFixed(1)}px`;
+    pinEl.style.top = `${(pinWorld.y - viewTop).toFixed(1)}px`;
+}
+
+function scheduleMapReverseGeocode(lat, lng, immediateSummary = '') {
+    const summaryEl = document.getElementById('mapPickerSelectedSummary');
+    const addrInput = document.getElementById('mapPickerAddressLabelInput');
+    if (immediateSummary && summaryEl) {
+        summaryEl.textContent = `📍 ${immediateSummary}`;
+    } else if (summaryEl) {
+        summaryEl.textContent = tUi('📍 Detecting street / zone on map...', '📍 Detectando calle / zona en el mapa...');
+    }
+    clearTimeout(mapPickerState.reverseTimer);
+    const seq = ++mapPickerState.reverseSeq;
+    mapPickerState.reverseTimer = setTimeout(async () => {
+        try {
+            const res = await fetch(`/api/planner/reverse-geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`, { cache: 'no-store' });
+            if (!res.ok || seq !== mapPickerState.reverseSeq) return;
+            const data = await res.json();
+            if (seq !== mapPickerState.reverseSeq) return;
+            const niceName = String(data?.displayName || data?.address || '').trim();
+            if (niceName) {
+                mapPickerState.resolvedAddress = String(data?.address || niceName).trim();
+                if (summaryEl) summaryEl.textContent = `📍 ${niceName}`;
+                if (addrInput && !mapPickerState.labelDirty && !String(mapPickerState.target || '').startsWith('campus_')) {
+                    addrInput.value = mapPickerState.resolvedAddress.slice(0, 140);
+                }
+            }
+        } catch (_) {
+            if (summaryEl && seq === mapPickerState.reverseSeq) {
+                summaryEl.textContent = tUi('📍 Exact pin placed on Saltillo map.', '📍 Pin exacto colocado en el mapa.');
+            }
+        }
+    }, 220);
+}
+
+function setMapPickerPin(lat, lng, { recenter = false, zoom = null, summaryText = '' } = {}) {
+    if (!isValidNonZeroCoordPair(lat, lng)) return;
+    mapPickerState.pinLat = Number(Number(lat).toFixed(6));
+    mapPickerState.pinLng = Number(Number(lng).toFixed(6));
+    if (recenter) {
+        mapPickerState.centerLat = mapPickerState.pinLat;
+        mapPickerState.centerLng = mapPickerState.pinLng;
+    }
+    if (Number.isFinite(zoom)) {
+        mapPickerState.zoom = Math.max(11, Math.min(18, Math.round(zoom)));
+    }
+    renderMapPickerViewport();
+    scheduleMapReverseGeocode(mapPickerState.pinLat, mapPickerState.pinLng, summaryText);
+}
+
+function populateMapPickerQuickPresets() {
+    const bar = document.getElementById('mapPickerQuickPresets');
+    if (!bar) return;
+    bar.replaceChildren();
+    const cPrin = getEffectiveCampusEntryClient('principal');
+    const cBoil = getEffectiveCampusEntryClient('boillot');
+    const cMira = getEffectiveCampusEntryClient('miravalle');
+    const presets = [
+        { text: '🏫 Tec Principal (CTO-002)', lat: Number(cPrin.lat), lng: Number(cPrin.lng), zoom: 16, summary: cPrin.address },
+        { text: '🏛️ Tec Blvd/Glorieta (CTO-004)', lat: Number(cBoil.lat), lng: Number(cBoil.lng), zoom: 16, summary: cBoil.address },
+        { text: '🏢 Tec Miravalle (CTO-003)', lat: Number(cMira.lat), lng: Number(cMira.lng), zoom: 16, summary: cMira.address }
+    ];
+    const homeLoc = academicPlannerState?.locations?.home;
+    if (homeLoc && isValidNonZeroCoordPair(Number(homeLoc.lat), Number(homeLoc.lng))) {
+        presets.push({ text: '🏠 Mi Casa', lat: Number(homeLoc.lat), lng: Number(homeLoc.lng), zoom: 16, summary: homeLoc.address || homeLoc.label });
+    }
+    presets.push({ text: '🏙️ Centro Saltillo', lat: 25.4232, lng: -100.9997, zoom: 15, summary: 'Zona Centro / Plaza de Armas, Saltillo' });
+
+    presets.forEach(p => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'quick-loc-chip';
+        chip.textContent = p.text;
+        chip.addEventListener('click', () => {
+            setMapPickerPin(p.lat, p.lng, { recenter: true, zoom: p.zoom, summaryText: p.summary });
+        });
+        bar.appendChild(chip);
+    });
+}
+
+function openLocationMapPicker(target = 'home') {
+    const modal = document.getElementById('locationMapPickerModal');
+    const badgeEl = document.getElementById('mapPickerTargetBadge');
+    const resetBtn = document.getElementById('btnResetCampusDefaultLocation');
+    const searchInput = document.getElementById('mapPickerSearchInput');
+    const resultsEl = document.getElementById('mapPickerSearchResults');
+    const addrInput = document.getElementById('mapPickerAddressLabelInput');
+    const bannerEl = document.getElementById('mapPickerBanner');
+    if (!modal) return;
+
+    const cfg = getMapTargetInitialConfig(target);
+    mapPickerState.isOpen = true;
+    mapPickerState.target = target;
+    mapPickerState.centerLat = cfg.lat;
+    mapPickerState.centerLng = cfg.lng;
+    mapPickerState.pinLat = cfg.lat;
+    mapPickerState.pinLng = cfg.lng;
+    mapPickerState.zoom = cfg.zoom || 15;
+    mapPickerState.resolvedAddress = cfg.address || '';
+    mapPickerState.labelDirty = false;
+    mapPickerState.tileElements.forEach(el => el.remove());
+    mapPickerState.tileElements.clear();
+
+    if (badgeEl) badgeEl.textContent = cfg.badge;
+    if (resetBtn) {
+        resetBtn.hidden = !['campus_principal', 'campus_boillot', 'campus_miravalle', 'university'].includes(target);
+    }
+    if (searchInput) searchInput.value = '';
+    if (resultsEl) {
+        resultsEl.replaceChildren();
+        resultsEl.hidden = true;
+    }
+    if (addrInput) {
+        addrInput.value = cfg.address || cfg.label || '';
+    }
+    if (bannerEl) bannerEl.hidden = true;
+
+    populateMapPickerQuickPresets();
+    modal.hidden = false;
+
+    requestAnimationFrame(() => {
+        renderMapPickerViewport();
+        scheduleMapReverseGeocode(mapPickerState.pinLat, mapPickerState.pinLng, cfg.address || '');
+        if (searchInput) searchInput.focus();
+    });
+}
+
+function closeLocationMapPicker() {
+    const modal = document.getElementById('locationMapPickerModal');
+    if (modal) modal.hidden = true;
+    mapPickerState.isOpen = false;
+}
+
+function initLocationMapPickerModal() {
+    const modal = document.getElementById('locationMapPickerModal');
+    const viewport = document.getElementById('mapPickerViewport');
+    const pinEl = document.getElementById('mapPickerPinMarker');
+    const btnClose = document.getElementById('btnCloseLocationMapPicker');
+    const btnCancel = document.getElementById('btnCancelMapPickerLocation');
+    const btnConfirm = document.getElementById('btnConfirmMapPickerLocation');
+    const btnResetCampus = document.getElementById('btnResetCampusDefaultLocation');
+    const btnZoomIn = document.getElementById('btnMapZoomIn');
+    const btnZoomOut = document.getElementById('btnMapZoomOut');
+    const btnRecenter = document.getElementById('btnMapRecenterPin');
+    const btnSearch = document.getElementById('btnMapPickerSearch');
+    const searchInput = document.getElementById('mapPickerSearchInput');
+    const resultsEl = document.getElementById('mapPickerSearchResults');
+    const btnGps = document.getElementById('btnMapPickerUseGps');
+    const addrInput = document.getElementById('mapPickerAddressLabelInput');
+    const bannerEl = document.getElementById('mapPickerBanner');
+    if (!modal || !viewport || modal.dataset.wired === 'true') return;
+    modal.dataset.wired = 'true';
+
+    btnClose?.addEventListener('click', closeLocationMapPicker);
+    btnCancel?.addEventListener('click', closeLocationMapPicker);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeLocationMapPicker();
+    });
+
+    addrInput?.addEventListener('input', () => {
+        mapPickerState.labelDirty = true;
+    });
+
+    btnZoomIn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        mapPickerState.zoom = Math.min(18, mapPickerState.zoom + 1);
+        renderMapPickerViewport();
+    });
+    btnZoomOut?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        mapPickerState.zoom = Math.max(11, mapPickerState.zoom - 1);
+        renderMapPickerViewport();
+    });
+    btnRecenter?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        mapPickerState.centerLat = mapPickerState.pinLat;
+        mapPickerState.centerLng = mapPickerState.pinLng;
+        renderMapPickerViewport();
+    });
+
+    viewport.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 1 : -1;
+        const nextZoom = Math.max(11, Math.min(18, mapPickerState.zoom + delta));
+        if (nextZoom !== mapPickerState.zoom) {
+            mapPickerState.zoom = nextZoom;
+            renderMapPickerViewport();
+        }
+    }, { passive: false });
+
+    pinEl?.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        mapPickerState.draggingPin = true;
+        mapPickerState.pointerMoved = false;
+        pinEl.classList.add('is-pin-dragging');
+        if (typeof pinEl.setPointerCapture === 'function') {
+            try { pinEl.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+    });
+
+    pinEl?.addEventListener('pointermove', (e) => {
+        if (!mapPickerState.draggingPin) return;
+        const rect = viewport.getBoundingClientRect();
+        const width = viewport.clientWidth || rect.width || 720;
+        const height = viewport.clientHeight || rect.height || 340;
+        const localX = e.clientX - rect.left;
+        const localY = e.clientY - rect.top;
+        const z = Math.round(mapPickerState.zoom);
+        const centerWorld = mapLatLngToWorldPx(mapPickerState.centerLat, mapPickerState.centerLng, z);
+        const worldX = (centerWorld.x - width / 2) + localX;
+        const worldY = (centerWorld.y - height / 2) + localY;
+        const coords = mapWorldPxToLatLng(worldX, worldY, z);
+        mapPickerState.pinLat = coords.lat;
+        mapPickerState.pinLng = coords.lng;
+        renderMapPickerViewport();
+    });
+
+    const finishPinDrag = (e) => {
+        if (!mapPickerState.draggingPin) return;
+        mapPickerState.draggingPin = false;
+        pinEl?.classList.remove('is-pin-dragging');
+        if (typeof pinEl?.releasePointerCapture === 'function') {
+            try { pinEl.releasePointerCapture(e.pointerId); } catch (_) {}
+        }
+        scheduleMapReverseGeocode(mapPickerState.pinLat, mapPickerState.pinLng);
+    };
+    pinEl?.addEventListener('pointerup', finishPinDrag);
+    pinEl?.addEventListener('pointercancel', finishPinDrag);
+
+    viewport.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.map-picker-zoom-controls') || e.target.closest('.map-picker-ref-dot') || e.target.closest('.map-picker-pin-marker')) {
+            return;
+        }
+        const z = Math.round(mapPickerState.zoom);
+        const cw = mapLatLngToWorldPx(mapPickerState.centerLat, mapPickerState.centerLng, z);
+        mapPickerState.draggingMap = true;
+        mapPickerState.pointerMoved = false;
+        mapPickerState.dragStartX = e.clientX;
+        mapPickerState.dragStartY = e.clientY;
+        mapPickerState.dragStartCenterWorldX = cw.x;
+        mapPickerState.dragStartCenterWorldY = cw.y;
+        viewport.classList.add('is-dragging');
+        if (typeof viewport.setPointerCapture === 'function') {
+            try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+    });
+
+    viewport.addEventListener('pointermove', (e) => {
+        if (!mapPickerState.draggingMap) return;
+        const dx = e.clientX - mapPickerState.dragStartX;
+        const dy = e.clientY - mapPickerState.dragStartY;
+        if (Math.hypot(dx, dy) > 4) mapPickerState.pointerMoved = true;
+        const z = Math.round(mapPickerState.zoom);
+        const nextCenter = mapWorldPxToLatLng(
+            mapPickerState.dragStartCenterWorldX - dx,
+            mapPickerState.dragStartCenterWorldY - dy,
+            z
+        );
+        mapPickerState.centerLat = nextCenter.lat;
+        mapPickerState.centerLng = nextCenter.lng;
+        renderMapPickerViewport();
+    });
+
+    const finishMapPan = (e) => {
+        if (!mapPickerState.draggingMap) return;
+        const wasClick = !mapPickerState.pointerMoved;
+        mapPickerState.draggingMap = false;
+        viewport.classList.remove('is-dragging');
+        if (typeof viewport.releasePointerCapture === 'function') {
+            try { viewport.releasePointerCapture(e.pointerId); } catch (_) {}
+        }
+        if (wasClick) {
+            const rect = viewport.getBoundingClientRect();
+            const width = viewport.clientWidth || rect.width || 720;
+            const height = viewport.clientHeight || rect.height || 340;
+            const localX = e.clientX - rect.left;
+            const localY = e.clientY - rect.top;
+            const z = Math.round(mapPickerState.zoom);
+            const cw = mapLatLngToWorldPx(mapPickerState.centerLat, mapPickerState.centerLng, z);
+            const nextPin = mapWorldPxToLatLng((cw.x - width / 2) + localX, (cw.y - height / 2) + localY, z);
+            setMapPickerPin(nextPin.lat, nextPin.lng);
+        }
+    };
+    viewport.addEventListener('pointerup', finishMapPan);
+    viewport.addEventListener('pointercancel', finishMapPan);
+
+    const runPlaceSearch = async () => {
+        const q = String(searchInput?.value || '').trim();
+        if (q.length < 2) {
+            if (bannerEl) {
+                bannerEl.className = 'inline-status-banner is-info';
+                bannerEl.textContent = tUi('Type at least 2 characters to search in Saltillo.', 'Escribe al menos 2 caracteres para buscar en Saltillo.');
+                bannerEl.hidden = false;
+            }
+            return;
+        }
+        if (bannerEl) bannerEl.hidden = true;
+        try {
+            const res = await fetch(`/api/planner/geocode-search?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data?.error || 'Could not search locations.');
+            const list = Array.isArray(data?.results) ? data.results : [];
+            if (!resultsEl) return;
+            resultsEl.replaceChildren();
+            if (list.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'muted-text';
+                empty.style.padding = '6px 8px';
+                empty.textContent = tUi('No matching places found. Drag the map directly to place the pin.', 'Sin coincidencias exactas. Arrastra el mapa directamente para colocar el pin.');
+                resultsEl.appendChild(empty);
+                resultsEl.hidden = false;
+                return;
+            }
+            list.forEach(item => {
+                const rowBtn = document.createElement('button');
+                rowBtn.type = 'button';
+                rowBtn.className = 'map-picker-search-result-btn';
+                const strongEl = document.createElement('strong');
+                strongEl.textContent = `📍 ${item.label || item.displayName || q}`;
+                const subEl = document.createElement('span');
+                subEl.className = 'form-hint';
+                subEl.style.margin = '0';
+                subEl.textContent = item.displayName || item.address || '';
+                rowBtn.append(strongEl, subEl);
+                rowBtn.addEventListener('click', () => {
+                    resultsEl.hidden = true;
+                    setMapPickerPin(Number(item.lat), Number(item.lng), { recenter: true, zoom: 16, summaryText: item.displayName || item.label });
+                    if (addrInput && (item.address || item.label)) {
+                        addrInput.value = String(item.address || item.label).slice(0, 140);
+                        mapPickerState.resolvedAddress = String(item.address || item.displayName || '').slice(0, 180);
+                    }
+                });
+                resultsEl.appendChild(rowBtn);
+            });
+            resultsEl.hidden = false;
+        } catch (err) {
+            if (bannerEl) {
+                bannerEl.className = 'inline-status-banner is-error';
+                bannerEl.textContent = err.message || 'Search unavailable right now.';
+                bannerEl.hidden = false;
+            }
+        }
+    };
+
+    btnSearch?.addEventListener('click', runPlaceSearch);
+    searchInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            runPlaceSearch();
+        }
+    });
+
+    btnGps?.addEventListener('click', () => {
+        const useFallbackGps = () => {
+            const curr = academicPlannerState?.locations?.current;
+            if (curr && isValidNonZeroCoordPair(Number(curr.lat), Number(curr.lng))) {
+                setMapPickerPin(Number(curr.lat), Number(curr.lng), { recenter: true, zoom: 16, summaryText: curr.label || 'GPS guardado' });
+                return true;
+            }
+            return false;
+        };
+        if (!navigator.geolocation) {
+            if (!useFallbackGps()) showToast('err', tUi('Browser GPS unavailable; tap on the map directly.', 'GPS no disponible aquí; toca directamente en el mapa.'));
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                if (isValidNonZeroCoordPair(pos.coords.latitude, pos.coords.longitude)) {
+                    setMapPickerPin(pos.coords.latitude, pos.coords.longitude, { recenter: true, zoom: 17 });
+                }
+            },
+            () => {
+                if (!useFallbackGps()) {
+                    if (bannerEl) {
+                        bannerEl.className = 'inline-status-banner is-info';
+                        bannerEl.textContent = tUi('Browser blocked silent GPS over HTTP. Pan or search Saltillo directly on the map.', 'El navegador bloqueó GPS en HTTP plano. Busca o toca directo en el mapa.');
+                        bannerEl.hidden = false;
+                    }
+                }
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+        );
+    });
+
+    btnResetCampus?.addEventListener('click', () => {
+        const campusKeyMap = {
+            campus_principal: 'principal',
+            university: 'principal',
+            campus_boillot: 'boillot',
+            campus_miravalle: 'miravalle'
+        };
+        const cKey = campusKeyMap[mapPickerState.target];
+        if (!cKey) return;
+        runWithButtonLock(btnResetCampus, async () => {
+            try {
+                const resData = await submitMutationRequest({
+                    url: '/api/planner/location',
+                    method: 'POST',
+                    scopeKey: `planner-loc-reset-${cKey}`,
+                    signature: `reset:${cKey}:${Date.now()}`,
+                    buildBody: () => ({ target: `reset_campus_${cKey}` }),
+                    parseJson: true
+                });
+                if (resData?.planner) academicPlannerState = resData.planner;
+                if (resData?.campusDirectory) {
+                    academicPlannerDirectory = resData.campusDirectory;
+                    renderItsCroquisDirectory(academicPlannerDirectory);
+                }
+                if (resData?.planner) renderPlannerResidenciasAndWorkUI();
+                if (resData?.commutePreview) renderLiveCommuteCards(resData.commutePreview);
+                closeLocationMapPicker();
+                showToast('ok', tServer(resData?.message) || tUi('Official croquis restored.', 'Croquis oficial restaurado.'));
+            } catch (err) {
+                showToast('err', err.message || 'Could not reset campus location.');
+            }
+        }, { loadingText: tUi('Updating...', 'Actualizando...') });
+    });
+
+    btnConfirm?.addEventListener('click', () => {
+        const customText = String(addrInput?.value || '').trim();
+        const target = mapPickerState.target || 'home';
+        const addrToSave = customText || mapPickerState.resolvedAddress || '';
+        const labelToSave = target === 'home'
+            ? (document.getElementById('homeLocationLabel')?.value?.trim() || 'Mi Casa')
+            : (target.startsWith('campus_')
+                ? getEffectiveCampusEntryClient(target.replace('campus_', '')).name
+                : (customText || target));
+
+        runWithButtonLock(btnConfirm, async () => {
+            try {
+                await applyCapturedLocationToTarget(
+                    target,
+                    { lat: mapPickerState.pinLat, lng: mapPickerState.pinLng },
+                    labelToSave,
+                    'map_picker',
+                    addrToSave
+                );
+                closeLocationMapPicker();
+                showToast('ok', tUi('Location pinned & traffic routes recalculated!', '¡Ubicación fijada en el mapa y rutas recalculadas!'));
+            } catch (err) {
+                if (bannerEl) {
+                    bannerEl.className = 'inline-status-banner is-error';
+                    bannerEl.textContent = err.message || 'Could not save pinned location.';
+                    bannerEl.hidden = false;
+                }
+            }
+        }, { loadingText: tUi('Saving...', 'Guardando...') });
+    });
 }
 
 function triggerSmartGpsCapture(target = 'current') {
@@ -15545,6 +16452,12 @@ function initQuickLocationModal() {
     });
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && !modal.hidden) closeModal();
+        if (e.key === 'Escape' && mapPickerState.isOpen) closeLocationMapPicker();
+        const courseModalEl = document.getElementById('plannerCourseModal');
+        if (e.key === 'Escape' && courseModalEl && !courseModalEl.hidden) {
+            resetPlannerCourseForm();
+            closePlannerCourseModal();
+        }
     });
 
     if (btnCopyOrigin) {
@@ -15705,6 +16618,7 @@ function initAcademicPlannerHandlers() {
             academicPlannerState.activeSemesterId = semSelect.value;
             resetPlannerCourseForm();
             renderPlannerSemesterUI();
+            closePlannerCourseModal();
         });
     }
 
@@ -15789,7 +16703,25 @@ function initAcademicPlannerHandlers() {
         });
     }
 
-    document.getElementById('btnCancelCourseEdit')?.addEventListener('click', resetPlannerCourseForm);
+    document.getElementById('btnOpenCourseModal')?.addEventListener('click', () => {
+        resetPlannerCourseForm();
+        openPlannerCourseModal();
+    });
+    document.getElementById('btnCloseCourseModal')?.addEventListener('click', () => {
+        resetPlannerCourseForm();
+        closePlannerCourseModal();
+    });
+    document.getElementById('btnCancelCourseEdit')?.addEventListener('click', () => {
+        resetPlannerCourseForm();
+        closePlannerCourseModal();
+    });
+    const plannerCourseModalEl = document.getElementById('plannerCourseModal');
+    plannerCourseModalEl?.addEventListener('click', (e) => {
+        if (e.target === plannerCourseModalEl) {
+            resetPlannerCourseForm();
+            closePlannerCourseModal();
+        }
+    });
 
     const courseForm = document.getElementById('plannerCourseForm');
     if (courseForm) {
@@ -15844,6 +16776,7 @@ function initAcademicPlannerHandlers() {
             }
             resetPlannerCourseForm();
             renderPlannerSemesterUI();
+            closePlannerCourseModal();
         });
     }
 
@@ -15884,6 +16817,13 @@ function initAcademicPlannerHandlers() {
         btn.addEventListener('click', () => {
             const target = btn.getAttribute('data-use-gps-target') || 'current';
             triggerSmartGpsCapture(target);
+        });
+    });
+
+    document.querySelectorAll('#view-horario [data-open-map-picker]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const target = btn.getAttribute('data-open-map-picker') || 'home';
+            openLocationMapPicker(target);
         });
     });
 
@@ -16952,6 +17892,7 @@ function initApp() {
     initWordStyleProofing();
     initAcademicPlannerHandlers();
     initQuickLocationModal();
+    initLocationMapPickerModal();
     initCrisisHandlers();
     initMusicEntityEditModal();
     initKeyboardShortcuts();
