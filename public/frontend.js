@@ -14854,10 +14854,12 @@ function renderPlannerSemesterUI() {
     const semEnd = document.getElementById('plannerSemEnd');
     const coursesList = document.getElementById('plannerCoursesContainer');
     const countBadge = document.getElementById('plannerCoursesCountBadge');
+    const btnDeleteSem = document.getElementById('btnDeleteSemester');
     if (!academicPlannerState || !semSelect) return;
 
+    const semesters = Array.isArray(academicPlannerState.semesters) ? academicPlannerState.semesters : [];
     semSelect.replaceChildren();
-    (academicPlannerState.semesters || []).forEach(sem => {
+    semesters.forEach(sem => {
         const opt = document.createElement('option');
         opt.value = sem.id;
         const labelName = sem.name || sem.nombre || tUi('Semester', 'Semestre');
@@ -14865,6 +14867,13 @@ function renderPlannerSemesterUI() {
         opt.textContent = `${labelName} (${clsCount} ${tUi(clsCount === 1 ? 'class' : 'classes', clsCount === 1 ? 'materia' : 'materias')})`;
         semSelect.appendChild(opt);
     });
+    if (btnDeleteSem) {
+        const onlyOne = semesters.length <= 1;
+        btnDeleteSem.disabled = onlyOne;
+        btnDeleteSem.title = onlyOne
+            ? tUi('At least one semester must remain', 'Debe permanecer al menos un semestre')
+            : tUi('Delete the selected semester', 'Eliminar el semestre seleccionado');
+    }
     const activeSem = getActiveSemesterObj();
     if (!activeSem) return;
 
@@ -16708,6 +16717,36 @@ function initAcademicPlannerHandlers() {
             resetPlannerCourseForm();
             renderPlannerSemesterUI();
             setPlannerBanner('info', tUi('Created new semester. Customize its dates and click "Save All..." at the bottom.', 'Nuevo semestre creado. Personaliza sus fechas y presiona "Guardar Todo..." abajo.'));
+        });
+    }
+
+    const btnDeleteSem = document.getElementById('btnDeleteSemester');
+    if (btnDeleteSem) {
+        btnDeleteSem.addEventListener('click', () => {
+            if (!academicPlannerState || !Array.isArray(academicPlannerState.semesters) || academicPlannerState.semesters.length <= 1) {
+                return;
+            }
+            const activeSem = getActiveSemesterObj();
+            if (!activeSem) return;
+            const semLabel = activeSem.name || activeSem.nombre || activeSem.id;
+            const clsCount = Array.isArray(activeSem.courses) ? activeSem.courses.length : 0;
+            const confirmMsg = tUi(
+                `Delete semester "${semLabel}" (${clsCount} ${clsCount === 1 ? 'class' : 'classes'})?`,
+                `¿Eliminar el semestre "${semLabel}" (${clsCount} ${clsCount === 1 ? 'materia' : 'materias'})?`
+            );
+            if (typeof window.confirm === 'function' && !window.confirm(confirmMsg)) {
+                return;
+            }
+            const removedIdx = academicPlannerState.semesters.findIndex(s => s.id === activeSem.id);
+            const remaining = academicPlannerState.semesters.filter(s => s.id !== activeSem.id);
+            if (remaining.length === 0) return;
+            academicPlannerState.semesters = remaining;
+            const nextIdx = Math.min(Math.max(removedIdx, 0), remaining.length - 1);
+            academicPlannerState.activeSemesterId = remaining[nextIdx].id;
+            resetPlannerCourseForm();
+            closePlannerCourseModal();
+            renderPlannerSemesterUI();
+            setPlannerBanner('info', tUi('Semester removed. Click "Save All..." at the bottom to persist changes.', 'Semestre eliminado. Presiona "Guardar Todo..." abajo para guardar los cambios.'));
         });
     }
 

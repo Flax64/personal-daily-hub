@@ -1606,17 +1606,23 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
         assert.ok(indexHtml.includes('id="btnMapLayerStreets"') && indexHtml.includes('id="btnMapLayerSatellite"'), 'El selector de mapa debe incluir cambio de capa Calles / Satélite');
     });
 
-    it('elimina el botón #btnLoadMindboxPreset y su banner de plantilla de la vista #view-horario sin afectar #courseCode', () => {
+    it('elimina el botón #btnLoadMindboxPreset y preset MindBox backend, y agrega #btnDeleteSemester en #view-horario sin afectar #courseCode', () => {
         const indexHtml = readText('public/index.html');
         const frontendJs = readText('public/frontend.js');
         const i18nJs = readText('public/i18n.js');
+        const serverJs = readText('server.js');
+
+        assert.strictEqual(serverJs.includes('getItsMindboxPresetCourses'), false, 'server.js no debe conservar getItsMindboxPresetCourses');
+        assert.strictEqual(serverJs.includes('mindboxPreset:'), false, 'server.js no debe exponer mindboxPreset en /api/planner');
 
         assert.strictEqual(indexHtml.includes('id="btnLoadMindboxPreset"'), false, 'public/index.html no debe incluir #btnLoadMindboxPreset');
         assert.ok(indexHtml.includes('id="btnNewSemester"'), 'public/index.html debe conservar #btnNewSemester');
+        assert.ok(indexHtml.includes('id="btnDeleteSemester"'), 'public/index.html debe incluir #btnDeleteSemester');
         assert.ok(indexHtml.includes('for="courseCode"'), 'public/index.html debe conservar el campo Subject Key (MindBox) #courseCode');
 
         assert.strictEqual(frontendJs.includes('btnLoadMindboxPreset'), false, 'public/frontend.js no debe contener listener de btnLoadMindboxPreset');
         assert.strictEqual(frontendJs.includes('academicPlannerMindboxPreset'), false, 'public/frontend.js no debe contener academicPlannerMindboxPreset');
+        assert.ok(frontendJs.includes('btnDeleteSemester'), 'public/frontend.js debe gestionar #btnDeleteSemester');
         assert.strictEqual(
             frontendJs.includes('¡Cargadas tus 5 materias MindBox 9° semestre ITS!') || frontendJs.includes('Loaded your 5 MindBox 9th-semester ITS courses!'),
             false,
@@ -1629,6 +1635,7 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
         );
 
         assert.strictEqual(i18nJs.includes('⚡ Load MindBox 9th Sem Preset'), false, 'public/i18n.js no debe conservar la entrada obsoleta de preset MindBox');
+        assert.ok(i18nJs.includes('🗑️ Delete Semester'), 'public/i18n.js debe incluir la traducción de 🗑️ Delete Semester');
         assert.ok(i18nJs.includes('Subject Key (MindBox):'), 'public/i18n.js debe conservar la traducción de Clave de materia (MindBox)');
     });
 });

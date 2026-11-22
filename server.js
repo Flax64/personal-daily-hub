@@ -4182,83 +4182,6 @@ function estimateCommuteDetails({
     };
 }
 
-function getItsMindboxPresetCourses() {
-    return [
-        {
-            id: 'its-aca0910',
-            code: 'ACA0910',
-            name: 'Taller de Investigación II',
-            teacher: 'Sorkee Quiroz Roxana Karina',
-            group: 'B',
-            room: 'R02',
-            campusId: 'boillot',
-            days: [1, 2, 3, 4],
-            startTime: '09:00',
-            endTime: '10:00'
-        },
-        {
-            id: 'its-scg1009-lj',
-            code: 'SCG1009',
-            name: 'Gestión de Proyectos de Software',
-            teacher: 'Fernández Chávez Eduardo',
-            group: 'B',
-            room: 'R11',
-            campusId: 'boillot',
-            days: [1, 2, 3, 4],
-            startTime: '13:00',
-            endTime: '14:00'
-        },
-        {
-            id: 'its-scg1009-v',
-            code: 'SCG1009',
-            name: 'Gestión de Proyectos de Software (Viernes)',
-            teacher: 'Fernández Chávez Eduardo',
-            group: 'B',
-            room: 'R11',
-            campusId: 'boillot',
-            days: [5],
-            startTime: '12:00',
-            endTime: '14:00'
-        },
-        {
-            id: 'its-ded2504',
-            code: 'DED2504',
-            name: 'Integración y Despliegue Continuos',
-            teacher: 'Manrique Peña Paola Denis',
-            group: 'A',
-            room: 'R11',
-            campusId: 'boillot',
-            days: [1, 2, 3, 4, 5],
-            startTime: '14:00',
-            endTime: '15:00'
-        },
-        {
-            id: 'its-scc1019',
-            code: 'SCC1019',
-            name: 'Programación Lógica y Funcional',
-            teacher: 'Espinoza Arzola Jesus Alberto',
-            group: 'A',
-            room: 'R11',
-            campusId: 'boillot',
-            days: [1, 2, 3, 4],
-            startTime: '15:00',
-            endTime: '16:00'
-        },
-        {
-            id: 'its-ded2505',
-            code: 'DED2505',
-            name: 'Desarrollo Seguro',
-            teacher: 'Cabrera Fraga Pricila',
-            group: 'A',
-            room: 'R11',
-            campusId: 'boillot',
-            days: [1, 2, 3, 4, 5],
-            startTime: '16:00',
-            endTime: '17:00'
-        }
-    ];
-}
-
 function getDefaultAcademicPlanner() {
     return {
         universityName: 'Instituto Tecnológico de Saltillo (TecNM)',
@@ -4322,7 +4245,7 @@ function getDefaultAcademicPlanner() {
                 startDate: '2026-08-17',
                 endDate: '2026-12-18',
                 active: true,
-                courses: getItsMindboxPresetCourses()
+                courses: []
             }
         ],
         vacations: [
@@ -5966,7 +5889,6 @@ app.get('/api/planner', apiReadLimiter.middleware, requireAdmin, async (req, res
         res.json({
             planner: sanitizePlannerForClient(planner),
             campusDirectory: getEffectiveCampusDirectory(planner),
-            mindboxPreset: getItsMindboxPresetCourses(),
             activeVacation: isDateInVacation(localNow.dateStr, planner.vacations),
             commutePreview: buildLiveCommutePreview(planner, localNow)
         });
