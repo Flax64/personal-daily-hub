@@ -3,6 +3,7 @@ import io
 import sys
 import json
 import ctypes
+import unicodedata
 
 try:
     from ctypes import wintypes
@@ -1454,18 +1455,34 @@ _STUDY_LANGUAGE_META = {
 _RE_JAPANESE_SCRIPT_CHAR = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]")
 
 
+_RE_XML_INVALID_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_RE_ZERO_WIDTH_CHARS = re.compile(r"[\u200b\u200c\u200d\ufeff]")
+_RE_YOUTUBE_NOISE_SUFFIX = re.compile(
+    r"\s*(?:\((?:official(?:\s+(?:music\s+)?(?:video|m/?v|audio|lyric(?:s)?\s+video|visualizer|performance\s+video))?|m/?v|mv|lyrics?|lyric\s+video|audio|hd|4k|color\s+coded(?:\s+lyrics)?|eng(?:/esp|/kor|/jpn)?\s+sub(?:s)?)\)|\[(?:official(?:\s+(?:music\s+)?(?:video|m/?v|audio|lyric(?:s)?\s+video|visualizer|performance\s+video))?|m/?v|mv|lyrics?|lyric\s+video|audio|hd|4k|color\s+coded(?:\s+lyrics)?|eng(?:/esp|/kor|/jpn)?\s+sub(?:s)?)\])[\s!?.,;:~·•\-]*$",
+    re.IGNORECASE,
+)
+
+
+def _sanitizar_xml_texto_temprano(texto):
+    if texto is None:
+        return ""
+    return _RE_XML_INVALID_CHARS.sub("", str(texto))
+
+
 def _limpiar_linea(texto):
     if texto is None:
         return ""
-    return str(texto).replace("\r", " ").replace("\n", " ").strip()
+    clean = _sanitizar_xml_texto_temprano(_RE_ZERO_WIDTH_CHARS.sub("", str(texto)))
+    return clean.replace("\r", " ").replace("\n", " ").strip()
 
 
 def _dividir_lineas_limpias(texto):
     if texto is None:
         return []
+    clean = _sanitizar_xml_texto_temprano(_RE_ZERO_WIDTH_CHARS.sub("", str(texto)))
     lineas = [
         line.strip()
-        for line in str(texto).replace("\r", "").split("\n")
+        for line in clean.replace("\r", "").split("\n")
         if line.strip()
     ]
     return lineas
@@ -1694,7 +1711,83 @@ def parsear_entrada_ingles(raw_text):
 
 
 def _normalizar_clave_texto(texto):
-    return " ".join(str(texto or "").split()).strip().lower()
+    clean = _RE_ZERO_WIDTH_CHARS.sub("", str(texto or ""))
+    clean = (
+        clean.replace("’", "'")
+        .replace("‘", "'")
+        .replace("ʼ", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    return " ".join(clean.split()).strip().lower()
+
+
+def _normalizar_clave_suave(texto):
+    base = _normalizar_clave_texto(texto)
+    if not base:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", base)
+    no_marks = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+    alnum = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in no_marks)
+    cleaned = " ".join(alnum.split()).strip()
+    return cleaned or base
+
+
+def _quitar_ruido_titulo_cancion(titulo):
+    clean = _limpiar_linea(titulo)
+    while clean:
+        nxt = _RE_YOUTUBE_NOISE_SUFFIX.sub("", clean).strip()
+        if nxt == clean:
+            break
+        clean = nxt
+    return clean
+
+
+def _distancia_edicion_acotada(a, b, max_dist=1):
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > max_dist:
+        return max_dist + 1
+    prev = list(range(lb + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i]
+        row_min = i
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            val = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+            curr.append(val)
+            if val < row_min:
+                row_min = val
+        if row_min > max_dist:
+            return max_dist + 1
+        prev = curr
+    return prev[lb]
+
+
+def _es_typo_cercano(a, b):
+    if not a or not b:
+        return False
+    min_len = min(len(a), len(b))
+    if min_len < 5:
+        return False
+    if min_len >= 9 and a[0] == b[0]:
+        return _distancia_edicion_acotada(a, b, 2) <= 2
+    if a[0] == b[0] or min_len >= 6:
+        return _distancia_edicion_acotada(a, b, 1) <= 1
+    return False
+
+
+def _extraer_termino_principal_heading(heading):
+    texto = _limpiar_linea(heading)
+    for sep in (" — ", " – "):
+        if sep in texto:
+            texto = texto.split(sep, 1)[0].strip()
+            break
+    sin_parens = re.sub(r"\s*(?:\([^)]*\)|\[[^\]]*\])\s*", " ", texto).strip()
+    return _normalizar_clave_suave(sin_parens or texto)
 
 
 def _extraer_numero_pista(valor_o_heading):
@@ -1741,12 +1834,12 @@ def _encabezado_grupo_album(entry):
 def _clave_grupo_album(heading_o_nombre):
     texto = _limpiar_linea(heading_o_nombre)
     sin_meta = re.sub(
-        r"\s*\((?:Album|EP|Single|Collab Single|Mini Album|Mixtape|OST(?:\s*/\s*Soundtrack)?|Soundtrack|Compilation|Playlist)[^)]*\)\s*$",
+        r"\s*\((?:Album|Mini[\s-]*Album|EP|Single|Digital[\s-]*Single|Collab[\s-]*Single|Mixtape|OST(?:\s*/\s*Soundtrack)?|Soundtrack|Compilation|Repackage|Special[\s-]*Album|Live[\s-]*Album|Deluxe|Playlist)[^)]*\)\s*$",
         "",
         texto,
         flags=re.IGNORECASE,
     ).strip()
-    return _normalizar_clave_texto(sin_meta or texto)
+    return _normalizar_clave_suave(sin_meta or texto)
 
 
 def _encabezado_pista_cancion(entry):
@@ -1758,13 +1851,18 @@ def _encabezado_pista_cancion(entry):
 
 
 def _clave_pista_cancion(song_title, artists_display=""):
-    titulo = _quitar_prefijo_pista(song_title)
-    if " — " in titulo and not artists_display:
-        titulo = titulo.split(" — ", 1)[0].strip()
+    titulo = _quitar_ruido_titulo_cancion(_quitar_prefijo_pista(song_title))
+    if not artists_display:
+        for sep in (" — ", " – "):
+            if sep in titulo:
+                titulo = titulo.split(sep, 1)[0].strip()
+                break
+    titulo = _quitar_ruido_titulo_cancion(titulo)
     if " [" in titulo:
         titulo = re.sub(r"\s*\[[^\]]+\]\s*$", "", titulo).strip()
-    title_key = _normalizar_clave_texto(titulo)
-    artist_key = _normalizar_clave_texto(artists_display)
+    titulo = _quitar_ruido_titulo_cancion(titulo)
+    title_key = _normalizar_clave_suave(titulo)
+    artist_key = _normalizar_clave_suave(artists_display)
     return (title_key, artist_key)
 
 
@@ -2271,6 +2369,22 @@ def _combinar_campo_multilinea(prev_val, new_val, append=False):
     return f"{prev_clean}\n---\n{new_clean}"
 
 
+def _elegir_titulo_cancion_canonico(old_title, new_title):
+    old_t = _limpiar_linea(old_title)
+    new_t = _limpiar_linea(new_title)
+    if not old_t:
+        return _quitar_ruido_titulo_cancion(new_t) or new_t or "Untitled Song"
+    if not new_t:
+        return _quitar_ruido_titulo_cancion(old_t) or old_t or "Untitled Song"
+    old_clean = _quitar_ruido_titulo_cancion(old_t) or old_t
+    new_clean = _quitar_ruido_titulo_cancion(new_t) or new_t
+    old_k = _normalizar_clave_suave(old_clean)
+    new_k = _normalizar_clave_suave(new_clean)
+    if old_k and new_k and (new_k == old_k or _es_typo_cercano(new_k, old_k)):
+        return old_clean
+    return new_clean or new_t or old_clean or "Untitled Song"
+
+
 def _combinar_metadata_cancion_word(existing_fields, new_entry):
     """Combina metadatos/letras guardados previamente en Word con una actualización sin perder secciones."""
     old = existing_fields or {}
@@ -2308,9 +2422,9 @@ def _combinar_metadata_cancion_word(existing_fields, new_entry):
         "category": "music",
         "language": _limpiar_linea(new_entry.get("language"))
         or _limpiar_linea(old.get("language")),
-        "song_title": _limpiar_linea(new_entry.get("song_title"))
-        or _limpiar_linea(old.get("song_title"))
-        or "Untitled Song",
+        "song_title": _elegir_titulo_cancion_canonico(
+            old.get("song_title"), new_entry.get("song_title")
+        ),
         "artists_display": _limpiar_linea(new_entry.get("artists_display"))
         or _limpiar_linea(old.get("artists_display"))
         or "Unknown Artist",
@@ -3288,29 +3402,42 @@ def _actualizar_toc_ingles(doc):
         )
 
 
+def _detectar_idioma_bloque_items(heading_text, body_texts):
+    explicit_lang = ""
+    for line in body_texts:
+        low = str(line or "").lower()
+        if low.startswith("language section:") or low.startswith("language:"):
+            explicit_lang = line.split(":", 1)[1].strip()
+            break
+    code, _, _ = _resolver_idioma_entrada_estudio({
+        "title": heading_text,
+        "language": explicit_lang,
+        "notes": "\n".join(body_texts),
+    })
+    return code
+
+
 def _coincide_cancion_en_bloque(
     fields, heading_text, target_song_title, target_artist=""
 ):
-    target_key = _normalizar_clave_texto(target_song_title)
-    if not target_key:
+    heading_clean = _quitar_prefijo_pista(heading_text)
+    heading_song = heading_clean
+    for sep in (" — ", " – "):
+        if sep in heading_clean:
+            heading_song = heading_clean.split(sep, 1)[0].strip()
+            break
+    cand_title = fields.get("song_title") or heading_song
+    cand_artist = fields.get("artists_display") or ""
+    t_key, a_key = _clave_pista_cancion(target_song_title, target_artist)
+    c_t_key, c_a_key = _clave_pista_cancion(cand_title, cand_artist)
+    if not t_key or not c_t_key:
         return False
-    block_song = _normalizar_clave_texto(fields.get("song_title"))
-    heading_song = _normalizar_clave_texto(
-        _quitar_prefijo_pista(heading_text).split(" — ", 1)[0]
-    )
-    if block_song != target_key and heading_song != target_key:
-        return False
-    if target_artist and fields.get("artists_display"):
-        target_art_key = _normalizar_clave_texto(target_artist)
-        block_art_key = _normalizar_clave_texto(fields.get("artists_display"))
-        if (
-            target_art_key
-            and block_art_key
-            and target_art_key not in block_art_key
-            and block_art_key not in target_art_key
-        ):
+    if a_key and c_a_key and a_key != c_a_key:
+        if a_key not in c_a_key and c_a_key not in a_key:
             return False
-    return True
+    if t_key == c_t_key:
+        return True
+    return _es_typo_cercano(t_key, c_t_key)
 
 
 def _word_com_bloque_duplicado(doc, spec):
@@ -3321,7 +3448,14 @@ def _word_com_bloque_duplicado(doc, spec):
     if sec_start is None:
         return False
     target_heading = _normalizar_clave_texto(spec["heading"])
+    target_soft = _normalizar_clave_suave(spec["heading"])
     strict_heading = spec.get("category") in ("vocabulary", "phrasal_verb")
+    target_term = (
+        _extraer_termino_principal_heading(spec["heading"])
+        if strict_heading
+        else ""
+    )
+    target_lang = spec.get("language_code") or ""
     new_body = _ooxml_cuerpo_normalizado(
         [f"{ln.get('label', '')}{ln.get('text', '')}" for ln in spec["lines"]]
     )
@@ -3329,15 +3463,18 @@ def _word_com_bloque_duplicado(doc, spec):
     while idx < sec_end:
         p = doc.Paragraphs(idx)
         if not _en_rango_toc(doc, p) and p.OutlineLevel == 2:
-            if _normalizar_clave_texto(_texto_parrafo_limpio(p)) == target_heading:
+            j = idx + 1
+            while j < sec_end:
+                pj = doc.Paragraphs(j)
+                if not _en_rango_toc(doc, pj) and pj.OutlineLevel in (1, 2):
+                    break
+                j += 1
+            p_txt = _texto_parrafo_limpio(p)
+            norm_txt = _normalizar_clave_texto(p_txt)
+            soft_txt = _normalizar_clave_suave(p_txt)
+            if norm_txt == target_heading or (target_soft and soft_txt == target_soft):
                 if strict_heading:
                     return True
-                j = idx + 1
-                while j < sec_end:
-                    pj = doc.Paragraphs(j)
-                    if not _en_rango_toc(doc, pj) and pj.OutlineLevel in (1, 2):
-                        break
-                    j += 1
                 existing = _ooxml_cuerpo_normalizado(
                     [
                         _texto_parrafo_limpio(doc.Paragraphs(k))
@@ -3346,8 +3483,24 @@ def _word_com_bloque_duplicado(doc, spec):
                 )
                 if existing == new_body:
                     return True
-                idx = j
-                continue
+            elif (
+                strict_heading
+                and target_term
+                and _extraer_termino_principal_heading(p_txt) == target_term
+            ):
+                block_texts = [
+                    t
+                    for t in (
+                        _texto_parrafo_limpio(doc.Paragraphs(k))
+                        for k in range(idx + 1, j)
+                    )
+                    if t
+                ]
+                existing_lang = _detectar_idioma_bloque_items(p_txt, block_texts)
+                if not target_lang or not existing_lang or existing_lang == target_lang:
+                    return True
+            idx = j
+            continue
         idx += 1
     return False
 
@@ -4506,36 +4659,55 @@ def _ooxml_serializar_documento(doc_root, orig_xml_bytes):
 def _ooxml_cuerpo_normalizado(textos):
     """Texto de un bloque sin la línea 'Added:' (fecha), normalizado para comparar."""
     limpio = [t for t in textos if t and not t.startswith("Added:")]
-    return _normalizar_clave_texto(" ".join(limpio))
+    return _normalizar_clave_suave(" ".join(limpio))
 
 
 def _ooxml_bloque_duplicado(body, items, sec_start, sec_end, spec):
     """True si la sección ya contiene la misma entrada (vocab/phrasal/grammar/notes).
 
-    - Vocabulario y phrasal verbs: mismo encabezado normalizado = duplicado.
+    - Vocabulario y phrasal verbs: mismo encabezado o término principal en el mismo idioma = duplicado.
     - Gramática y notas: mismo encabezado Y mismo contenido = duplicado.
     """
     if sec_start is None:
         return False
     target_heading = _normalizar_clave_texto(spec["heading"])
+    target_soft = _normalizar_clave_suave(spec["heading"])
     strict_heading = spec.get("category") in ("vocabulary", "phrasal_verb")
+    target_term = (
+        _extraer_termino_principal_heading(spec["heading"])
+        if strict_heading
+        else ""
+    )
+    target_lang = spec.get("language_code") or ""
     new_body = _ooxml_cuerpo_normalizado(
         [f"{ln.get('label', '')}{ln.get('text', '')}" for ln in spec["lines"]]
     )
     idx = sec_start + 1
     while idx < sec_end:
         level, text = items[idx]
-        if level == 2 and _normalizar_clave_texto(text) == target_heading:
-            if strict_heading:
-                return True
+        if level == 2:
             j = idx + 1
             while j < sec_end and items[j][0] not in (1, 2):
                 j += 1
-            existing = _ooxml_cuerpo_normalizado(
-                [items[k][1] for k in range(idx + 1, j)]
-            )
-            if existing == new_body:
-                return True
+            norm_txt = _normalizar_clave_texto(text)
+            soft_txt = _normalizar_clave_suave(text)
+            if norm_txt == target_heading or (target_soft and soft_txt == target_soft):
+                if strict_heading:
+                    return True
+                existing = _ooxml_cuerpo_normalizado(
+                    [items[k][1] for k in range(idx + 1, j)]
+                )
+                if existing == new_body:
+                    return True
+            elif (
+                strict_heading
+                and target_term
+                and _extraer_termino_principal_heading(text) == target_term
+            ):
+                block_texts = [items[k][1] for k in range(idx + 1, j) if items[k][1]]
+                existing_lang = _detectar_idioma_bloque_items(text, block_texts)
+                if not target_lang or not existing_lang or existing_lang == target_lang:
+                    return True
             idx = j
             continue
         idx += 1
@@ -5092,6 +5264,15 @@ def _guardar_entrada_ingles_en_docx_xml(archivo, entry):
                 zout.writestr(info, payload)
             if not has_styles:
                 zout.writestr("word/styles.xml", new_styles_bytes)
+        with zipfile.ZipFile(tmp_zip, "r") as zchk:
+            chk_names = set(zchk.namelist())
+            if "word/document.xml" not in chk_names:
+                raise ValueError("word/document.xml faltante en .docx generado")
+            chk_root = ET.fromstring(zchk.read("word/document.xml"))
+            if chk_root.find(_ooxml_w_tag("body")) is None:
+                raise ValueError("word/document.xml sin w:body en .docx generado")
+            if "word/styles.xml" in chk_names:
+                ET.fromstring(zchk.read("word/styles.xml"))
         os.replace(tmp_zip, archivo)
     finally:
         if os.path.exists(tmp_zip):

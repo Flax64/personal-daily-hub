@@ -68,7 +68,7 @@ const ytdlpService = require('./lib/ytdlp-service');
 const serverNotesService = require('./lib/server-notes-service');
 const { withMySqlAdvisoryLock } = require('./lib/distributed-lock');
 const { buildSafeRcloneExecEnv } = serverNotesService;
-const { createServerLogger } = require('./lib/server-logger');
+const { createServerLogger, isAutomatedTestEnv } = require('./lib/server-logger');
 
 const REPLICA_ID = String(process.env.REPLICA_ID || os.hostname() || 'app').trim().slice(0, 64) || 'app';
 
@@ -2038,7 +2038,7 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
 });
 
 // Completar hora de despertar o actualizar registro de sueño (SOLO ADMIN)
-app.patch('/api/update-sleep/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, (req, res) => {
+app.patch('/api/update-sleep/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
     const id = parsePositiveInt(req.params.id);
     if (!id) {
         return res.status(400).send('Invalid sleep record ID.');
@@ -2123,7 +2123,7 @@ app.patch('/api/update-sleep/:id', apiWriteLimiter.middleware, requireAdmin, req
 });
 
 // Eliminar un registro de sueño (SOLO ADMIN)
-app.delete('/api/delete-sleep/:id', apiWriteLimiter.middleware, requireAdmin, (req, res) => {
+app.delete('/api/delete-sleep/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
     const id = parsePositiveInt(req.params.id);
     if (!id) {
         return res.status(400).send('Invalid sleep record ID.');
@@ -2345,7 +2345,7 @@ const CRISIS_TIPOS_VALIDOS = new Set([
     'Otro'
 ]);
 
-app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, (req, res) => {
+app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 8000 }), (req, res) => {
     const fecha = String(req.body.fecha || '').trim();
     const hora = String(req.body.hora || '').trim();
     const tipoCrisis = String(req.body.tipoCrisis || req.body.tipo_crisis || '').trim();
@@ -2471,7 +2471,7 @@ app.get('/api/archive/drive-range', apiReadLimiter.middleware, requireAuth, asyn
     }
 });
 
-app.delete('/api/delete-crisis/:id', apiWriteLimiter.middleware, requireAdmin, (req, res) => {
+app.delete('/api/delete-crisis/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
     const id = parsePositiveInt(req.params.id);
     if (!id) {
         return res.status(400).send('Invalid crisis record ID.');
@@ -2644,37 +2644,33 @@ let _englishDriveRetryTimer = null;
 let _englishDriveRetryCount = 0;
 
 function scheduleStudyDriveRetry() {
-    if (_englishDriveRetryTimer || _englishDriveRetryCount >= 5) return;
+    if (_englishDriveRetryTimer) return;
     _englishDriveRetryCount += 1;
-    const delayMs = Math.min(300000, 30000 * _englishDriveRetryCount);
+    const expFactor = Math.pow(2, Math.min(_englishDriveRetryCount - 1, 4));
+    const delayMs = Math.min(600000, 30000 * expFactor);
     _englishDriveRetryTimer = setTimeout(async () => {
         _englishDriveRetryTimer = null;
         try {
-            await runWithDocxLock('pdh_docx_english', async () => {
-                const localMirrorPath = serverNotesService.resolveLocalEnglishPath({ rootDir: __dirname });
-                if (!fs.existsSync(localMirrorPath)) return;
-                const { confPath: rcloneConf, cleanup: cleanupConf, usingStudyConfig } = resolveRcloneConfigPath({ preferStudy: true });
-                try {
-                    if (!fs.existsSync(rcloneConf)) return;
-                    const { remoteTarget } = resolveStudyDriveRemoteTarget(rcloneConf, usingStudyConfig);
-                    const buf = fs.readFileSync(localMirrorPath);
-                    const syncRes = await serverNotesService.uploadAndVerifyStudyDocx({
-                        docxBuffer: buf,
-                        filePath: localMirrorPath,
-                        rcloneConf,
-                        remoteTarget
+            const flushRes = await runWithDocxLock('pdh_docx_english', () =>
+                serverNotesService.flushPendingEnglishDriveUpload({
+                    resolveRcloneFn: resolveRcloneConfigPath,
+                    resolveStudyTargetFn: resolveStudyDriveRemoteTarget,
+                    updateCacheFn: updateStudyNotebookCacheFromBuffer,
+                    rootDir: __dirname
+                })
+            );
+            if (!flushRes || !flushRes.pending || flushRes.flushed) {
+                _englishDriveRetryCount = 0;
+                if (flushRes && flushRes.flushed) {
+                    serverLogger.info('DRIVE_NOTES', 'Reintento completado: cuaderno pendiente subido a Google Drive', {
+                        localSize: flushRes.localSize,
+                        remoteSize: flushRes.remoteSize
                     });
-                    if (syncRes.verified) {
-                        _englishDriveRetryCount = 0;
-                    } else {
-                        scheduleStudyDriveRetry();
-                    }
-                } finally {
-                    if (cleanupConf && rcloneConf && fs.existsSync(rcloneConf)) {
-                        try { fs.unlinkSync(rcloneConf); } catch (_) {}
-                    }
                 }
-            });
+            } else {
+                console.warn('[STUDY_DRIVE_RETRY_WARN]', flushRes.error || 'Pending Drive sync not verified yet');
+                scheduleStudyDriveRetry();
+            }
         } catch (err) {
             console.warn('[STUDY_DRIVE_RETRY_WARN]', err.message);
             scheduleStudyDriveRetry();
@@ -6687,8 +6683,78 @@ const YOUTUBE_ALLOWED_HOSTS = new Set([
     'youtu.be'
 ]);
 
+const YOUTUBE_TITLE_NOISE_RE = /\s*(?:\((?:official(?:\s+(?:music\s+)?(?:video|m\/?v|audio|lyric(?:s)?\s+video|visualizer|performance\s+video))?|m\/?v|mv|lyrics?|lyric\s+video|audio|hd|4k|color\s+coded(?:\s+lyrics)?|eng(?:\/esp|\/kor|\/jpn)?\s+sub(?:s)?)\)|\[(?:official(?:\s+(?:music\s+)?(?:video|m\/?v|audio|lyric(?:s)?\s+video|visualizer|performance\s+video))?|m\/?v|mv|lyrics?|lyric\s+video|audio|hd|4k|color\s+coded(?:\s+lyrics)?|eng(?:\/esp|\/kor|\/jpn)?\s+sub(?:s)?)\])[\s!?.,;:~·•\-]*$/i;
+
 function normalizarTextoCatalogo(valor) {
-    return String(valor || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    return String(valor || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/[’‘ʼ]/g, "'")
+        .replace(/[“”]/g, '"')
+        .replace(/[–—]/g, '-')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+}
+
+function quitarRuidoTituloCatalogo(valor) {
+    let clean = String(valor || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .trim()
+        .replace(/\s+/g, ' ');
+    while (clean) {
+        const next = clean.replace(YOUTUBE_TITLE_NOISE_RE, '').trim();
+        if (next === clean) break;
+        clean = next;
+    }
+    return clean;
+}
+
+function normalizarClaveFuzzyCatalogo(valor, { stripYouTubeNoise = false } = {}) {
+    const raw = stripYouTubeNoise ? quitarRuidoTituloCatalogo(valor) : String(valor || '');
+    const base = normalizarTextoCatalogo(raw);
+    if (!base) return '';
+    const noMarks = base.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+    const alnum = noMarks.replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+    return alnum || noMarks;
+}
+
+function distanciaEdicionAcotada(a, b, maxDist = 2) {
+    if (a === b) return 0;
+    const lenA = a.length;
+    const lenB = b.length;
+    if (Math.abs(lenA - lenB) > maxDist) return maxDist + 1;
+    let prev = new Array(lenB + 1);
+    let curr = new Array(lenB + 1);
+    for (let j = 0; j <= lenB; j++) prev[j] = j;
+    for (let i = 1; i <= lenA; i++) {
+        curr[0] = i;
+        let rowMin = curr[0];
+        const chA = a.charCodeAt(i - 1);
+        for (let j = 1; j <= lenB; j++) {
+            const cost = chA === b.charCodeAt(j - 1) ? 0 : 1;
+            const val = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+            curr[j] = val;
+            if (val < rowMin) rowMin = val;
+        }
+        if (rowMin > maxDist) return maxDist + 1;
+        const tmp = prev;
+        prev = curr;
+        curr = tmp;
+    }
+    return prev[lenB];
+}
+
+function esTypoCercanoCatalogo(a, b) {
+    if (!a || !b) return false;
+    const minLen = Math.min(a.length, b.length);
+    if (minLen < 5) return false;
+    if (minLen >= 9 && a[0] === b[0]) {
+        return distanciaEdicionAcotada(a, b, 2) <= 2;
+    }
+    if (a[0] === b[0] || minLen >= 6) {
+        return distanciaEdicionAcotada(a, b, 1) <= 1;
+    }
+    return false;
 }
 
 function buildStandardYouTubeUrl({ videoId, ytMusicUrl }) {
@@ -6863,6 +6929,24 @@ async function upsertMusicaArtista(usuarioId, nombre, tipoArtista = 'solo', { up
         return existing[0].id;
     }
 
+    const fuzzyNorm = normalizarClaveFuzzyCatalogo(cleanName);
+    if (fuzzyNorm) {
+        const allArtists = await dbQueryAsync(
+            'SELECT id, nombre, tipo_artista, notas_cortas, creado_en FROM MusicaArtistas WHERE usuario_id = ? ORDER BY nombre ASC',
+            [usuarioId]
+        );
+        const fuzzyMatch = (allArtists || []).find((a) => normalizarClaveFuzzyCatalogo(a.nombre) === fuzzyNorm);
+        if (fuzzyMatch) {
+            if (updateExisting) {
+                await dbQueryAsync(
+                    'UPDATE MusicaArtistas SET nombre = ?, tipo_artista = ? WHERE id = ? AND usuario_id = ?',
+                    [fuzzyMatch.nombre || cleanName, tipo, fuzzyMatch.id, usuarioId]
+                );
+            }
+            return fuzzyMatch.id;
+        }
+    }
+
     const inserted = await dbQueryAsync(
         'INSERT INTO MusicaArtistas (usuario_id, nombre, nombre_normalizado, tipo_artista) VALUES (?, ?, ?, ?)',
         [usuarioId, cleanName, norm, tipo]
@@ -6894,12 +6978,85 @@ async function upsertMusicaAlbum({ usuarioId, albumTitle, albumType, albumYear, 
         return existing[0].id;
     }
 
+    const fuzzyNorm = normalizarClaveFuzzyCatalogo(cleanTitle);
+    if (fuzzyNorm) {
+        const { albums } = await fetchUserMusicAlbumsAndSongs(usuarioId);
+        const fuzzyMatch = (albums || []).find(
+            (al) => Number(al.artista_principal_id || 0) === Number(mainArtistId || 0)
+                && normalizarClaveFuzzyCatalogo(al.titulo) === fuzzyNorm
+        );
+        if (fuzzyMatch) {
+            await dbQueryAsync(
+                'UPDATE MusicaAlbumes SET tipo_lanzamiento = ?, anio = COALESCE(?, anio) WHERE id = ? AND usuario_id = ?',
+                [tipo, yearVal, fuzzyMatch.id, usuarioId]
+            );
+            return fuzzyMatch.id;
+        }
+    }
+
     const inserted = await dbQueryAsync(
         `INSERT INTO MusicaAlbumes (usuario_id, artista_principal_id, titulo, titulo_normalizado, tipo_lanzamiento, anio)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [usuarioId, mainArtistId || null, cleanTitle, norm, tipo, yearVal]
     );
     return inserted.insertId;
+}
+
+async function findExistingUserSongMatch({
+    usuarioId,
+    titulo,
+    mainArtistId = null,
+    mainArtistName = '',
+    ytVideoId = null,
+    excludeSongId = null
+}) {
+    const { songs } = await fetchUserMusicAlbumsAndSongs(usuarioId);
+    if (!songs || !songs.length) return null;
+
+    const artistLinks = await dbQueryAsync(
+        `SELECT mca.cancion_id, mca.artista_id, mca.rol, mca.orden, ma.nombre
+         FROM MusicaCancionArtistas mca
+         JOIN MusicaArtistas ma ON ma.id = mca.artista_id
+         JOIN MusicaCanciones mc ON mc.id = mca.cancion_id
+         WHERE mc.usuario_id = ?
+         ORDER BY mca.orden ASC, mca.artista_id ASC`,
+        [usuarioId]
+    );
+    const linksBySong = new Map();
+    for (const link of (artistLinks || [])) {
+        const sid = Number(link.cancion_id);
+        if (!linksBySong.has(sid)) linksBySong.set(sid, []);
+        linksBySong.get(sid).push(link);
+    }
+
+    const cleanVideoId = String(ytVideoId || '').trim();
+    const newTitleKey = normalizarClaveFuzzyCatalogo(titulo, { stripYouTubeNoise: true });
+    const newArtistKey = normalizarClaveFuzzyCatalogo(mainArtistName);
+    let typoMatch = null;
+
+    for (const s of songs) {
+        if (excludeSongId && Number(s.id) === Number(excludeSongId)) continue;
+        const songLinks = linksBySong.get(Number(s.id)) || [];
+        if (cleanVideoId && s.yt_video_id && String(s.yt_video_id).trim() === cleanVideoId) {
+            return { matchType: 'exact_video', song: { ...s, artists: songLinks } };
+        }
+        const mainLink = songLinks.find((l) => l.rol === 'main') || songLinks[0] || null;
+        const sameArtist = (mainLink && mainArtistId && Number(mainLink.artista_id) === Number(mainArtistId))
+            || Boolean(mainLink && newArtistKey && normalizarClaveFuzzyCatalogo(mainLink.nombre) === newArtistKey)
+            || (!songLinks.length);
+        if (!sameArtist) continue;
+
+        const existingTitleKey = normalizarClaveFuzzyCatalogo(s.titulo, { stripYouTubeNoise: true });
+        if (!newTitleKey || !existingTitleKey) continue;
+        if (existingTitleKey === newTitleKey) {
+            return { matchType: 'exact_title', song: { ...s, artists: songLinks } };
+        }
+        if (mainLink && !typoMatch && esTypoCercanoCatalogo(newTitleKey, existingTitleKey)) {
+            typoMatch = { matchType: 'possible_typo', song: { ...s, artists: songLinks } };
+        }
+    }
+
+    return typoMatch;
 }
 
 function validateAndExtractSongPayload(body) {
@@ -7524,6 +7681,74 @@ async function syncMusicaCancionArtistas(uid, songId, mainArtistId, collaborator
     }
 }
 
+async function persistMusicaCancionUpdate(uid, songId, {
+    albumId,
+    titulo,
+    numeroPista,
+    idioma,
+    albumYear,
+    ytMusicUrl,
+    ytVideoId,
+    thumbnailUrl,
+    estadoEstudio,
+    enfoqueCorto
+}) {
+    const updateWithAnio = () => dbQueryAsync(
+        `UPDATE MusicaCanciones
+         SET album_id = ?, titulo = ?, numero_pista = ?, idioma = ?, anio = ?,
+             yt_music_url = ?, yt_video_id = ?, thumbnail_url = ?,
+             estado_estudio = ?, enfoque_corto = ?
+         WHERE id = ? AND usuario_id = ?`,
+        [
+            albumId,
+            titulo,
+            numeroPista,
+            idioma,
+            albumYear,
+            ytMusicUrl,
+            ytVideoId,
+            thumbnailUrl,
+            estadoEstudio,
+            enfoqueCorto,
+            songId,
+            uid
+        ]
+    );
+    const updateLegacy = () => dbQueryAsync(
+        `UPDATE MusicaCanciones
+         SET album_id = ?, titulo = ?, numero_pista = ?, idioma = ?,
+             yt_music_url = ?, yt_video_id = ?, thumbnail_url = ?,
+             estado_estudio = ?, enfoque_corto = ?
+         WHERE id = ? AND usuario_id = ?`,
+        [
+            albumId,
+            titulo,
+            numeroPista,
+            idioma,
+            ytMusicUrl,
+            ytVideoId,
+            thumbnailUrl,
+            estadoEstudio,
+            enfoqueCorto,
+            songId,
+            uid
+        ]
+    );
+
+    try {
+        await updateWithAnio();
+    } catch (updErr) {
+        if (!isUnknownColumnDbError(updErr)) throw updErr;
+        await ensureMusicaSchemaExtraColumns();
+        try {
+            await updateWithAnio();
+        } catch (retryUpdErr) {
+            if (!isUnknownColumnDbError(retryUpdErr)) throw retryUpdErr;
+            await updateLegacy();
+        }
+    }
+}
+
 app.post('/api/english/music/songs', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 8000 }), async (req, res) => {
     const validated = validateAndExtractSongPayload(req.body);
     if (validated.error) return res.status(400).send(validated.error);
@@ -7540,6 +7765,63 @@ app.post('/api/english/music/songs', apiWriteLimiter.middleware, requireAdmin, r
             albumYear: d.albumYear,
             mainArtistId
         });
+
+        const existingMatch = await findExistingUserSongMatch({
+            usuarioId: uid,
+            titulo: d.titulo,
+            mainArtistId,
+            mainArtistName: d.mainArtist,
+            ytVideoId: d.ytVideoId
+        });
+        if (existingMatch && existingMatch.matchType === 'possible_typo' && !req.body.allowSimilarTitle) {
+            return res.status(409).send(
+                `Possible typo or duplicate: "${existingMatch.song.titulo}" already exists for this artist. Edit the existing song or verify the spelling.`
+            );
+        }
+        if (existingMatch && (existingMatch.matchType === 'exact_video' || existingMatch.matchType === 'exact_title')) {
+            const cur = existingMatch.song;
+            const mergedAlbumId = albumId || cur.album_id || null;
+            const mergedTitulo = cur.titulo || d.titulo;
+            const mergedNumeroPista = d.numeroPista || cur.numero_pista || null;
+            const mergedIdioma = (d.idioma && d.idioma !== 'English') ? d.idioma : (cur.idioma || d.idioma || 'English');
+            const mergedAnio = d.albumYear || cur.cancion_anio || cur.album_anio || null;
+            const mergedYtMusicUrl = d.ytMusicUrl || cur.yt_music_url || null;
+            const mergedYtVideoId = d.ytVideoId || cur.yt_video_id || null;
+            const mergedThumbUrl = d.thumbnailUrl || cur.thumbnail_url || null;
+            const mergedEstado = cur.estado_estudio || d.estadoEstudio || 'to_study';
+            const mergedEnfoque = cur.enfoque_corto || d.enfoqueCorto || null;
+
+            await persistMusicaCancionUpdate(uid, cur.id, {
+                albumId: mergedAlbumId,
+                titulo: mergedTitulo,
+                numeroPista: mergedNumeroPista,
+                idioma: mergedIdioma,
+                albumYear: mergedAnio,
+                ytMusicUrl: mergedYtMusicUrl,
+                ytVideoId: mergedYtVideoId,
+                thumbnailUrl: mergedThumbUrl,
+                estadoEstudio: mergedEstado,
+                enfoqueCorto: mergedEnfoque
+            });
+
+            const existingCollabs = (cur.artists || [])
+                .filter((a) => a.rol && a.rol !== 'main')
+                .map((a) => ({ nombre: a.nombre, rol: a.rol }));
+            const mergedCollabs = parseCollaboratorsInput([...existingCollabs, ...d.collaborators], d.mainArtist);
+            if (mergedCollabs.length > existingCollabs.length) {
+                await syncMusicaCancionArtistas(uid, cur.id, mainArtistId, mergedCollabs, true);
+            }
+
+            return res.status(200).json({
+                ok: true,
+                deduplicated: true,
+                duplicateReason: existingMatch.matchType,
+                message: 'Song already exists in your catalog; updated existing entry instead of duplicating.',
+                songId: cur.id,
+                ytMusicUrl: mergedYtMusicUrl,
+                youtubeUrl: buildStandardYouTubeUrl({ videoId: mergedYtVideoId, ytMusicUrl: mergedYtMusicUrl })
+            });
+        }
 
         const insertedSong = await insertMusicaCancionRow([
             uid,
@@ -7587,6 +7869,20 @@ app.put('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAdmin
         if (!existing.length) return res.status(404).send('Song not found.');
 
         const mainArtistId = await upsertMusicaArtista(uid, d.mainArtist, d.artistType, { updateExisting: true });
+        const dupMatch = await findExistingUserSongMatch({
+            usuarioId: uid,
+            titulo: d.titulo,
+            mainArtistId,
+            mainArtistName: d.mainArtist,
+            ytVideoId: d.ytVideoId,
+            excludeSongId: songId
+        });
+        if (dupMatch && (dupMatch.matchType === 'exact_video' || dupMatch.matchType === 'exact_title')) {
+            return res.status(409).send(
+                `Another song ("${dupMatch.song.titulo}") with that title or YouTube link already exists for this artist.`
+            );
+        }
+
         const albumId = await upsertMusicaAlbum({
             usuarioId: uid,
             albumTitle: d.albumTitle,
@@ -7595,60 +7891,18 @@ app.put('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAdmin
             mainArtistId
         });
 
-        const updateWithAnio = () => dbQueryAsync(
-            `UPDATE MusicaCanciones
-             SET album_id = ?, titulo = ?, numero_pista = ?, idioma = ?, anio = ?,
-                 yt_music_url = ?, yt_video_id = ?, thumbnail_url = ?,
-                 estado_estudio = ?, enfoque_corto = ?
-             WHERE id = ? AND usuario_id = ?`,
-            [
-                albumId,
-                d.titulo,
-                d.numeroPista,
-                d.idioma,
-                d.albumYear,
-                d.ytMusicUrl,
-                d.ytVideoId,
-                d.thumbnailUrl,
-                d.estadoEstudio,
-                d.enfoqueCorto,
-                songId,
-                uid
-            ]
-        );
-        const updateLegacy = () => dbQueryAsync(
-            `UPDATE MusicaCanciones
-             SET album_id = ?, titulo = ?, numero_pista = ?, idioma = ?,
-                 yt_music_url = ?, yt_video_id = ?, thumbnail_url = ?,
-                 estado_estudio = ?, enfoque_corto = ?
-             WHERE id = ? AND usuario_id = ?`,
-            [
-                albumId,
-                d.titulo,
-                d.numeroPista,
-                d.idioma,
-                d.ytMusicUrl,
-                d.ytVideoId,
-                d.thumbnailUrl,
-                d.estadoEstudio,
-                d.enfoqueCorto,
-                songId,
-                uid
-            ]
-        );
-
-        try {
-            await updateWithAnio();
-        } catch (updErr) {
-            if (!isUnknownColumnDbError(updErr)) throw updErr;
-            await ensureMusicaSchemaExtraColumns();
-            try {
-                await updateWithAnio();
-            } catch (retryUpdErr) {
-                if (!isUnknownColumnDbError(retryUpdErr)) throw retryUpdErr;
-                await updateLegacy();
-            }
-        }
+        await persistMusicaCancionUpdate(uid, songId, {
+            albumId,
+            titulo: d.titulo,
+            numeroPista: d.numeroPista,
+            idioma: d.idioma,
+            albumYear: d.albumYear,
+            ytMusicUrl: d.ytMusicUrl,
+            ytVideoId: d.ytVideoId,
+            thumbnailUrl: d.thumbnailUrl,
+            estadoEstudio: d.estadoEstudio,
+            enfoqueCorto: d.enfoqueCorto
+        });
 
         await syncMusicaCancionArtistas(uid, songId, mainArtistId, d.collaborators, true);
 
@@ -7748,7 +8002,7 @@ app.post('/api/english/music/songs/:id/sync-metadata', apiWriteLimiter.middlewar
     }
 });
 
-app.delete('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
+app.delete('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const songId = parsePositiveInt(req.params.id);
     if (!songId) return res.status(400).send('Invalid song ID.');
 
@@ -8401,55 +8655,69 @@ app.post('/api/english/music/pc-word-drive-sync', apiWriteLimiter.middleware, ve
         return res.status(400).json({ ok: false, error: 'Payload is not a valid .docx ZIP container.' });
     }
 
-    updateStudyNotebookCacheFromBuffer(docxBuffer, 'pc-sync');
-
     const shmDir = fs.existsSync('/dev/shm') ? '/dev/shm' : os.tmpdir();
     const tmpDocxPath = path.join(shmDir, `English_Learning_Notebook_${process.pid}_${Date.now()}.docx`);
 
     try {
-        fs.writeFileSync(tmpDocxPath, docxBuffer, { mode: 0o600 });
+        return await runWithDocxLock('pdh_docx_english', async () => {
+            updateStudyNotebookCacheFromBuffer(docxBuffer, 'pc-sync');
+            fs.writeFileSync(tmpDocxPath, docxBuffer, { mode: 0o600 });
 
-        if (!fs.existsSync(rcloneConf)) {
-            return res.json({
-                ok: true,
-                uploaded: false,
-                remoteTarget,
-                message: 'rclone.conf no encontrado en entorno local; en servidor se sube automáticamente con RCLONE_CONF_B64.'
-            });
-        }
+            const localMirrorPath = serverNotesService.resolveLocalEnglishPath({ rootDir: __dirname });
+            if (serverNotesService.isValidDocxZipBuffer(docxBuffer)) {
+                try {
+                    serverNotesService.writeBufferAtomic(localMirrorPath, docxBuffer, 0o600);
+                } catch (_) {}
+            }
 
-        const syncRes = await runWithDocxLock('pdh_docx_english', () =>
-            serverNotesService.uploadAndVerifyStudyDocx({
+            if (!fs.existsSync(rcloneConf)) {
+                return res.json({
+                    ok: true,
+                    uploaded: false,
+                    remoteTarget,
+                    message: 'rclone.conf no encontrado en entorno local; en servidor se sube automáticamente con RCLONE_CONF_B64.'
+                });
+            }
+
+            const syncRes = await serverNotesService.uploadAndVerifyStudyDocx({
                 docxBuffer,
                 filePath: tmpDocxPath,
                 rcloneConf,
                 remoteTarget
-            })
-        );
+            });
 
-        if (!syncRes.verified) {
-            return res.status(502).json({
-                ok: false,
-                uploaded: false,
-                verified: false,
-                remoteTarget,
+            if (!syncRes.verified) {
+                return res.status(502).json({
+                    ok: false,
+                    uploaded: false,
+                    verified: false,
+                    remoteTarget,
+                    localSize: syncRes.localSize,
+                    remoteSize: syncRes.remoteSize,
+                    error: 'Google Drive upload could not be verified with matching byte size.'
+                });
+            }
+
+            if (serverNotesService.isValidDocxZipBuffer(docxBuffer)) {
+                serverNotesService.clearEnglishDrivePendingMarker(localMirrorPath);
+            }
+            _englishDriveRetryCount = 0;
+
+            return res.json({
+                ok: true,
+                uploaded: true,
+                verified: true,
                 localSize: syncRes.localSize,
                 remoteSize: syncRes.remoteSize,
-                error: 'Google Drive upload could not be verified with matching byte size.'
+                remoteModTime: syncRes.remoteModTime,
+                sha256: syncRes.sha256,
+                remoteTarget
             });
-        }
-
-        return res.json({
-            ok: true,
-            uploaded: true,
-            verified: true,
-            localSize: syncRes.localSize,
-            remoteSize: syncRes.remoteSize,
-            remoteModTime: syncRes.remoteModTime,
-            sha256: syncRes.sha256,
-            remoteTarget
         });
     } catch (err) {
+        if (err && err.code === 'LOCK_TIMEOUT') {
+            return res.status(503).json({ ok: false, error: 'Concurrent English Notebook sync busy; please retry shortly.' });
+        }
         console.error('[STUDY_DRIVE_SYNC_ERROR]', err.message);
         return res.status(502).json({ ok: false, error: err.message || 'Failed to upload language notebook to Google Drive.' });
     } finally {
@@ -8938,7 +9206,7 @@ app.get('/api/english/music/songs/:id/media', apiReadLimiter.middleware, require
     }
 });
 
-app.patch('/api/english/music/artists/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
+app.patch('/api/english/music/artists/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const artistId = parsePositiveInt(req.params.id);
     if (!artistId) return res.status(400).send('Invalid artist ID.');
 
@@ -8967,6 +9235,20 @@ app.patch('/api/english/music/artists/:id', apiWriteLimiter.middleware, requireA
             return res.status(409).send('Another artist with that name already exists in your catalog.');
         }
 
+        const fuzzyNorm = normalizarClaveFuzzyCatalogo(cleanName);
+        if (fuzzyNorm) {
+            const allArtists = await dbQueryAsync(
+                'SELECT id, nombre, tipo_artista, notas_cortas, creado_en FROM MusicaArtistas WHERE usuario_id = ? ORDER BY nombre ASC',
+                [uid]
+            );
+            const fuzzyConflict = (allArtists || []).find(
+                (a) => Number(a.id) !== Number(artistId) && normalizarClaveFuzzyCatalogo(a.nombre) === fuzzyNorm
+            );
+            if (fuzzyConflict) {
+                return res.status(409).send('Another artist with that name already exists in your catalog.');
+            }
+        }
+
         await dbQueryAsync(
             'UPDATE MusicaArtistas SET nombre = ?, nombre_normalizado = ?, tipo_artista = ?, notas_cortas = ? WHERE id = ? AND usuario_id = ?',
             [cleanName, norm, tipo, notasCortas, artistId, uid]
@@ -8978,7 +9260,7 @@ app.patch('/api/english/music/artists/:id', apiWriteLimiter.middleware, requireA
     }
 });
 
-app.patch('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
+app.patch('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const albumId = parsePositiveInt(req.params.id);
     if (!albumId) return res.status(400).send('Invalid album ID.');
 
@@ -8997,6 +9279,19 @@ app.patch('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireAd
             [albumId, uid]
         );
         if (!existing.length) return res.status(404).send('Album not found.');
+
+        const { albums } = await fetchUserMusicAlbumsAndSongs(uid);
+        const currentAlbum = (albums || []).find((a) => Number(a.id) === Number(albumId));
+        const currentArtistId = currentAlbum ? Number(currentAlbum.artista_principal_id || 0) : 0;
+        const fuzzyNorm = normalizarClaveFuzzyCatalogo(cleanTitle);
+        const conflictAlbum = (albums || []).find(
+            (a) => Number(a.id) !== Number(albumId)
+                && Number(a.artista_principal_id || 0) === currentArtistId
+                && (normalizarTextoCatalogo(a.titulo) === norm || (fuzzyNorm && normalizarClaveFuzzyCatalogo(a.titulo) === fuzzyNorm))
+        );
+        if (conflictAlbum) {
+            return res.status(409).send('Another album with that title already exists for this artist.');
+        }
 
         await dbQueryAsync(
             'UPDATE MusicaAlbumes SET titulo = ?, titulo_normalizado = ?, tipo_lanzamiento = ?, anio = ? WHERE id = ? AND usuario_id = ?',
@@ -9075,7 +9370,7 @@ app.post('/api/english/music/albums', apiWriteLimiter.middleware, requireAdmin, 
     }
 });
 
-app.delete('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
+app.delete('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const albumId = parsePositiveInt(req.params.id);
     if (!albumId) return res.status(400).send('Invalid album ID.');
 
@@ -10430,6 +10725,18 @@ const httpServer = app.listen(PORT, () => {
         fileLogs: serverLogger.fileEnabled,
         logDir: serverLogger.logDir
     });
+    if (!isAutomatedTestEnv() && serverNotesService.isServerAutonomousNotesEnabled()) {
+        const pendingDrive = serverNotesService.readEnglishDrivePendingMarker(
+            serverNotesService.resolveLocalEnglishPath({ rootDir: __dirname })
+        );
+        if (pendingDrive) {
+            serverLogger.warn('DRIVE_NOTES', 'Respaldo local de cuaderno pendiente de subir a Google Drive detectado al iniciar; programando reintento', {
+                pendingSince: pendingDrive.pendingSince,
+                attempts: pendingDrive.attempts
+            });
+            scheduleStudyDriveRetry();
+        }
+    }
 });
 // Protección anti-Slowloris / agotamiento de sockets HTTP
 httpServer.keepAliveTimeout = 15000;

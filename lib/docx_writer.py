@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as _xml_escape
@@ -159,20 +160,112 @@ def _w_el(_tag_name: str, **attrs) -> ET.Element:
     return ET.Element(_w_tag(_tag_name), attrib)
 
 
+_RE_XML_INVALID_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_RE_ZERO_WIDTH_CHARS = re.compile(r"[\u200b\u200c\u200d\ufeff]")
+_RE_YOUTUBE_NOISE_SUFFIX = re.compile(
+    r"\s*(?:\((?:official(?:\s+(?:music\s+)?(?:video|m/?v|audio|lyric(?:s)?\s+video|visualizer|performance\s+video))?|m/?v|mv|lyrics?|lyric\s+video|audio|hd|4k|color\s+coded(?:\s+lyrics)?|eng(?:/esp|/kor|/jpn)?\s+sub(?:s)?)\)|\[(?:official(?:\s+(?:music\s+)?(?:video|m/?v|audio|lyric(?:s)?\s+video|visualizer|performance\s+video))?|m/?v|mv|lyrics?|lyric\s+video|audio|hd|4k|color\s+coded(?:\s+lyrics)?|eng(?:/esp|/kor|/jpn)?\s+sub(?:s)?)\])[\s!?.,;:~·•\-]*$",
+    re.IGNORECASE,
+)
+
+
+def _sanitizar_xml_texto(texto) -> str:
+    if texto is None:
+        return ""
+    return _RE_XML_INVALID_CHARS.sub("", str(texto))
+
+
 def _limpiar_linea(texto) -> str:
     if texto is None:
         return ""
-    return str(texto).replace("\r", " ").replace("\n", " ").strip()
+    clean = _sanitizar_xml_texto(_RE_ZERO_WIDTH_CHARS.sub("", str(texto)))
+    return clean.replace("\r", " ").replace("\n", " ").strip()
 
 
 def _dividir_lineas_limpias(texto) -> list[str]:
     if texto is None:
         return []
-    return [line.strip() for line in str(texto).replace("\r", "").split("\n") if line.strip()]
+    clean = _sanitizar_xml_texto(_RE_ZERO_WIDTH_CHARS.sub("", str(texto)))
+    return [line.strip() for line in clean.replace("\r", "").split("\n") if line.strip()]
 
 
 def _normalizar_clave_texto(texto) -> str:
-    return " ".join(str(texto or "").split()).strip().lower()
+    clean = _RE_ZERO_WIDTH_CHARS.sub("", str(texto or ""))
+    clean = (
+        clean.replace("’", "'")
+        .replace("‘", "'")
+        .replace("ʼ", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    return " ".join(clean.split()).strip().lower()
+
+
+def _normalizar_clave_suave(texto) -> str:
+    base = _normalizar_clave_texto(texto)
+    if not base:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", base)
+    no_marks = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+    alnum = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in no_marks)
+    cleaned = " ".join(alnum.split()).strip()
+    return cleaned or base
+
+
+def _quitar_ruido_titulo_cancion(titulo: str) -> str:
+    clean = _limpiar_linea(titulo)
+    while clean:
+        nxt = _RE_YOUTUBE_NOISE_SUFFIX.sub("", clean).strip()
+        if nxt == clean:
+            break
+        clean = nxt
+    return clean
+
+
+def _distancia_edicion_acotada(a: str, b: str, max_dist: int = 1) -> int:
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > max_dist:
+        return max_dist + 1
+    prev = list(range(lb + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i]
+        row_min = i
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            val = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+            curr.append(val)
+            if val < row_min:
+                row_min = val
+        if row_min > max_dist:
+            return max_dist + 1
+        prev = curr
+    return prev[lb]
+
+
+def _es_typo_cercano(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    min_len = min(len(a), len(b))
+    if min_len < 5:
+        return False
+    if min_len >= 9 and a[0] == b[0]:
+        return _distancia_edicion_acotada(a, b, 2) <= 2
+    if a[0] == b[0] or min_len >= 6:
+        return _distancia_edicion_acotada(a, b, 1) <= 1
+    return False
+
+
+def _extraer_termino_principal_heading(heading: str) -> str:
+    texto = _limpiar_linea(heading)
+    for sep in (" — ", " – "):
+        if sep in texto:
+            texto = texto.split(sep, 1)[0].strip()
+            break
+    sin_parens = re.sub(r"\s*(?:\([^)]*\)|\[[^\]]*\])\s*", " ", texto).strip()
+    return _normalizar_clave_suave(sin_parens or texto)
 
 
 def _extraer_numero_pista(valor_o_heading):
@@ -738,7 +831,7 @@ def _crear_run_texto(
         )
     )
     t_el = _w_el("t")
-    txt = "" if texto is None else str(texto)
+    txt = _sanitizar_xml_texto(texto)
     if txt.startswith(" ") or txt.endswith(" ") or "\t" in txt:
         t_el.attrib[f"{XML_NS}space"] = "preserve"
     t_el.text = txt
@@ -1802,6 +1895,22 @@ def _extraer_campos_bloque_word(lineas_texto, heading_text="") -> dict:
     return fields
 
 
+def _elegir_titulo_cancion_canonico(old_title, new_title) -> str:
+    old_t = _limpiar_linea(old_title)
+    new_t = _limpiar_linea(new_title)
+    if not old_t:
+        return _quitar_ruido_titulo_cancion(new_t) or new_t or "Untitled Song"
+    if not new_t:
+        return _quitar_ruido_titulo_cancion(old_t) or old_t or "Untitled Song"
+    old_clean = _quitar_ruido_titulo_cancion(old_t) or old_t
+    new_clean = _quitar_ruido_titulo_cancion(new_t) or new_t
+    old_k = _normalizar_clave_suave(old_clean)
+    new_k = _normalizar_clave_suave(new_clean)
+    if old_k and new_k and (new_k == old_k or _es_typo_cercano(new_k, old_k)):
+        return old_clean
+    return new_clean or new_t or old_clean or "Untitled Song"
+
+
 def _combinar_metadata_cancion_word(existing_fields, new_entry) -> dict:
     old = existing_fields or {}
     append_study = bool(new_entry.get("append_study_fields"))
@@ -1815,7 +1924,7 @@ def _combinar_metadata_cancion_word(existing_fields, new_entry) -> dict:
     return {
         "category": "music",
         "language": _limpiar_linea(new_entry.get("language")) or _limpiar_linea(old.get("language")),
-        "song_title": _limpiar_linea(new_entry.get("song_title")) or _limpiar_linea(old.get("song_title")) or "Untitled Song",
+        "song_title": _elegir_titulo_cancion_canonico(old.get("song_title"), new_entry.get("song_title")),
         "artists_display": _limpiar_linea(new_entry.get("artists_display")) or _limpiar_linea(old.get("artists_display")) or "Unknown Artist",
         "album_title": _limpiar_linea(new_entry.get("album_title")) or _limpiar_linea(old.get("album_title")),
         "album_type": _limpiar_linea(new_entry.get("album_type")) or _limpiar_linea(old.get("album_type")),
@@ -2061,10 +2170,10 @@ def _encabezado_grupo_album(entry: dict) -> str:
 def _clave_grupo_album(heading: str) -> str:
     texto = _limpiar_linea(heading)
     sin_meta = re.sub(
-        r"\s*\((?:Album|EP|Single|Collab Single|Mini Album|Mixtape|OST(?:\s*/\s*Soundtrack)?|Soundtrack|Compilation|Playlist)[^)]*\)\s*$",
+        r"\s*\((?:Album|Mini[\s-]*Album|EP|Single|Digital[\s-]*Single|Collab[\s-]*Single|Mixtape|OST(?:\s*/\s*Soundtrack)?|Soundtrack|Compilation|Repackage|Special[\s-]*Album|Live[\s-]*Album|Deluxe|Playlist)[^)]*\)\s*$",
         "", texto, flags=re.IGNORECASE,
     ).strip()
-    return _normalizar_clave_texto(sin_meta or texto)
+    return _normalizar_clave_suave(sin_meta or texto)
 
 
 def _encabezado_pista_cancion(entry: dict) -> str:
@@ -2076,12 +2185,17 @@ def _encabezado_pista_cancion(entry: dict) -> str:
 
 
 def _clave_pista_cancion(song_title: str, artists_display: str = ""):
-    titulo = _quitar_prefijo_pista(song_title)
-    if " — " in titulo and not artists_display:
-        titulo = titulo.split(" — ", 1)[0].strip()
+    titulo = _quitar_ruido_titulo_cancion(_quitar_prefijo_pista(song_title))
+    if not artists_display:
+        for sep in (" — ", " – "):
+            if sep in titulo:
+                titulo = titulo.split(sep, 1)[0].strip()
+                break
+    titulo = _quitar_ruido_titulo_cancion(titulo)
     if " [" in titulo:
         titulo = re.sub(r"\s*\[[^\]]+\]\s*$", "", titulo).strip()
-    return (_normalizar_clave_texto(titulo), _normalizar_clave_texto(artists_display))
+    titulo = _quitar_ruido_titulo_cancion(titulo)
+    return (_normalizar_clave_suave(titulo), _normalizar_clave_suave(artists_display))
 
 
 def _clave_orden_pista(track_number, song_title=""):
@@ -2317,27 +2431,38 @@ def _establecer_texto_heading(p_elem: ET.Element, heading_text: str, font_size: 
 
 def _cuerpo_normalizado(textos) -> str:
     limpio = [t for t in textos if t and not t.startswith("Added:")]
-    return _normalizar_clave_texto(" ".join(limpio))
+    return _normalizar_clave_suave(" ".join(limpio))
 
 
 def _bloque_duplicado(items, sec_start, sec_end, spec: dict) -> bool:
     if sec_start is None:
         return False
     target_heading = _normalizar_clave_texto(spec["heading"])
+    target_soft = _normalizar_clave_suave(spec["heading"])
     strict_heading = spec.get("category") in ("vocabulary", "phrasal_verb")
+    target_term = _extraer_termino_principal_heading(spec["heading"]) if strict_heading else ""
+    target_lang = spec.get("language_code") or ""
     new_body = _cuerpo_normalizado([f"{ln.get('label', '')}{ln.get('text', '')}" for ln in spec["lines"]])
     idx = sec_start + 1
     while idx < sec_end:
         level, text = items[idx]
-        if level == 2 and _normalizar_clave_texto(text) == target_heading:
-            if strict_heading:
-                return True
+        if level == 2:
             j = idx + 1
             while j < sec_end and items[j][0] not in (1, 2):
                 j += 1
-            existing = _cuerpo_normalizado([items[k][1] for k in range(idx + 1, j)])
-            if existing == new_body:
-                return True
+            norm_txt = _normalizar_clave_texto(text)
+            soft_txt = _normalizar_clave_suave(text)
+            if norm_txt == target_heading or (target_soft and soft_txt == target_soft):
+                if strict_heading:
+                    return True
+                existing = _cuerpo_normalizado([items[k][1] for k in range(idx + 1, j)])
+                if existing == new_body:
+                    return True
+            elif strict_heading and target_term and _extraer_termino_principal_heading(text) == target_term:
+                block_texts = [items[k][1] for k in range(idx + 1, j) if items[k][1]]
+                existing_lang = _detectar_idioma_bloque_items(text, block_texts)
+                if not target_lang or not existing_lang or existing_lang == target_lang:
+                    return True
             idx = j
             continue
         idx += 1
@@ -2376,15 +2501,24 @@ def _agrupar_musica_desde_items(items, sec_start: int, sec_end: int):
 
 
 def _coincide_cancion_en_bloque(fields: dict, heading_text: str, target_title: str, target_artist: str = "") -> bool:
-    cand_title = fields.get("song_title") or _quitar_prefijo_pista(heading_text).split(" — ", 1)[0].strip()
+    heading_clean = _quitar_prefijo_pista(heading_text)
+    heading_song = heading_clean
+    for sep in (" — ", " – "):
+        if sep in heading_clean:
+            heading_song = heading_clean.split(sep, 1)[0].strip()
+            break
+    cand_title = fields.get("song_title") or heading_song
     cand_artist = fields.get("artists_display") or ""
     t_key, a_key = _clave_pista_cancion(target_title, target_artist)
     c_t_key, c_a_key = _clave_pista_cancion(cand_title, cand_artist)
-    if not t_key or t_key != c_t_key:
+    if not t_key or not c_t_key:
         return False
     if a_key and c_a_key and a_key != c_a_key:
-        return a_key in c_a_key or c_a_key in a_key
-    return True
+        if a_key not in c_a_key and c_a_key not in a_key:
+            return False
+    if t_key == c_t_key:
+        return True
+    return _es_typo_cercano(t_key, c_t_key)
 
 
 def _detectar_idioma_bloque_items(heading_text: str, body_texts: list[str]) -> str:
@@ -2571,7 +2705,9 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
             zout.writestr(info, payload)
         if not has_styles:
             zout.writestr("word/styles.xml", new_styles_bytes)
-    return out_buf.getvalue(), {
+    out_bytes = out_buf.getvalue()
+    _validar_docx_bytes(out_bytes)
+    return out_bytes, {
         "category": spec["category"],
         "heading": spec["heading"],
         "language": spec.get("language", ""),
@@ -2580,6 +2716,20 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
         "removedTocParagraphs": toc_stats["corrupted_removed"],
         "tocEntriesCount": toc_stats["toc_entries_count"],
     }
+
+
+def _validar_docx_bytes(docx_bytes: bytes) -> None:
+    if not docx_bytes or len(docx_bytes) < 64 or not docx_bytes.startswith(b"PK"):
+        raise ValueError("Archivo .docx generado inválido (cabecera ZIP ausente).")
+    with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zf:
+        names = set(zf.namelist())
+        if "word/document.xml" not in names:
+            raise ValueError("Archivo .docx generado sin word/document.xml.")
+        doc_root = ET.fromstring(zf.read("word/document.xml"))
+        if doc_root.find(_w_tag("body")) is None:
+            raise ValueError("word/document.xml generado sin elemento w:body.")
+        if "word/styles.xml" in names:
+            ET.fromstring(zf.read("word/styles.xml"))
 
 
 def _contar_entradas_y_secciones_english(body: ET.Element, style_levels: dict) -> tuple[dict, list[str]]:
@@ -2658,7 +2808,9 @@ def repair_english_docx_bytes(orig_bytes: bytes) -> tuple[bytes, dict]:
         if not has_styles:
             zout.writestr("word/styles.xml", new_styles_bytes)
 
-    return out_buf.getvalue(), {
+    out_bytes = out_buf.getvalue()
+    _validar_docx_bytes(out_bytes)
+    return out_bytes, {
         "ok": True,
         "repaired": True,
         "removedTocParagraphs": toc_stats["corrupted_removed"],
@@ -3539,6 +3691,29 @@ def verify_encrypted_journal_docx(
     }
 
 
+def _reemplazo_atomico_archivo(target_path: str, payload: bytes) -> None:
+    parent = os.path.dirname(target_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp_out = f"{target_path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp_out, "wb") as fout:
+            fout.write(payload)
+            fout.flush()
+            try:
+                os.fsync(fout.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_out, target_path)
+    except Exception:
+        if os.path.exists(tmp_out):
+            try:
+                os.unlink(tmp_out)
+            except OSError:
+                pass
+        raise
+
+
 def main() -> int:
     if hasattr(sys.stdin, "reconfigure"):
         try:
@@ -3597,13 +3772,12 @@ def main() -> int:
             if os.path.exists(docx_path) and os.path.getsize(docx_path) > 0:
                 with open(docx_path, "rb") as fh:
                     orig = fh.read()
-            new_bytes, meta = update_english_docx_bytes(orig, payload.get("entry"))
-            os.makedirs(os.path.dirname(docx_path), exist_ok=True)
-            tmp_out = f"{docx_path}.tmp.{os.getpid()}"
-            with open(tmp_out, "wb") as fout:
-                fout.write(new_bytes)
-                fout.flush()
-            os.replace(tmp_out, docx_path)
+            try:
+                new_bytes, meta = update_english_docx_bytes(orig, payload.get("entry"))
+            except (zipfile.BadZipFile, ET.ParseError) as corrupt_exc:
+                print(json.dumps({"ok": False, "reason": "CORRUPT_DOCX", "error": str(corrupt_exc)}, ensure_ascii=True))
+                return 1
+            _reemplazo_atomico_archivo(docx_path, new_bytes)
             print(json.dumps({"ok": True, "bytes": len(new_bytes), **meta}, ensure_ascii=True))
             return 0
 
@@ -3615,20 +3789,16 @@ def main() -> int:
                 raise FileNotFoundError(f"Missing or empty docxPath: {docx_path}")
             with open(docx_path, "rb") as fh:
                 orig = fh.read()
-            new_bytes, stats = repair_english_docx_bytes(orig)
+            try:
+                new_bytes, stats = repair_english_docx_bytes(orig)
+            except (zipfile.BadZipFile, ET.ParseError) as corrupt_exc:
+                print(json.dumps({"ok": False, "reason": "CORRUPT_DOCX", "error": str(corrupt_exc)}, ensure_ascii=True))
+                return 1
             bak_path = ""
             if payload.get("backup", True):
                 bak_path = f"{docx_path}.bak"
-                tmp_bak = f"{bak_path}.tmp.{os.getpid()}"
-                with open(tmp_bak, "wb") as fbak:
-                    fbak.write(orig)
-                    fbak.flush()
-                os.replace(tmp_bak, bak_path)
-            tmp_out = f"{docx_path}.tmp.{os.getpid()}"
-            with open(tmp_out, "wb") as fout:
-                fout.write(new_bytes)
-                fout.flush()
-            os.replace(tmp_out, docx_path)
+                _reemplazo_atomico_archivo(bak_path, orig)
+            _reemplazo_atomico_archivo(docx_path, new_bytes)
             print(json.dumps({"bytes": len(new_bytes), "backupPath": bak_path, **stats}, ensure_ascii=True))
             return 0
 

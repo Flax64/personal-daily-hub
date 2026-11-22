@@ -631,6 +631,75 @@ def check_toc_regression_and_self_heal(tmp):
     real_xml = zipfile.ZipFile(io.BytesIO(real_repaired), "r").read("word/document.xml").decode("utf-8")
     assert "Ttulo1Car" not in real_xml and "Ttulo2Car" not in real_xml and "Ttulo3Car" not in real_xml and "Tablanormal" not in real_xml
     assert "<w:p/>" in real_xml or "<w:p />" in real_xml  # conserva saltos de estrofa
+
+    # 4) Sanitización XML (caracteres de control), ruido de YouTube, puntuación y typos en canciones/vocabulario
+    dirty_bytes, _ = dw.update_english_docx_bytes(None, {
+        "category": "vocabulary",
+        "language": "English",
+        "word": "ephemeral\x00\x0b",
+        "part_of_speech": "adjective",
+        "spanish": "efímero\x1f",
+    })
+    dirty_bytes, vocab_dup_meta = dw.update_english_docx_bytes(dirty_bytes, {
+        "category": "vocabulary",
+        "language": "English",
+        "word": "Ephemeral",
+        "spanish": "efimero pasajero",  # sin POS y sin acento: mismo término principal en inglés => deduplica
+    })
+    assert vocab_dup_meta["deduplicated"] is True, vocab_dup_meta
+
+    song_doc, _ = dw.update_english_docx_bytes(dirty_bytes, {
+        "category": "music",
+        "language": "English",
+        "song_title": "FOREVER",
+        "artists_display": "BABYMONSTER",
+        "album_title": "DRIP",
+        "album_type": "Album",
+        "release_year": "2024",
+        "track_number": 7,
+        "lyrics_study": "[EN]\nForever line 1",
+    })
+    song_doc, _ = dw.update_english_docx_bytes(song_doc, {
+        "category": "music",
+        "language": "English",
+        "song_title": "Forever (Official M/V)!",
+        "artists_display": "BABYMONSTER",
+        "album_title": "Drip",
+        "album_type": "Album",
+        "release_year": "2024",
+        "lyrics_study": "=== [ES — Traducción IA] ===\nPor siempre línea 1",
+    })
+    song_doc, _ = dw.update_english_docx_bytes(song_doc, {
+        "category": "music",
+        "language": "English",
+        "song_title": "Forevr",  # typo 1 letra -> fusiona en lugar de duplicar pista
+        "artists_display": "BABYMONSTER",
+        "album_title": "DRIP",
+        "album_type": "Album",
+        "release_year": "2024",
+        "notes": "Merged despite typo\x0c",
+    })
+    with zipfile.ZipFile(io.BytesIO(song_doc), "r") as zf_chk_typo:
+        ET.fromstring(zf_chk_typo.read("word/document.xml"))
+    typo_path = os.path.join(tmp, "TypoCheck.docx")
+    with open(typo_path, "wb") as fh:
+        fh.write(song_doc)
+    # También probar el flujo OOXML de sincronizador.py sobre ese mismo archivo
+    assert s._guardar_entrada_ingles_en_docx_xml(typo_path, {
+        "category": "music",
+        "language": "English",
+        "song_title": "FOREVER [Lyrics]",
+        "artists_display": "BABYMONSTER",
+        "album_title": "DRIP",
+        "album_type": "Album",
+        "release_year": "2024",
+        "lyrics_study": "[EN]\nForever line 1",
+    }) is True
+    typo_read = s.leer_cuaderno_estudio_word({}, ruta_docx=typo_path)
+    assert typo_read["ok"] and typo_read["counts"]["vocabulary"] == 1 and typo_read["counts"]["music"] == 1, typo_read
+    song_blk = next(e for e in typo_read["entries"] if e["section"] == "music")
+    assert "Por siempre línea 1" in song_blk["fields"]["lyrics_study"], song_blk
+    assert "Merged despite typo" in song_blk["fields"].get("notes", ""), song_blk
     print("TOC SELF-HEAL OK")
 
 

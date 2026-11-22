@@ -2611,7 +2611,41 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             'La IA debe reconocer canciones registradas en el repertorio del usuario'
         );
 
-        // 5. Admin puede eliminar un registro de crisis
+        // 5. Idempotencia / anti-doble-click en crisis y eliminación del registro
+        const crisisIdemKey = `crisis-idem-${Date.now()}`;
+        const crisisIdemBody = {
+            fecha: '2026-11-14',
+            hora: '22:10',
+            tipoCrisis: 'Estrés',
+            intensidad: 3,
+            motivo: 'Prueba idempotencia en episodio.'
+        };
+        const crisis1 = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-crisis',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': crisisIdemKey },
+            body: crisisIdemBody
+        });
+        assert.strictEqual(crisis1.status, 200);
+        const crisisReplay = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-crisis',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': crisisIdemKey },
+            body: crisisIdemBody
+        });
+        assert.strictEqual(crisisReplay.status, 200);
+        assert.strictEqual(crisisReplay.headers['x-idempotent-replay'], 'true');
+        const crisisDupSameWindow = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-crisis',
+            headers: { Cookie: adminCookie },
+            body: crisisIdemBody
+        });
+        assert.strictEqual(crisisDupSameWindow.status, 409);
+
         const delCrisisRes = await request({
             port,
             method: 'DELETE',
@@ -2747,6 +2781,92 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(updatedSong.album_titulo, 'STRATEGY (14th Mini Album)');
         assert.strictEqual(updatedSong.album_anio, 2025);
         assert.ok(updatedSong.artists.some((a) => a.nombre === 'TWICE Official'));
+
+        // 5. Prevención de duplicados y typos en canciones/álbumes (ruido YouTube, acentos, puntuación, 1-2 letras de diferencia)
+        const songCountBeforeDedup = finalJson.songs.length;
+        const dupYoutubeNoiseRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/english/music/songs',
+            headers: { Cookie: adminCookie },
+            body: {
+                titulo: 'Strategy (Extended Ver.) (Official M/V)!',
+                mainArtist: 'twice official',
+                artistType: 'group',
+                albumTitle: 'STRATEGY (14th Mini Album)',
+                albumType: 'mini_album'
+            }
+        });
+        assert.strictEqual(dupYoutubeNoiseRes.status, 200);
+        const dupYoutubeNoise = JSON.parse(dupYoutubeNoiseRes.body);
+        assert.strictEqual(dupYoutubeNoise.deduplicated, true);
+        assert.strictEqual(dupYoutubeNoise.songId, createdFirst.songId);
+
+        const aptRow = finalJson.songs.find((s) => s.titulo === 'APT.');
+        assert.ok(aptRow);
+        const dupAccentRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/english/music/songs',
+            headers: { Cookie: adminCookie },
+            body: {
+                titulo: 'APT!',
+                mainArtist: 'ROSE',
+                ytMusicUrl: 'https://music.youtube.com/watch?v=ekr2nIex040'
+            }
+        });
+        assert.strictEqual(dupAccentRes.status, 200);
+        const dupAccentJson = JSON.parse(dupAccentRes.body);
+        assert.strictEqual(dupAccentJson.deduplicated, true);
+        assert.strictEqual(dupAccentJson.songId, aptRow.id);
+
+        const typoSongRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/english/music/songs',
+            headers: { Cookie: adminCookie },
+            body: {
+                titulo: 'Strategy (Extnded Ver.)',
+                mainArtist: 'TWICE Official',
+                artistType: 'group'
+            }
+        });
+        assert.strictEqual(typoSongRes.status, 409);
+
+        const createExtraAlbumRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/english/music/albums',
+            headers: { Cookie: adminCookie },
+            body: {
+                mainArtist: 'TWICE Official',
+                artistType: 'group',
+                albumTitle: 'Between 1&2',
+                albumType: 'mini_album',
+                albumYear: 2022
+            }
+        });
+        assert.strictEqual(createExtraAlbumRes.status, 201);
+        const extraAlbumId = JSON.parse(createExtraAlbumRes.body).album.id;
+        const conflictAlbumRenameRes = await request({
+            port,
+            method: 'PATCH',
+            reqPath: `/api/english/music/albums/${extraAlbumId}`,
+            headers: { Cookie: adminCookie },
+            body: {
+                titulo: 'strategy (14th mini album)',
+                tipoLanzamiento: 'mini_album',
+                anio: 2025
+            }
+        });
+        assert.strictEqual(conflictAlbumRenameRes.status, 409);
+
+        const afterDedupCatalog = await request({
+            port,
+            reqPath: '/api/english/music/catalog',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(JSON.parse(afterDedupCatalog.body).songs.length, songCountBeforeDedup);
     });
 
     it('registra desvelos, dormir a las 3 AM y trasnoches (0 hrs) y los muestra en modo solo lectura al psiquiatra', async () => {
