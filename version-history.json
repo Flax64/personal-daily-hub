@@ -1,8 +1,32 @@
 {
   "standard": "SemVer 2.0.0 + Conventional Commits",
-  "currentVersion": "1.17.0",
-  "updatedAt": "2026-11-18T06:40:49.383Z",
+  "currentVersion": "1.19.3",
+  "updatedAt": "2026-11-22T07:40:58.321Z",
   "releases": [
+    {
+      "version": "1.19.3",
+      "tag": "v1.19.3",
+      "bumpType": "patch",
+      "previousVersion": "1.19.2",
+      "releasedAt": "2026-11-22T07:40:58.321Z",
+      "commitSha": "c29c333",
+      "trigger": "push",
+      "summary": "fix(frontend,verify): resolve Temporal Dead Zone ReferenceError blocking boot screen and SIGPIPE check warning",
+      "counts": {
+        "breaking": 0,
+        "features": 0,
+        "fixes": 1,
+        "maintenance": 0
+      },
+      "changes": {
+        "breaking": [],
+        "features": [],
+        "fixes": [
+          "fix(frontend,verify): resolve Temporal Dead Zone ReferenceError blocking boot screen and SIGPIPE check warning (53c6ac0)"
+        ],
+        "maintenance": []
+      }
+    },
     {
       "version": "1.17.0",
       "tag": "v1.17.0",
