@@ -90,8 +90,24 @@ body {
 
 .auth-top-bar {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.auth-top-actions {
+    display: inline-flex;
+    align-items: center;
     justify-content: flex-end;
-    margin-bottom: 6px;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.auth-guide-link {
+    text-decoration: none;
 }
 
 .theme-toggle-pill {
@@ -2624,13 +2640,19 @@ select,
     background: #1e293b;
     color: #e2e8f0;
     border-radius: 999px;
-    padding: 6px 12px;
-    font-size: 0.78rem;
+    min-height: 30px;
+    padding: 5px 11px;
+    font-size: 0.75rem;
+    line-height: 1.2;
     font-weight: 700;
+    white-space: nowrap;
+    flex-shrink: 0;
+    align-self: center;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
+    gap: 5px;
     transition: background 0.18s, border-color 0.18s;
 }
 
@@ -5915,11 +5937,17 @@ select,
 .tunnel-pill {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
+    justify-content: center;
+    gap: 5px;
+    min-height: 30px;
+    padding: 5px 11px;
     border-radius: 999px;
     font-size: 0.75rem;
+    line-height: 1.2;
     font-weight: 700;
+    white-space: nowrap;
+    flex-shrink: 0;
+    align-self: center;
     border: 1px solid #86efac;
     background: #dcfce7;
     color: #166534;
@@ -9870,6 +9898,14 @@ input[type="password"] {
 }
 
 @media (max-width: 480px) {
+    .auth-top-bar {
+        justify-content: center;
+    }
+
+    .auth-top-actions {
+        justify-content: center;
+    }
+
     .english-tabs {
         grid-template-columns: 1fr;
     }
@@ -9877,4 +9913,310 @@ input[type="password"] {
     .hangul-quiz-options {
         grid-template-columns: 1fr;
     }
+
+    .korean-comparator-inputs-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ============================================================
+   KOREAN READ-ONLY DRIVE NOTES & ZERO-SAVE SYMBOL COMPARATOR
+   ============================================================ */
+.is-readonly-pill,
+.is-nosave-pill {
+    background: rgba(16, 185, 129, 0.14);
+    color: #047857;
+    border: 1px solid rgba(16, 185, 129, 0.36);
+    white-space: nowrap;
+}
+
+.korean-readonly-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.korean-readonly-toolbar input {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
+.korean-readonly-notes-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.korean-note-section-card {
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 12px;
+    padding: 14px 16px;
+    background: var(--surface-bg, #ffffff);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.korean-note-section-card h4,
+.korean-note-section-card h5 {
+    margin: 0;
+}
+
+.korean-drive-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border-radius: 10px;
+    border: 1px solid var(--border-color, #cbd5e1);
+}
+
+.korean-drive-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.87rem;
+}
+
+.korean-drive-table th,
+.korean-drive-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.korean-drive-table th {
+    background: var(--bg-soft, #f8fafc);
+    font-weight: 700;
+    font-size: 0.8rem;
+}
+
+.korean-drive-table tr:last-child td {
+    border-bottom: none;
+}
+
+.korean-drive-symbol-cell {
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #2563eb;
+    white-space: nowrap;
+}
+
+.korean-drive-rom-pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(59, 130, 246, 0.12);
+    color: #1d4ed8;
+    font-weight: 700;
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.korean-drive-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.korean-rule-card {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border-left: 4px solid #3b82f6;
+    background: var(--bg-soft, #f8fafc);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.korean-example-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.korean-example-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #cbd5e1);
+    background: var(--surface-bg, #ffffff);
+    color: inherit;
+    font-size: 0.84rem;
+    cursor: pointer;
+}
+
+.korean-comparator-inputs-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.korean-cmp-input-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.korean-cmp-input-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 1.05rem;
+}
+
+.korean-cmp-presets-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.korean-cmp-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.korean-keypad-details {
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 10px;
+    padding: 8px 12px;
+    background: var(--bg-soft, #f8fafc);
+}
+
+.korean-keypad-details summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+.korean-comparator-keypad {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 10px;
+}
+
+.korean-keypad-btn {
+    min-width: 40px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #cbd5e1);
+    background: var(--surface-bg, #ffffff);
+    color: inherit;
+    font-weight: 700;
+    font-size: 0.96rem;
+    cursor: pointer;
+}
+
+.korean-comparator-results {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.korean-cmp-summary-card,
+.korean-cmp-diff-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    background: rgba(59, 130, 246, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.korean-cmp-side-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+
+.korean-jamo-breakdown-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+}
+
+.korean-compare-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color, #cbd5e1);
+    background: var(--surface-bg, #ffffff);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.korean-compare-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.korean-compare-big-char {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #2563eb;
+    line-height: 1;
+}
+
+.korean-slot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.korean-slot-item {
+    padding: 7px 9px;
+    border-radius: 8px;
+    background: var(--bg-soft, #f8fafc);
+    border: 1px solid var(--border-color, #e2e8f0);
+    font-size: 0.84rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.korean-similar-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+:root[data-theme="dark"] .is-readonly-pill,
+:root[data-theme="dark"] .is-nosave-pill {
+    background: rgba(16, 185, 129, 0.16);
+    color: #6ee7b7;
+    border-color: rgba(52, 211, 153, 0.35);
+}
+
+:root[data-theme="dark"] .korean-note-section-card,
+:root[data-theme="dark"] .korean-compare-card,
+:root[data-theme="dark"] .korean-keypad-btn,
+:root[data-theme="dark"] .korean-example-chip {
+    background: #0f172a;
+    border-color: rgba(148, 163, 184, 0.25);
+    color: #e2e8f0;
+}
+
+:root[data-theme="dark"] .korean-drive-table th,
+:root[data-theme="dark"] .korean-rule-card,
+:root[data-theme="dark"] .korean-keypad-details,
+:root[data-theme="dark"] .korean-slot-item {
+    background: #1e293b;
+    border-color: rgba(148, 163, 184, 0.25);
+    color: #e2e8f0;
+}
+
+:root[data-theme="dark"] .korean-drive-table td {
+    border-color: rgba(148, 163, 184, 0.2);
+}
+
+:root[data-theme="dark"] .korean-drive-symbol-cell,
+:root[data-theme="dark"] .korean-compare-big-char,
+:root[data-theme="dark"] .korean-drive-rom-pill {
+    color: #93c5fd;
 }

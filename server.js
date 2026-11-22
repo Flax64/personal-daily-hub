@@ -22,6 +22,12 @@ const {
     RECOMMENDED_GEMINI_MODELS,
     DEFAULT_CURRICULUM_LESSONS,
     ALPHABET_COMPOSITION_GUIDES,
+    KOREAN_PRACTICE_DRIVE_FOLDER_ID,
+    KOREAN_PRACTICE_DRIVE_URL,
+    KOREAN_PRACTICE_DRIVE_DOC_NAME,
+    KOREAN_PRACTICE_DRIVE_NOTES,
+    compareAndAnalyzeKoreanSymbols,
+    extractKoreanPracticeParagraphsFromDocx,
     getLanguageRegistry,
     getLanguageSectionMeta,
     normalizeStudyLanguage,
@@ -9256,6 +9262,118 @@ app.post('/api/language/alphabet-guide', apiWriteLimiter.middleware, requireAdmi
     } catch (err) {
         console.error('[ALPHABET_GUIDE_POST_ERR]', err.message);
         return res.status(500).send('Error generating AI alphabet & composition guide.');
+    }
+});
+
+let _koreanPracticeDriveCache = {
+    loadedAt: 0,
+    syncedFromDrive: false,
+    driveFiles: [],
+    liveParagraphs: []
+};
+
+app.get('/api/language/korean-practice-drive', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
+    const forceSync = String(req.query.syncDrive || '') === '1';
+    const cacheValid = !forceSync && _koreanPracticeDriveCache.loadedAt > 0
+        && (Date.now() - _koreanPracticeDriveCache.loadedAt < 5 * 60 * 1000);
+
+    if (cacheValid && _koreanPracticeDriveCache.syncedFromDrive) {
+        return res.json({
+            ok: true,
+            readOnly: true,
+            saved: false,
+            folderId: KOREAN_PRACTICE_DRIVE_FOLDER_ID,
+            folderUrl: KOREAN_PRACTICE_DRIVE_URL,
+            fileName: KOREAN_PRACTICE_DRIVE_DOC_NAME,
+            syncedFromDrive: true,
+            driveFiles: _koreanPracticeDriveCache.driveFiles,
+            liveParagraphs: _koreanPracticeDriveCache.liveParagraphs,
+            notes: KOREAN_PRACTICE_DRIVE_NOTES
+        });
+    }
+
+    let syncedFromDrive = false;
+    let driveFiles = [];
+    let liveParagraphs = [];
+
+    if (forceSync) {
+        const { confPath: rcloneConf, cleanup: cleanupConf } = resolveRcloneConfigPath({ preferStudy: false });
+        try {
+            if (rcloneConf && fs.existsSync(rcloneConf)) {
+                const mainRemote = String(process.env.RCLONE_REMOTE || 'gdrive').trim() || 'gdrive';
+                const remoteSpec = `${mainRemote},root_folder_id=${KOREAN_PRACTICE_DRIVE_FOLDER_ID}:`;
+                const lsRaw = await serverNotesService.runRcloneCommand({
+                    rcloneConf,
+                    args: ['lsjson', remoteSpec],
+                    timeout: 8000
+                });
+                const entries = JSON.parse(String(lsRaw || '[]'));
+                if (Array.isArray(entries)) {
+                    driveFiles = entries
+                        .filter((f) => f && f.Name && !f.IsDir)
+                        .map((f) => ({ name: String(f.Name), size: Number(f.Size) || 0, modTime: String(f.ModTime || '') }));
+                    const targetDoc = driveFiles.find((f) => /\.docx$/i.test(f.name) && f.size > 0 && f.size < 8 * 1024 * 1024);
+                    if (targetDoc) {
+                        const docBuf = await serverNotesService.runRcloneCommand({
+                            rcloneConf,
+                            args: ['cat', `${remoteSpec}${targetDoc.name}`],
+                            timeout: 12000,
+                            encoding: 'buffer',
+                            maxBuffer: 8 * 1024 * 1024
+                        });
+                        if (Buffer.isBuffer(docBuf) && docBuf.length > 64) {
+                            liveParagraphs = extractKoreanPracticeParagraphsFromDocx(docBuf);
+                            syncedFromDrive = liveParagraphs.length > 0;
+                        }
+                    } else if (driveFiles.length > 0) {
+                        syncedFromDrive = true;
+                    }
+                }
+            }
+        } catch (_driveErr) {
+            syncedFromDrive = false;
+        } finally {
+            if (cleanupConf && rcloneConf && fs.existsSync(rcloneConf)) {
+                try { fs.unlinkSync(rcloneConf); } catch (_) {}
+            }
+        }
+        _koreanPracticeDriveCache = {
+            loadedAt: Date.now(),
+            syncedFromDrive,
+            driveFiles,
+            liveParagraphs
+        };
+    }
+
+    return res.json({
+        ok: true,
+        readOnly: true,
+        saved: false,
+        folderId: KOREAN_PRACTICE_DRIVE_FOLDER_ID,
+        folderUrl: KOREAN_PRACTICE_DRIVE_URL,
+        fileName: (driveFiles[0] && driveFiles[0].name) || KOREAN_PRACTICE_DRIVE_DOC_NAME,
+        syncedFromDrive,
+        driveFiles,
+        liveParagraphs,
+        notes: KOREAN_PRACTICE_DRIVE_NOTES
+    });
+});
+
+app.post('/api/language/korean-symbol-compare', apiReadLimiter.middleware, requireAdmin, (req, res) => {
+    try {
+        const input = String(req.body?.input || '').trim().slice(0, 120);
+        const compareWith = String(req.body?.compareWith || '').trim().slice(0, 120);
+        const analysis = compareAndAnalyzeKoreanSymbols(input, compareWith);
+        return res.json({
+            ok: true,
+            saved: false,
+            readOnly: true,
+            folderUrl: KOREAN_PRACTICE_DRIVE_URL,
+            analysis
+        });
+    } catch (err) {
+        console.error('[KOREAN_SYMBOL_COMPARE_ERR]', err.message);
+        return res.status(500).send('Error analyzing Korean symbols.');
     }
 });
 

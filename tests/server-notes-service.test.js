@@ -677,4 +677,43 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
+
+    it('expone notas solo vista de Korean Practice (Drive), comparador sin guardar y blindaje de arranque PC', () => {
+        const langStudio = require('../lib/language-studio');
+        assert.strictEqual(langStudio.KOREAN_PRACTICE_DRIVE_FOLDER_ID, '1ehP4g7brBR7dnGNiN7zfiUQLEdZdTeuE');
+        assert.ok(langStudio.KOREAN_PRACTICE_DRIVE_URL.includes('1ehP4g7brBR7dnGNiN7zfiUQLEdZdTeuE'));
+        assert.strictEqual(langStudio.KOREAN_PRACTICE_DRIVE_NOTES.basicVowels.length, 10);
+        assert.strictEqual(langStudio.KOREAN_PRACTICE_DRIVE_NOTES.compoundVowels.length, 11);
+        assert.strictEqual(langStudio.KOREAN_PRACTICE_DRIVE_NOTES.basicConsonants.length, 14);
+        assert.strictEqual(langStudio.KOREAN_PRACTICE_DRIVE_NOTES.doubleConsonants.length, 5);
+        assert.strictEqual(langStudio.KOREAN_PRACTICE_DRIVE_NOTES.formationRules.length, 4);
+        assert.strictEqual(langStudio.KOREAN_PRACTICE_DRIVE_NOTES.practicalExamples.length, 4);
+
+        const cmpVowels = langStudio.compareAndAnalyzeKoreanSymbols('ㅓ', 'ㅗ');
+        assert.strictEqual(cmpVowels.saved, false);
+        assert.strictEqual(cmpVowels.readOnly, true);
+        assert.strictEqual(cmpVowels.primary.items[0].romanization, 'eo');
+        assert.strictEqual(cmpVowels.secondary.items[0].romanization, 'o');
+        assert.ok(cmpVowels.comparisonSummary.includes('ㅓ') && cmpVowels.comparisonSummary.includes('ㅗ'));
+
+        const cmpWord = langStudio.compareAndAnalyzeKoreanSymbols('한국어', '');
+        assert.strictEqual(cmpWord.saved, false);
+        assert.strictEqual(cmpWord.primary.items.length, 3);
+        assert.ok(cmpWord.primary.phonologicalNotes.some((n) => /연음|Enlace sonoro/i.test(n)));
+        assert.strictEqual(cmpWord.primary.romanization, 'hangugeo');
+
+        const indexHtml = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+        const styleCss = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8');
+        const frontendJs = fs.readFileSync(path.join(ROOT, 'public', 'frontend.js'), 'utf8');
+        const transportJs = fs.readFileSync(path.join(ROOT, 'public', 'transport-crypto.js'), 'utf8');
+        const serverJs = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+
+        assert.ok(indexHtml.includes('id="englishKoreanReadonlyNotesStudio"'));
+        assert.ok(indexHtml.includes('id="englishKoreanComparatorStudio"'));
+        assert.ok(indexHtml.includes('class="auth-top-actions"'));
+        assert.ok(styleCss.includes('.auth-top-actions') && styleCss.includes('white-space: nowrap'));
+        assert.ok(transportJs.includes('AbortController') && transportJs.includes('clearTimeout(timer)'));
+        assert.ok(frontendJs.includes('bootFailsafeTimer') && /finally\s*\{\s*hideBootScreen\(\);/.test(frontendJs));
+        assert.ok(serverJs.includes('/api/language/korean-practice-drive') && serverJs.includes('/api/language/korean-symbol-compare'));
+    });
 });

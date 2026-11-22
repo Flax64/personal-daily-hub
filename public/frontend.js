@@ -3686,6 +3686,8 @@ if (englishForm) {
     const englishRecentBox = document.getElementById('englishRecentBox');
     const englishMusicStudio = document.getElementById('englishMusicStudio');
     const englishHangulStudio = document.getElementById('englishHangulPracticeStudio');
+    const englishKoreanReadonlyStudio = document.getElementById('englishKoreanReadonlyNotesStudio');
+    const englishKoreanComparatorStudio = document.getElementById('englishKoreanComparatorStudio');
     const englishAlphabetStudio = document.getElementById('englishAlphabetStudio');
     const categoryInput = document.getElementById('englishCategoryInput');
     const studyLanguageInput = document.getElementById('studyLanguageInput');
@@ -3882,8 +3884,10 @@ if (englishForm) {
     function cambiarCategoriaEnglish(cat) {
         const isMusic = cat === 'music' && Boolean(englishMusicStudio);
         const isHangul = cat === 'hangul_practice' && Boolean(englishHangulStudio);
+        const isKoreanReadonly = cat === 'korean_readonly_notes' && Boolean(englishKoreanReadonlyStudio);
+        const isKoreanComparator = cat === 'korean_comparator' && Boolean(englishKoreanComparatorStudio);
         const isAlphabet = cat === 'alphabet' && Boolean(englishAlphabetStudio);
-        const isStudioTab = isMusic || isHangul || isAlphabet;
+        const isStudioTab = isMusic || isHangul || isKoreanReadonly || isKoreanComparator || isAlphabet;
         const safeCat = isStudioTab ? cat : (sectionConfig[cat] ? cat : 'vocabulary');
         if (categoryInput) categoryInput.value = safeCat;
 
@@ -3897,6 +3901,8 @@ if (englishForm) {
         if (englishRecentBox) englishRecentBox.hidden = isStudioTab;
         if (englishMusicStudio) englishMusicStudio.hidden = !isMusic;
         if (englishHangulStudio) englishHangulStudio.hidden = !isHangul;
+        if (englishKoreanReadonlyStudio) englishKoreanReadonlyStudio.hidden = !isKoreanReadonly;
+        if (englishKoreanComparatorStudio) englishKoreanComparatorStudio.hidden = !isKoreanComparator;
         if (englishAlphabetStudio) englishAlphabetStudio.hidden = !isAlphabet;
         if (englishCard) englishCard.classList.toggle('music-wide', isStudioTab);
 
@@ -3916,6 +3922,12 @@ if (englishForm) {
         }
         if (isHangul && typeof ensureHangulPracticeInitialized === 'function') {
             ensureHangulPracticeInitialized();
+        }
+        if (isKoreanReadonly && typeof ensureKoreanReadonlyNotesInitialized === 'function') {
+            ensureKoreanReadonlyNotesInitialized();
+        }
+        if (isKoreanComparator && typeof ensureKoreanComparatorInitialized === 'function') {
+            ensureKoreanComparatorInitialized();
         }
         if (isAlphabet && typeof ensureAlphabetStudioInitialized === 'function') {
             ensureAlphabetStudioInitialized();
@@ -4153,7 +4165,13 @@ if (englishForm) {
     cambiarCategoriaEnglish = function (cat) {
         origCambiarCategoria(cat);
         if (languageAiPanel) {
-            languageAiPanel.hidden = (cat === 'music' || cat === 'hangul_practice' || cat === 'alphabet');
+            languageAiPanel.hidden = (
+                cat === 'music'
+                || cat === 'hangul_practice'
+                || cat === 'korean_readonly_notes'
+                || cat === 'korean_comparator'
+                || cat === 'alphabet'
+            );
         }
     };
 
@@ -4164,6 +4182,8 @@ if (englishForm) {
     window.__switchEnglishStudioTab = cambiarCategoriaEnglish;
     window.__applyStudyLanguageFromStudio = applyStudyLanguageUi;
     initHangulPracticeStudio();
+    initKoreanReadonlyNotesStudio();
+    initKoreanComparatorStudio();
     initAlphabetCompositionStudio();
 }
 
@@ -4546,6 +4566,582 @@ function initHangulPracticeStudio() {
             document.getElementById('btnOpenStudyViewer')?.click();
         }
     });
+}
+
+let koreanReadonlyNotesInitialized = false;
+let cachedKoreanDrivePayload = null;
+function ensureKoreanReadonlyNotesInitialized() {
+    if (!koreanReadonlyNotesInitialized) initKoreanReadonlyNotesStudio();
+    if (!cachedKoreanDrivePayload && typeof window.__loadKoreanReadonlyDriveNotes === 'function') {
+        window.__loadKoreanReadonlyDriveNotes(false);
+    }
+}
+
+function initKoreanReadonlyNotesStudio() {
+    const root = document.getElementById('englishKoreanReadonlyNotesStudio');
+    if (!root || koreanReadonlyNotesInitialized) return;
+    koreanReadonlyNotesInitialized = true;
+
+    const container = document.getElementById('koreanReadonlyNotesContainer');
+    const searchInput = document.getElementById('koreanReadonlySearchInput');
+    const statusEl = document.getElementById('koreanReadonlyDriveStatus');
+    const btnSync = document.getElementById('btnSyncKoreanPracticeDrive');
+    const btnGoCmp = document.getElementById('btnGoToKoreanComparator');
+
+    function openInComparator(symA, symB = '') {
+        window.__switchEnglishStudioTab?.('korean_comparator');
+        if (typeof window.__setKoreanComparatorInputs === 'function') {
+            window.__setKoreanComparatorInputs(symA, symB);
+        }
+    }
+
+    function createSymbolTableSection(title, subtitle, headers, rows, filterText, showNameCol = false) {
+        const q = String(filterText || '').trim().toLowerCase();
+        const filteredRows = q
+            ? rows.filter((r) => [r.symbol, r.name, r.romanization, r.spanishSound, r.guide].filter(Boolean).join(' ').toLowerCase().includes(q))
+            : rows;
+        if (q && !filteredRows.length) return null;
+
+        const card = document.createElement('section');
+        card.className = 'korean-note-section-card';
+        const h = document.createElement('h4');
+        h.textContent = title;
+        card.appendChild(h);
+        if (subtitle) {
+            const p = document.createElement('p');
+            p.className = 'muted-text small-note';
+            p.textContent = subtitle;
+            card.appendChild(p);
+        }
+
+        const wrap = document.createElement('div');
+        wrap.className = 'korean-drive-table-wrap';
+        const table = document.createElement('table');
+        table.className = 'korean-drive-table';
+        const thead = document.createElement('thead');
+        const headTr = document.createElement('tr');
+        [...headers, tUi('Practice', 'Práctica')].forEach((col) => {
+            const th = document.createElement('th');
+            th.textContent = col;
+            headTr.appendChild(th);
+        });
+        thead.appendChild(headTr);
+
+        const tbody = document.createElement('tbody');
+        filteredRows.forEach((row) => {
+            const tr = document.createElement('tr');
+
+            const tdSym = document.createElement('td');
+            tdSym.className = 'korean-drive-symbol-cell';
+            tdSym.textContent = row.symbol;
+
+            const tdSecond = document.createElement('td');
+            if (showNameCol) {
+                tdSecond.innerHTML = '';
+                const strongName = document.createElement('strong');
+                strongName.textContent = row.name || '';
+                const romPill = document.createElement('span');
+                romPill.className = 'korean-drive-rom-pill';
+                romPill.textContent = `[${row.romanization}]`;
+                tdSecond.append(strongName, document.createTextNode(' '), romPill);
+            } else {
+                const romPill = document.createElement('span');
+                romPill.className = 'korean-drive-rom-pill';
+                romPill.textContent = row.romanization;
+                tdSecond.appendChild(romPill);
+            }
+
+            const tdSound = document.createElement('td');
+            tdSound.textContent = row.spanishSound || '';
+
+            const tdGuide = document.createElement('td');
+            tdGuide.textContent = row.guide || '';
+
+            const tdAct = document.createElement('td');
+            const actWrap = document.createElement('div');
+            actWrap.className = 'korean-drive-row-actions';
+            const btnSpk = document.createElement('button');
+            btnSpk.type = 'button';
+            btnSpk.className = 'btn-secondary btn-small';
+            btnSpk.textContent = '🔊';
+            btnSpk.title = tUi('Listen to Korean pronunciation (ko-KR)', 'Escuchar pronunciación coreana (ko-KR)');
+            btnSpk.addEventListener('click', () => speakStudyText(row.speak || row.symbol, 'ko-KR'));
+
+            const btnCmp = document.createElement('button');
+            btnCmp.type = 'button';
+            btnCmp.className = 'btn-secondary btn-small';
+            btnCmp.textContent = '🔍';
+            btnCmp.title = tUi('Compare this symbol in zero-save comparator', 'Comparar este símbolo sin guardar nada');
+            btnCmp.addEventListener('click', () => openInComparator(row.symbol, (row.similar && row.similar[0]) || ''));
+
+            actWrap.append(btnSpk, btnCmp);
+            tdAct.appendChild(actWrap);
+
+            tr.append(tdSym, tdSecond, tdSound, tdGuide, tdAct);
+            tbody.appendChild(tr);
+        });
+
+        table.append(thead, tbody);
+        wrap.appendChild(table);
+        card.appendChild(wrap);
+        return card;
+    }
+
+    function renderReadonlyNotes(payload) {
+        if (!container || !payload || !payload.notes) return;
+        const notes = payload.notes;
+        const q = (searchInput?.value || '').trim().toLowerCase();
+        container.replaceChildren();
+
+        const introCard = document.createElement('section');
+        introCard.className = 'korean-note-section-card';
+        const hTitle = document.createElement('h4');
+        hTitle.textContent = `📘 ${notes.title}`;
+        const pIntro = document.createElement('p');
+        pIntro.textContent = notes.intro;
+        const pVow = document.createElement('p');
+        pVow.className = 'muted-text small-note';
+        pVow.textContent = `1. Las Vocales (모음 - Moeum): ${notes.vowelsIntro}`;
+        introCard.append(hTitle, pIntro, pVow);
+        container.appendChild(introCard);
+
+        const secBasicV = createSymbolTableSection(
+            'A. Vocales Básicas (10)',
+            null,
+            ['Vocal', 'Romanización', 'Sonido más parecido en español', 'Guía de pronunciación'],
+            notes.basicVowels || [],
+            q,
+            false
+        );
+        if (secBasicV) container.appendChild(secBasicV);
+
+        const secCompV = createSymbolTableSection(
+            'B. Vocales Compuestas / Diptongos (11)',
+            'Se forman combinando dos vocales básicas:',
+            ['Vocal', 'Romanización', 'Sonido más parecido en español', 'Notas prácticas'],
+            notes.compoundVowels || [],
+            q,
+            false
+        );
+        if (secCompV) container.appendChild(secCompV);
+
+        const secBasicC = createSymbolTableSection(
+            '2A. Consonantes Básicas (14 · 자음 - Jaeum)',
+            notes.consonantsIntro,
+            ['Consonante', 'Nombre', 'Sonido parecido en español', 'Cómo pronunciarla correctamente'],
+            notes.basicConsonants || [],
+            q,
+            true
+        );
+        if (secBasicC) container.appendChild(secBasicC);
+
+        const secDoubleC = createSymbolTableSection(
+            '2B. Consonantes Dobles / Tensas (5 - 쌍자음)',
+            'Se pronuncian tensando la garganta y soltando el sonido de golpe, sin expulsar aire:',
+            ['Consonante', 'Nombre', 'Sonido aproximado', 'Diferencia clave'],
+            notes.doubleConsonants || [],
+            q,
+            true
+        );
+        if (secDoubleC) container.appendChild(secDoubleC);
+
+        // Section 3: Formation Logic
+        const matchingRules = (notes.formationRules || []).filter((r) => {
+            if (!q) return true;
+            const hay = [r.title, r.summary, ...(r.examples || []).map((e) => `${e.text} ${e.note}`)].join(' ').toLowerCase();
+            return hay.includes(q);
+        });
+        if (matchingRules.length) {
+            const rulesCard = document.createElement('section');
+            rulesCard.className = 'korean-note-section-card';
+            const hRules = document.createElement('h4');
+            hRules.textContent = '3. ¿Cómo funciona la lógica para formar palabras?';
+            const pRulesIntro = document.createElement('p');
+            pRulesIntro.className = 'muted-text small-note';
+            pRulesIntro.textContent = notes.formationIntro;
+            rulesCard.append(hRules, pRulesIntro);
+
+            matchingRules.forEach((rule) => {
+                const rBox = document.createElement('div');
+                rBox.className = 'korean-rule-card';
+                const rTitle = document.createElement('strong');
+                rTitle.textContent = rule.title;
+                const rSum = document.createElement('p');
+                rSum.className = 'small-note';
+                rSum.textContent = rule.summary;
+                const exRow = document.createElement('div');
+                exRow.className = 'korean-example-chip-row';
+                (rule.examples || []).forEach((ex) => {
+                    const chip = document.createElement('button');
+                    chip.type = 'button';
+                    chip.className = 'korean-example-chip';
+                    chip.title = tUi('Click to hear and inspect in comparator (no save)', 'Haz clic para escuchar y comparar sin guardar nada');
+                    chip.textContent = `🔊 ${ex.note}`;
+                    chip.addEventListener('click', () => {
+                        speakStudyText(ex.text, 'ko-KR');
+                        openInComparator(ex.text);
+                    });
+                    exRow.appendChild(chip);
+                });
+                rBox.append(rTitle, rSum, exRow);
+                rulesCard.appendChild(rBox);
+            });
+            container.appendChild(rulesCard);
+        }
+
+        // Section 4: Practical Decomposed Examples
+        const matchingExamples = (notes.practicalExamples || []).filter((ex) => {
+            if (!q) return true;
+            return [ex.word, ex.reading, ex.meaningEs, ...(ex.breakdown || [])].join(' ').toLowerCase().includes(q);
+        });
+        if (matchingExamples.length) {
+            const exCard = document.createElement('section');
+            exCard.className = 'korean-note-section-card';
+            const hEx = document.createElement('h4');
+            hEx.textContent = '4. Ejemplos Prácticos Desglosados';
+            exCard.appendChild(hEx);
+
+            matchingExamples.forEach((ex) => {
+                const itemBox = document.createElement('div');
+                itemBox.className = 'korean-rule-card';
+                const topRow = document.createElement('div');
+                topRow.className = 'hangul-detail-top';
+                const titleStrong = document.createElement('strong');
+                titleStrong.textContent = `${ex.word} (${ex.reading} — ${ex.meaningEs})`;
+                const btnsWrap = document.createElement('div');
+                btnsWrap.className = 'korean-drive-row-actions';
+                const btnListen = document.createElement('button');
+                btnListen.type = 'button';
+                btnListen.className = 'btn-secondary btn-small';
+                btnListen.textContent = '🔊 Escuchar';
+                btnListen.addEventListener('click', () => speakStudyText(ex.word, 'ko-KR'));
+                const btnAnalyze = document.createElement('button');
+                btnAnalyze.type = 'button';
+                btnAnalyze.className = 'btn-secondary btn-small';
+                btnAnalyze.textContent = '🔍 Desglosar';
+                btnAnalyze.addEventListener('click', () => openInComparator(ex.word));
+                btnsWrap.append(btnListen, btnAnalyze);
+                topRow.append(titleStrong, btnsWrap);
+
+                const ul = document.createElement('ul');
+                ul.className = 'alphabet-rules-list';
+                (ex.breakdown || []).forEach((line) => {
+                    const li = document.createElement('li');
+                    li.textContent = line;
+                    ul.appendChild(li);
+                });
+                itemBox.append(topRow, ul);
+                exCard.appendChild(itemBox);
+            });
+            container.appendChild(exCard);
+        }
+
+        if (Array.isArray(payload.liveParagraphs) && payload.liveParagraphs.length > 0 && !q) {
+            const syncDetails = document.createElement('details');
+            syncDetails.className = 'korean-keypad-details';
+            const sum = document.createElement('summary');
+            sum.textContent = `☁️ Documento vivo leído desde Google Drive (${payload.fileName}) · ${payload.liveParagraphs.length} líneas (Solo lectura)`;
+            const pre = document.createElement('pre');
+            pre.className = 'study-viewer-pre';
+            pre.textContent = payload.liveParagraphs.map((p) => p.text).join('\n');
+            syncDetails.append(sum, pre);
+            container.appendChild(syncDetails);
+        }
+    }
+
+    async function loadKoreanReadonlyDriveNotes(syncDrive = false) {
+        if (container && !cachedKoreanDrivePayload) {
+            container.replaceChildren(createLoadingBanner(tUi('Loading read-only Korean Alphabet notes...', 'Cargando notas de solo lectura del alfabeto coreano...'), 'sm'));
+        }
+        try {
+            const qs = syncDrive ? '?syncDrive=1' : '';
+            const resp = await resilientFetchJson(`/api/language/korean-practice-drive${qs}`, { method: 'GET' }, { timeoutMs: 20000 });
+            if (resp.ok && resp.data?.ok) {
+                cachedKoreanDrivePayload = resp.data;
+                if (statusEl) {
+                    statusEl.textContent = resp.data.syncedFromDrive
+                        ? `✅ Sincronizado en vivo (Solo lectura) desde Google Drive: ${resp.data.fileName}`
+                        : `📁 Vinculado a Google Drive (Korean Practice): ${resp.data.fileName}`;
+                }
+                renderReadonlyNotes(resp.data);
+                if (syncDrive) {
+                    showToast('ok', resp.data.syncedFromDrive
+                        ? tUi('Synced read-only notes from Google Drive!', '¡Notas de solo lectura sincronizadas desde Google Drive!')
+                        : tUi('Loaded Korean Practice notes (Drive rclone sync offline on this host).', 'Notas cargadas (rclone de Drive no activo en este equipo; usando copia exacta).'));
+                }
+            }
+        } catch (err) {
+            if (statusEl) statusEl.textContent = `⚠️ ${err.message}`;
+        }
+    }
+
+    window.__loadKoreanReadonlyDriveNotes = loadKoreanReadonlyDriveNotes;
+
+    btnSync?.addEventListener('click', () => {
+        runWithButtonLock(btnSync, () => loadKoreanReadonlyDriveNotes(true), { loadingText: tUi('Syncing...', 'Sincronizando...') });
+    });
+    btnGoCmp?.addEventListener('click', () => window.__switchEnglishStudioTab?.('korean_comparator'));
+    searchInput?.addEventListener('input', () => {
+        if (cachedKoreanDrivePayload) renderReadonlyNotes(cachedKoreanDrivePayload);
+    });
+}
+
+let koreanComparatorInitialized = false;
+function ensureKoreanComparatorInitialized() {
+    if (!koreanComparatorInitialized) initKoreanComparatorStudio();
+}
+
+function initKoreanComparatorStudio() {
+    const root = document.getElementById('englishKoreanComparatorStudio');
+    if (!root || koreanComparatorInitialized) return;
+    koreanComparatorInitialized = true;
+
+    const inputA = document.getElementById('koreanComparatorInput');
+    const inputB = document.getElementById('koreanComparatorTargetInput');
+    const presetsBox = document.getElementById('koreanComparatorPresets');
+    const keypadBox = document.getElementById('koreanComparatorKeypad');
+    const resultsBox = document.getElementById('koreanComparatorResults');
+
+    const COMPARE_PRESETS = [
+        { label: 'ㅓ vs ㅗ', a: 'ㅓ', b: 'ㅗ' },
+        { label: 'ㅏ vs ㅓ', a: 'ㅏ', b: 'ㅓ' },
+        { label: 'ㅡ vs ㅜ', a: 'ㅡ', b: 'ㅜ' },
+        { label: 'ㅐ vs ㅔ', a: 'ㅐ', b: 'ㅔ' },
+        { label: 'ㅘ vs ㅝ', a: 'ㅘ', b: 'ㅝ' },
+        { label: 'ㅙ vs ㅚ vs ㅞ', a: 'ㅙ', b: 'ㅚ' },
+        { label: 'ㄱ vs ㅋ vs ㄲ', a: 'ㄱ', b: 'ㅋ' },
+        { label: 'ㄷ vs ㅌ vs ㄸ', a: 'ㄷ', b: 'ㅌ' },
+        { label: 'ㅂ vs ㅍ vs ㅃ', a: 'ㅂ', b: 'ㅍ' },
+        { label: 'ㅅ vs ㅆ', a: 'ㅅ', b: 'ㅆ' },
+        { label: 'ㅈ vs ㅊ vs ㅉ', a: 'ㅈ', b: 'ㅊ' },
+        { label: 'ㅇ (아 vs 방)', a: '아', b: '방' },
+        { label: '한국어 (Regla 4 연음)', a: '한국어', b: '' },
+        { label: '음악 (Regla 4 연음)', a: '음악', b: '' },
+        { label: '감사합니다', a: '감사합니다', b: '' }
+    ];
+
+    const KEYPAD_JAMOS = [
+        'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
+        'ㄲ', 'ㄸ', 'ㅃ', 'ㅆ', 'ㅉ',
+        'ㅏ', 'ㅑ', 'ㅓ', 'ㅕ', 'ㅗ', 'ㅛ', 'ㅜ', 'ㅠ', 'ㅡ', 'ㅣ',
+        'ㅐ', 'ㅒ', 'ㅔ', 'ㅖ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅢ'
+    ];
+
+    if (presetsBox) {
+        presetsBox.replaceChildren();
+        COMPARE_PRESETS.forEach((p) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'agenda-chip-btn';
+            btn.textContent = p.label;
+            btn.addEventListener('click', () => setInputsAndCompare(p.a, p.b));
+            presetsBox.appendChild(btn);
+        });
+    }
+
+    if (keypadBox) {
+        keypadBox.replaceChildren();
+        KEYPAD_JAMOS.forEach((jamo) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'korean-keypad-btn';
+            btn.textContent = jamo;
+            btn.addEventListener('click', () => {
+                if (inputA) {
+                    inputA.value = `${inputA.value || ''}${jamo}`;
+                    scheduleCompare();
+                }
+            });
+            keypadBox.appendChild(btn);
+        });
+    }
+
+    function renderSideColumn(sideData, label) {
+        const col = document.createElement('div');
+        col.className = 'korean-compare-card';
+        const top = document.createElement('div');
+        top.className = 'korean-compare-card-head';
+        const badge = document.createElement('span');
+        badge.className = 'korean-drive-rom-pill';
+        badge.textContent = label;
+        const btnListen = document.createElement('button');
+        btnListen.type = 'button';
+        btnListen.className = 'btn-secondary btn-small';
+        btnListen.textContent = '🔊 Escuchar';
+        btnListen.addEventListener('click', () => speakStudyText(sideData.input, 'ko-KR'));
+        top.append(badge, btnListen);
+
+        const big = document.createElement('div');
+        big.className = 'korean-compare-big-char';
+        big.textContent = `${sideData.input} [${sideData.romanization || '-'}]`;
+
+        col.append(top, big);
+
+        (sideData.items || []).forEach((item) => {
+            if (item.kind === 'syllable') {
+                const sub = document.createElement('div');
+                sub.className = 'korean-slot-item';
+                const formulaStrong = document.createElement('strong');
+                formulaStrong.textContent = `${item.char} [${item.romanization}] · ${item.formula}`;
+                const ruleSpan = document.createElement('span');
+                ruleSpan.className = 'muted-text';
+                ruleSpan.textContent = item.layoutRule;
+                sub.append(formulaStrong, ruleSpan);
+                (item.slots || []).forEach((slot) => {
+                    const sLine = document.createElement('span');
+                    sLine.textContent = `• ${slot.jamo} (${slot.category} · [${slot.romanization}]): ${slot.spanishSound} — ${slot.guide}`;
+                    sub.appendChild(sLine);
+                });
+                col.appendChild(sub);
+            } else {
+                const sub = document.createElement('div');
+                sub.className = 'korean-slot-item';
+                const strongLine = document.createElement('strong');
+                strongLine.textContent = `${item.char} — ${item.name || item.category || ''} [${item.romanization}]`;
+                const soundLine = document.createElement('span');
+                soundLine.textContent = `🔊 Cómo suena: ${item.spanishSound || ''}`;
+                const guideLine = document.createElement('span');
+                guideLine.className = 'muted-text';
+                guideLine.textContent = item.guide || item.layoutRule || '';
+                sub.append(strongLine, soundLine, guideLine);
+
+                const firstSlot = item.slots && item.slots[0];
+                if (firstSlot && Array.isArray(firstSlot.similar) && firstSlot.similar.length) {
+                    const simRow = document.createElement('div');
+                    simRow.className = 'korean-similar-chips';
+                    const lbl = document.createElement('span');
+                    lbl.className = 'muted-text small-note';
+                    lbl.textContent = 'Comparar con parecido:';
+                    simRow.appendChild(lbl);
+                    firstSlot.similar.forEach((sim) => {
+                        const sb = document.createElement('button');
+                        sb.type = 'button';
+                        sb.className = 'agenda-chip-btn';
+                        sb.textContent = `${sim.symbol} [${sim.romanization}]`;
+                        sb.addEventListener('click', () => setInputsAndCompare(item.char, sim.symbol));
+                        simRow.appendChild(sb);
+                    });
+                    sub.appendChild(simRow);
+                }
+                col.appendChild(sub);
+            }
+        });
+
+        (sideData.phonologicalNotes || []).forEach((note) => {
+            const nEl = document.createElement('p');
+            nEl.className = 'small-note';
+            nEl.textContent = `🔗 ${note}`;
+            col.appendChild(nEl);
+        });
+
+        if (sideData.knownExample) {
+            const exBox = document.createElement('div');
+            exBox.className = 'korean-rule-card';
+            const hdr = document.createElement('strong');
+            hdr.textContent = `📘 Ejemplo de tus notas de Drive: ${sideData.knownExample.word} (${sideData.knownExample.reading} — ${sideData.knownExample.meaningEs})`;
+            exBox.appendChild(hdr);
+            (sideData.knownExample.breakdown || []).forEach((ln) => {
+                const lDiv = document.createElement('div');
+                lDiv.className = 'small-note';
+                lDiv.textContent = `• ${ln}`;
+                exBox.appendChild(lDiv);
+            });
+            col.appendChild(exBox);
+        }
+
+        return col;
+    }
+
+    function renderCompareAnalysis(analysis) {
+        if (!resultsBox) return;
+        resultsBox.replaceChildren();
+        const primary = analysis?.primary;
+        if (!primary || !primary.input) {
+            const hint = document.createElement('p');
+            hint.className = 'muted-text';
+            hint.textContent = tUi(
+                'Type any Korean symbol or word above (e.g. ㅓ, ㄱ, 한국어) to identify which symbol it is and how it sounds without saving anything.',
+                'Escribe arriba cualquier símbolo o palabra en coreano (ej. ㅓ, ㄱ, 한국어) para identificar cuál es y cómo suena al instante sin guardar nada.'
+            );
+            resultsBox.appendChild(hint);
+            return;
+        }
+
+        if (analysis.comparisonSummary) {
+            const diffCard = document.createElement('div');
+            diffCard.className = 'korean-cmp-diff-card';
+            const tStrong = document.createElement('strong');
+            tStrong.textContent = `⚖️ Comparación directa (Sin guardar): ${analysis.comparisonSummary}`;
+            diffCard.appendChild(tStrong);
+            resultsBox.appendChild(diffCard);
+        }
+
+        const grid = document.createElement('div');
+        grid.className = 'korean-cmp-side-grid';
+        grid.appendChild(renderSideColumn(primary, analysis.secondary?.input ? 'Símbolo A (Escrito)' : 'Resultado e Identificación (Sin Guardar)'));
+        if (analysis.secondary && analysis.secondary.input) {
+            grid.appendChild(renderSideColumn(analysis.secondary, 'Símbolo B (Comparación)'));
+        }
+        resultsBox.appendChild(grid);
+    }
+
+    let cmpSeq = 0;
+    let cmpTimer = null;
+    async function runCompareNow() {
+        const valA = (inputA?.value || '').trim();
+        const valB = (inputB?.value || '').trim();
+        if (!valA && !valB) {
+            renderCompareAnalysis({ primary: { input: '' } });
+            return;
+        }
+        const mySeq = ++cmpSeq;
+        try {
+            const resp = await resilientFetchJson('/api/language/korean-symbol-compare', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ input: valA || valB, compareWith: valA ? valB : '' })
+            }, { timeoutMs: 12000 });
+            if (mySeq !== cmpSeq) return;
+            if (resp.ok && resp.data?.analysis) {
+                renderCompareAnalysis(resp.data.analysis);
+            }
+        } catch (err) {
+            if (resultsBox) {
+                const errP = document.createElement('p');
+                errP.className = 'muted-text';
+                errP.textContent = `⚠️ ${err.message}`;
+                resultsBox.replaceChildren(errP);
+            }
+        }
+    }
+
+    function scheduleCompare() {
+        clearTimeout(cmpTimer);
+        cmpTimer = setTimeout(runCompareNow, 120);
+    }
+
+    function setInputsAndCompare(a, b = '') {
+        if (inputA) inputA.value = String(a || '');
+        if (inputB) inputB.value = String(b || '');
+        runCompareNow();
+    }
+
+    window.__setKoreanComparatorInputs = setInputsAndCompare;
+
+    inputA?.addEventListener('input', scheduleCompare);
+    inputB?.addEventListener('input', scheduleCompare);
+    document.getElementById('btnCmpSpeakPrimary')?.addEventListener('click', () => {
+        if (inputA?.value) speakStudyText(inputA.value, 'ko-KR');
+    });
+    document.getElementById('btnCmpSpeakTarget')?.addEventListener('click', () => {
+        if (inputB?.value) speakStudyText(inputB.value, 'ko-KR');
+    });
+    document.getElementById('btnCmpClearInputs')?.addEventListener('click', () => setInputsAndCompare('', ''));
+    document.getElementById('btnBackToKoreanReadonlyNotes')?.addEventListener('click', () => {
+        window.__switchEnglishStudioTab?.('korean_readonly_notes');
+    });
+
+    setInputsAndCompare('ㅓ', 'ㅗ');
 }
 
 let alphabetStudioInitialized = false;
@@ -9887,622 +10483,6 @@ if (englishMusicStudioRoot) {
                         : fallbackArtist,
                     album_title: val('musicAlbumTitle'),
                     album_type: RELEASE_TYPE_LABELS[val('musicAlbumType')] || val('musicAlbumType'),
-                    release_year: val('musicAlbumYear'),
-                    yt_music_url: val('musicSongYtUrl'),
-                    focus_summary: val('musicFocusSummary'),
-                    lyrics_study: lyricsStudy,
-                    vocabulary_list: vocabVal,
-                    pronunciation_notes: pronVal,
-                    notes: notesVal
-                };
-
-            mostrarBannerMusica('musicWordStatusBanner', '', '');
-
-            runWithButtonLock(btnSend, async () => {
-                try {
-                    const signature = `${entry.song_title}|${entry.artists_display}|${entry.lyrics_study}|${entry.vocabulary_list}|${entry.pronunciation_notes}|${entry.notes}`;
-                    await submitMutationRequest({
-                        url: '/api/send-english',
-                        method: 'POST',
-                        scopeKey: 'english:music-word',
-                        signature,
-                        buildBody: () => ({ texto: encriptarTextoE2EE(JSON.stringify(entry), llaveTexto) })
-                    });
-
-                    clearStudyNoteDrafts('music');
-                    ['musicStudyVocab', 'musicStudyPronunciation', 'musicStudyExtraNotes'].forEach(id => {
-                        const el = document.getElementById(id);
-                        if (el) el.value = '';
-                    });
-
-                    if (selected) {
-                        const nextStatus = selected.estado_estudio === 'to_study' ? 'in_progress' : selected.estado_estudio;
-                        try {
-                            await resilientFetchJson(`/api/english/music/songs/${selected.id}/status`, {
-                                method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ estadoEstudio: nextStatus, wordSynced: true })
-                            }, { timeoutMs: 12000 });
-                            await cargarCatalogoMusical();
-                        } catch (_) {
-                            // E2EE note already queued safely; status refresh can recover on next catalog load
-                        }
-                    }
-
-                    mostrarBannerMusica(
-                        'musicWordStatusBanner',
-                        'ok',
-                        'Encrypted E2EE & queued! Your PC sync will add this song study breakdown under Section 4 in English_Learning_Notebook.docx.'
-                    );
-                    showToast('ok', 'Song study notes encrypted & queued for Word!');
-                } catch (err) {
-                    mostrarBannerMusica('musicWordStatusBanner', 'err', tUi('Failed to send encrypted notes: ', 'No se pudieron enviar las notas cifradas: ') + tServer(err.message));
-                    showToast('err', err.message);
-                }
-            }, { loadingText: 'Encrypting...' });
-        });
-    }
-}
-
-// ==========================================
-// WEEKLY PERSONAL AGENDA LOGIC
-// ==========================================
-const AGENDA_BLOQUES = [
-    {
-        id: 'manana',
-        label: 'Morning',
-        defaultHora: '08:00',
-        svg: `<svg class="agenda-block-svg" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 9h11v6a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V9z"/>
-                <path d="M16 10h2.5a2 2 0 0 1 0 4H16"/>
-                <path d="M4 19h13"/>
-              </svg>`
-    },
-    {
-        id: 'cole',
-        label: 'At School / Classes',
-        defaultHora: '10:00',
-        svg: `<svg class="agenda-block-svg" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3 10l9-5 9 5"/>
-                <path d="M5 11v7c2.5-1.2 4.8-1.2 7 0 2.2-1.2 4.5-1.2 7 0v-7"/>
-                <path d="M12 11v7"/>
-              </svg>`
-    },
-    {
-        id: 'tarde',
-        label: 'Afternoon',
-        defaultHora: '16:00',
-        svg: `<svg class="agenda-block-svg" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="4"/>
-                <path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
-              </svg>`
-    },
-    {
-        id: 'noche',
-        label: 'Night',
-        defaultHora: '21:00',
-        svg: `<svg class="agenda-block-svg" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M15.5 5.5a4.5 4.5 0 0 0 4 5.5 5 5 0 1 1-4-5.5z"/>
-                <path d="M6 17h9a3 3 0 0 0 0-6 4 4 0 0 0-7.7-1A3 3 0 0 0 6 17z"/>
-              </svg>`
-    }
-];
-
-const AGENDA_DIAS = [
-    { key: 'lun', nombre: 'Monday', corto: 'Mon', offset: 0 },
-    { key: 'mar', nombre: 'Tuesday', corto: 'Tue', offset: 1 },
-    { key: 'mie', nombre: 'Wednesday', corto: 'Wed', offset: 2 },
-    { key: 'jue', nombre: 'Thursday', corto: 'Thu', offset: 3 },
-    { key: 'vie', nombre: 'Friday', corto: 'Fri', offset: 4 },
-    { key: 'sab', nombre: 'Saturday', corto: 'Sat', offset: 5 },
-    { key: 'dom', nombre: 'Sunday', corto: 'Sun', offset: 6 }
-];
-
-const agendaState = {
-    weekOffset: 0,
-    showWeekend: true,
-    layoutMode: window.innerWidth <= 820 ? 'day' : 'grid',
-    manualLayoutOverride: false,
-    selectedDate: formatLocalDate(new Date()),
-    filterCategory: 'all',
-    filterType: 'all',
-    filterCourse: '',
-    items: []
-};
-
-function getActiveSemesterCourses() {
-    const activeSem = typeof getActiveSemesterObj === 'function' ? getActiveSemesterObj() : null;
-    return Array.isArray(activeSem?.courses) ? activeSem.courses : [];
-}
-
-function findPlannerCourseById(courseId) {
-    const cleanId = String(courseId || '').trim();
-    if (!cleanId || !academicPlannerState || !Array.isArray(academicPlannerState.semesters)) return null;
-    const activeSem = typeof getActiveSemesterObj === 'function' ? getActiveSemesterObj() : null;
-    const ordered = activeSem
-        ? [activeSem, ...academicPlannerState.semesters.filter(s => s && s.id !== activeSem.id)]
-        : academicPlannerState.semesters;
-    for (const sem of ordered) {
-        const hit = (Array.isArray(sem?.courses) ? sem.courses : []).find(c => String(c?.id || '').trim() === cleanId);
-        if (hit) return hit;
-    }
-    return null;
-}
-
-function resolveAgendaItemClassLabel(item) {
-    if (!item || (item.categoria || 'personal') !== 'universidad') return null;
-    const course = item.materia_id ? findPlannerCourseById(item.materia_id) : null;
-    if (course && course.name) {
-        return {
-            id: String(course.id || item.materia_id || ''),
-            name: String(course.name).trim(),
-            code: String(course.code || '').trim(),
-            room: String(course.room || '').trim()
-        };
-    }
-    const rawName = String(item.materia_nombre || '').trim();
-    if (rawName) {
-        return {
-            id: String(item.materia_id || ''),
-            name: rawName,
-            code: '',
-            room: ''
-        };
-    }
-    return null;
-}
-
-let academicPlannerLoadPromise = null;
-function ensureAcademicPlannerLoaded() {
-    if (academicPlannerState && Array.isArray(academicPlannerState.semesters)) {
-        return Promise.resolve(academicPlannerState);
-    }
-    if (!currentUser || currentUser.rol !== 'admin') {
-        return Promise.resolve(null);
-    }
-    if (academicPlannerLoadPromise) {
-        return academicPlannerLoadPromise;
-    }
-    academicPlannerLoadPromise = fetch('/api/planner', { cache: 'no-store' })
-        .then(res => (res.ok ? res.json() : null))
-        .then(data => {
-            if (data && data.planner) {
-                academicPlannerState = data.planner;
-                if (data.campusDirectory) academicPlannerDirectory = data.campusDirectory;
-                if (data.mindboxPreset) academicPlannerMindboxPreset = data.mindboxPreset;
-                renderAgendaCourseFilterOptions();
-                if (typeof renderAgendaBoard === 'function') renderAgendaBoard();
-                if (agendaModal && !agendaModal.hidden && typeof syncAgendaMateriaFieldUI === 'function') {
-                    const sel = document.getElementById('agendaMateriaId');
-                    syncAgendaMateriaFieldUI(sel ? sel.value : '');
-                }
-            }
-            return academicPlannerState;
-        })
-        .catch(() => null)
-        .finally(() => {
-            academicPlannerLoadPromise = null;
-        });
-    return academicPlannerLoadPromise;
-}
-
-function renderAgendaCourseFilterOptions() {
-    const group = document.getElementById('agendaCourseFilterGroup');
-    const sel = document.getElementById('agendaCourseFilter');
-    if (!sel) return;
-
-    const isPersonalFilter = agendaState.filterCategory === 'personal';
-    if (group) group.hidden = isPersonalFilter;
-    if (isPersonalFilter && agendaState.filterCourse) {
-        agendaState.filterCourse = '';
-    }
-
-    const courses = getActiveSemesterCourses();
-    const prevVal = agendaState.filterCourse || '';
-    sel.replaceChildren();
-
-    const optAll = document.createElement('option');
-    optAll.value = '';
-    optAll.textContent = tUi('🎓 All Classes', '🎓 Todas las clases');
-    sel.appendChild(optAll);
-
-    const optUnlinked = document.createElement('option');
-    optUnlinked.value = '__unlinked__';
-    optUnlinked.textContent = tUi('📌 General University (no class)', '📌 Universidad general (sin clase)');
-    sel.appendChild(optUnlinked);
-
-    const seenIds = new Set();
-    courses.forEach(course => {
-        const cid = String(course?.id || '').trim();
-        const cname = String(course?.name || '').trim();
-        if (!cid || !cname || seenIds.has(cid)) return;
-        seenIds.add(cid);
-        const opt = document.createElement('option');
-        opt.value = cid;
-        protectUserNode(opt);
-        opt.textContent = `📚 ${course.code ? `${course.code} · ` : ''}${cname}`;
-        sel.appendChild(opt);
-    });
-
-    if (prevVal && prevVal !== '__unlinked__' && !seenIds.has(prevVal)) {
-        const archived = findPlannerCourseById(prevVal);
-        if (archived) {
-            const optArch = document.createElement('option');
-            optArch.value = prevVal;
-            protectUserNode(optArch);
-            optArch.textContent = `📚 ${archived.name}`;
-            sel.appendChild(optArch);
-        } else {
-            agendaState.filterCourse = '';
-        }
-    }
-    sel.value = agendaState.filterCourse || '';
-}
-
-function matchesAgendaFilters(item) {
-    const cat = item.categoria === 'universidad' ? 'universidad' : 'personal';
-    const tipo = item.tipo === 'tarea' ? 'tarea' : 'evento';
-    if (agendaState.filterCategory !== 'all' && cat !== agendaState.filterCategory) return false;
-    if (agendaState.filterType !== 'all' && tipo !== agendaState.filterType) return false;
-    if (agendaState.filterCourse && agendaState.filterCategory !== 'personal') {
-        if (cat !== 'universidad') return false;
-        const classMeta = resolveAgendaItemClassLabel(item);
-        if (agendaState.filterCourse === '__unlinked__') {
-            return !classMeta;
-        }
-        return Boolean(item.materia_id === agendaState.filterCourse || (classMeta && classMeta.id === agendaState.filterCourse));
-    }
-    return true;
-}
-
-function appendCategorizedAgendaItems(container, listItems) {
-    const uniItems = listItems.filter(i => (i.categoria || 'personal') === 'universidad');
-    const personalItems = listItems.filter(i => (i.categoria || 'personal') !== 'universidad');
-
-    if (agendaState.filterCategory === 'all' && listItems.length > 0) {
-        if (uniItems.length > 0) {
-            const uniHead = document.createElement('div');
-            uniHead.className = 'agenda-cat-divider is-uni';
-            uniHead.textContent = tUi(`🎓 University (${uniItems.length})`, `🎓 Universidad (${uniItems.length})`);
-            container.appendChild(uniHead);
-            uniItems.forEach(item => container.appendChild(crearElementoActividad(item)));
-        }
-        if (personalItems.length > 0) {
-            const perHead = document.createElement('div');
-            perHead.className = 'agenda-cat-divider is-personal';
-            perHead.textContent = `👤 Personal (${personalItems.length})`;
-            container.appendChild(perHead);
-            personalItems.forEach(item => container.appendChild(crearElementoActividad(item)));
-        }
-        return;
-    }
-
-    listItems.forEach(item => container.appendChild(crearElementoActividad(item)));
-}
-
-function getMondayOfOffset(offsetWeeks) {
-    const now = new Date();
-    const day = now.getDay();
-    const diffToMonday = day === 0 ? -6 : 1 - day;
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffToMonday + (offsetWeeks * 7));
-}
-
-function getVisibleAgendaDays() {
-    const monday = getMondayOfOffset(agendaState.weekOffset);
-    const list = agendaState.showWeekend ? AGENDA_DIAS : AGENDA_DIAS.slice(0, 5);
-    return list.map(d => {
-        const dateObj = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + d.offset);
-        return {
-            ...d,
-            fecha: formatLocalDate(dateObj),
-            dateObj
-        };
-    });
-}
-
-function crearElementoActividad(item) {
-    const tipo = item.tipo === 'tarea' ? 'tarea' : 'evento';
-    const categoria = item.categoria === 'universidad' ? 'universidad' : 'personal';
-    const estado = getAgendaItemStatus(item);
-    const isDone = estado === 'done';
-    const isSkipped = estado === 'skipped';
-
-    const row = document.createElement('div');
-    row.className = `agenda-item${isDone ? ' is-done' : ''}${isSkipped ? ' is-skipped' : ''}`;
-
-    const checkBtn = document.createElement('button');
-    checkBtn.type = 'button';
-    checkBtn.className = `agenda-check-circle status-${estado}`;
-    const checkLabels = {
-        todo: tUi('To Do — click to mark In Progress', 'Por hacer — clic para marcar En progreso'),
-        in_progress: tUi('In Progress — click to mark Done', 'En progreso — clic para marcar Completado'),
-        done: tUi('Done — click to reset to To Do', 'Completado — clic para volver a Por hacer'),
-        skipped: tUi('Skipped — click to restore to To Do', 'Omitida — clic para restaurar a Por hacer')
-    };
-    checkBtn.title = checkLabels[estado] || tUi('Toggle workflow status', 'Cambiar estado');
-    checkBtn.setAttribute('aria-label', checkLabels[estado] || tUi('Toggle workflow status', 'Cambiar estado'));
-    checkBtn.textContent = isDone ? '✓' : estado === 'in_progress' ? '◐' : isSkipped ? '⏭' : '';
-
-    const topRow = document.createElement('div');
-    topRow.className = 'agenda-item-top';
-
-    const topLeft = document.createElement('div');
-    topLeft.className = 'agenda-item-top-left';
-
-    const content = document.createElement('div');
-    content.className = 'agenda-item-content';
-
-    const timePill = document.createElement('span');
-    timePill.className = 'agenda-time-pill';
-    timePill.textContent = item.hora;
-
-    const parsedParts = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
-
-    const text = document.createElement('span');
-    text.className = 'agenda-item-text';
-    protectUserNode(text);
-    text.textContent = parsedParts.titulo || item.actividad;
-
-    const descEl = parsedParts.descripcion ? document.createElement('span') : null;
-    if (descEl) {
-        descEl.className = 'agenda-item-desc';
-        protectUserNode(descEl);
-        descEl.textContent = parsedParts.descripcion;
-    }
-
-    const footerEl = document.createElement('div');
-    footerEl.className = 'agenda-item-footer';
-
-    const jiraRow = document.createElement('div');
-    jiraRow.className = 'jira-status-row';
-
-    const statusSelect = document.createElement('select');
-    statusSelect.className = `jira-status-select status-${estado}`;
-    statusSelect.setAttribute('aria-label', tUi('Activity status', 'Estado de avance'));
-    [
-        { value: 'todo', label: tUi('To Do', 'Por hacer') },
-        { value: 'in_progress', label: tUi('In Progress', 'En progreso') },
-        { value: 'done', label: tUi('Done', 'Completado') },
-        { value: 'skipped', label: tUi('⏭️ Skipped (Skip)', '⏭️ Omitida (Skip)') }
-    ].forEach(optDef => {
-        const opt = document.createElement('option');
-        opt.value = optDef.value;
-        opt.textContent = optDef.label;
-        statusSelect.appendChild(opt);
-    });
-    statusSelect.value = estado;
-    jiraRow.appendChild(statusSelect);
-
-    const metaRow = document.createElement('div');
-    metaRow.className = 'agenda-item-meta-row is-compact';
-
-    if (isSkipped) {
-        const skipBadge = document.createElement('span');
-        skipBadge.className = 'agenda-skipped-badge';
-        skipBadge.textContent = tUi('⏭️ Skipped', '⏭️ Omitida');
-        metaRow.appendChild(skipBadge);
-    }
-
-    const catPill = document.createElement('span');
-    const classMeta = categoria === 'universidad' ? resolveAgendaItemClassLabel(item) : null;
-    catPill.className = `agenda-cat-pill ${categoria === 'universidad' ? 'is-uni' : 'is-personal'}${classMeta ? ' is-class-linked' : ''}`;
-    if (classMeta) {
-        protectUserNode(catPill);
-        catPill.textContent = `🎓 ${classMeta.name}`;
-        catPill.title = `${tUi('Class', 'Clase')}: ${classMeta.code ? `${classMeta.code} · ` : ''}${classMeta.name}${classMeta.room ? ` (${classMeta.room})` : ''}`;
-    } else {
-        catPill.textContent = categoria === 'universidad' ? tUi('🎓 Uni', '🎓 Univ') : '👤 Personal';
-    }
-
-    const typePill = document.createElement('span');
-    typePill.className = 'agenda-type-pill';
-    typePill.textContent = tipo === 'tarea' ? tUi('Task', 'Tarea') : tUi('Event', 'Evento');
-
-    metaRow.append(catPill, typePill);
-    footerEl.append(jiraRow, metaRow);
-
-    if (descEl) {
-        content.append(text, descEl, footerEl);
-    } else {
-        content.append(text, footerEl);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'agenda-item-actions';
-
-    const postponeBtn = document.createElement('button');
-    postponeBtn.type = 'button';
-    postponeBtn.className = 'agenda-mini-btn agenda-postpone-btn';
-    postponeBtn.title = tUi('Postpone by days or pick date', 'Posponer por días o elegir fecha');
-    postponeBtn.setAttribute('aria-label', tUi('Postpone activity', 'Posponer actividad'));
-    postponeBtn.textContent = '⏳';
-    postponeBtn.addEventListener('click', ev => {
-        ev.stopPropagation();
-        if (typeof openAgendaPostponePopover === 'function') {
-            openAgendaPostponePopover(item, postponeBtn);
-        }
-    });
-
-    const skipBtn = document.createElement('button');
-    skipBtn.type = 'button';
-    skipBtn.className = `agenda-mini-btn agenda-skip-btn${isSkipped ? ' is-active' : ''}`;
-    skipBtn.title = isSkipped
-        ? tUi('Restore activity to To Do', 'Restaurar actividad a Por hacer')
-        : tUi('Skip this occurrence (Skip)', 'Omitir / Saltar actividad (Skip)');
-    skipBtn.setAttribute('aria-label', skipBtn.title);
-    skipBtn.textContent = '⏭️';
-
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'agenda-mini-btn';
-    editBtn.title = tUi('Edit activity', 'Editar actividad');
-    editBtn.setAttribute('aria-label', tUi('Edit activity', 'Editar actividad'));
-    editBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
-    editBtn.addEventListener('click', () => abrirAgendaModal(item));
-
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'agenda-mini-btn';
-    delBtn.title = tUi('Delete activity', 'Eliminar actividad');
-    delBtn.setAttribute('aria-label', tUi('Delete activity', 'Eliminar actividad'));
-    delBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>';
-
-    const uiRefs = { row, checkBtn, statusSelect, postponeBtn, skipBtn, editBtn, delBtn };
-    checkBtn.addEventListener('click', () => toggleAgendaItem(item, uiRefs, nextAgendaStatus(getAgendaItemStatus(item))));
-    statusSelect.addEventListener('change', () => toggleAgendaItem(item, uiRefs, statusSelect.value));
-    skipBtn.addEventListener('click', () => toggleAgendaItem(item, uiRefs, isSkipped ? 'todo' : 'skipped'));
-    delBtn.addEventListener('click', () => eliminarAgendaItem(item.id, uiRefs));
-
-    actions.append(postponeBtn, skipBtn, editBtn, delBtn);
-    topLeft.append(checkBtn, timePill);
-    topRow.append(topLeft, actions);
-    row.append(topRow, content);
-    return row;
-}
-
-function renderAgendaBoard() {
-    const weekBoard = document.getElementById('agendaWeekBoard');
-    const dayTabs = document.getElementById('agendaDayTabs');
-    const dayBoard = document.getElementById('agendaDayBoard');
-    const tableScroll = document.getElementById('agendaTableScroll');
-    const weekLabel = document.getElementById('agendaWeekLabel');
-    const weekStats = document.getElementById('agendaWeekStats');
-    const btnToggleWeekend = document.getElementById('btnToggleWeekend');
-    const btnToggleLayout = document.getElementById('btnToggleAgendaLayout');
-
-    if (!weekBoard || !dayTabs || !dayBoard || !tableScroll) return;
-
-    document.querySelectorAll('#agendaCategoryFilters .agenda-filter-pill[data-agenda-cat]').forEach(btn => {
-        btn.classList.toggle('active', btn.getAttribute('data-agenda-cat') === agendaState.filterCategory);
-    });
-    document.querySelectorAll('#agendaTypeFilters .agenda-filter-pill[data-agenda-type]').forEach(btn => {
-        btn.classList.toggle('active', btn.getAttribute('data-agenda-type') === agendaState.filterType);
-    });
-    renderAgendaCourseFilterOptions();
-
-    const diasVisibles = getVisibleAgendaDays();
-    const hoyStr = formatLocalDate(new Date());
-
-    if (!diasVisibles.some(d => d.fecha === agendaState.selectedDate)) {
-        const todayInWeek = diasVisibles.find(d => d.fecha === hoyStr);
-        agendaState.selectedDate = todayInWeek ? todayInWeek.fecha : diasVisibles[0].fecha;
-    }
-
-    const firstDate = diasVisibles[0].dateObj;
-    const lastDate = diasVisibles[diasVisibles.length - 1].dateObj;
-    if (weekLabel) {
-        const f1 = firstDate.toLocaleDateString(tLocale(), { day: 'numeric', month: 'short' });
-        const f2 = lastDate.toLocaleDateString(tLocale(), { day: 'numeric', month: 'short', year: 'numeric' });
-        weekLabel.textContent = `${f1} - ${f2}`;
-    }
-
-    const visibleDatesSet = new Set(diasVisibles.map(d => d.fecha));
-    const filteredItems = agendaState.items.filter(matchesAgendaFilters);
-    const visibleItems = filteredItems.filter(i => visibleDatesSet.has(i.fecha));
-    const doneCount = visibleItems.filter(i => getAgendaItemStatus(i) === 'done').length;
-    const inProgCount = visibleItems.filter(i => getAgendaItemStatus(i) === 'in_progress').length;
-    const skippedCount = visibleItems.filter(i => getAgendaItemStatus(i) === 'skipped').length;
-    const todoCount = visibleItems.length - doneCount - inProgCount - skippedCount;
-    const uniCount = visibleItems.filter(i => (i.categoria || 'personal') === 'universidad').length;
-    const perCount = visibleItems.length - uniCount;
-
-    if (weekStats) {
-        weekStats.textContent = visibleItems.length
-            ? tUi(
-                `${doneCount} Done · ${inProgCount} In Progress · ${todoCount} To Do${skippedCount ? ` · ${skippedCount} Skipped` : ''} (${uniCount} University · ${perCount} Personal)`,
-                `${doneCount} Completadas · ${inProgCount} En progreso · ${todoCount} Por hacer${skippedCount ? ` · ${skippedCount} Omitidas` : ''} (${uniCount} Universidad · ${perCount} Personal)`
-            )
-            : tUi('Organize University & Personal events and recurring tasks', 'Organiza eventos de Universidad/Personal y tareas');
-    }
-
-    if (btnToggleWeekend) {
-        btnToggleWeekend.textContent = agendaState.showWeekend
-            ? tUi('Mon - Fri Only', 'Solo Lun - Vie')
-            : tUi('Show Mon - Sun', 'Mostrar Lun - Dom');
-        btnToggleWeekend.classList.toggle('active', !agendaState.showWeekend);
-    }
-
-    if (btnToggleLayout) {
-        btnToggleLayout.textContent = agendaState.layoutMode === 'day'
-            ? tUi('Grid View', 'Vista Rejilla')
-            : tUi('Day View', 'Vista Día');
-    }
-
-    const isDayLayout = agendaState.layoutMode === 'day';
-    dayTabs.hidden = !isDayLayout;
-    dayBoard.hidden = !isDayLayout;
-    tableScroll.hidden = isDayLayout;
-
-    const defaultModalCategory = agendaState.filterCategory !== 'all'
-        ? agendaState.filterCategory
-        : (currentSettings && currentSettings.defaultAgendaCategory && currentSettings.defaultAgendaCategory !== 'all'
-            ? currentSettings.defaultAgendaCategory
-            : 'personal');
-    const defaultModalType = agendaState.filterType !== 'all' ? agendaState.filterType : 'evento';
-
-    // 1. Day View (mobile / focus mode)
-    if (isDayLayout) {
-        dayTabs.innerHTML = '';
-        diasVisibles.forEach(dia => {
-            const count = filteredItems.filter(i => i.fecha === dia.fecha).length;
-            const dayShortLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaDayName === 'function')
-                ? window.DailyHubI18n.agendaDayName(dia.nombre, true)
-                : dia.corto;
-            const tab = document.createElement('button');
-            tab.type = 'button';
-            tab.className = `agenda-day-tab day-${dia.key}${dia.fecha === agendaState.selectedDate ? ' active' : ''}`;
-            tab.innerHTML = `
-                <span class="tab-day">${dayShortLoc}${dia.fecha === hoyStr ? ' •' : ''}</span>
-                <span class="tab-date">${dia.dateObj.toLocaleDateString(tLocale(), { month: 'short', day: 'numeric' })}</span>
-                <span class="tab-count">${count}</span>
-            `;
-            tab.addEventListener('click', () => {
-                agendaState.selectedDate = dia.fecha;
-                renderAgendaBoard();
-            });
-            dayTabs.appendChild(tab);
-        });
-
-        dayBoard.innerHTML = '';
-        const activeDay = diasVisibles.find(d => d.fecha === agendaState.selectedDate) || diasVisibles[0];
-
-        AGENDA_BLOQUES.forEach(bloque => {
-            const blockItems = filteredItems.filter(
-                i => i.fecha === activeDay.fecha && i.bloque === bloque.id
-            );
-
-            const bloqueLabelLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaBlockLabel === 'function')
-                ? window.DailyHubI18n.agendaBlockLabel(bloque.id)
-                : bloque.label;
-
-            const card = document.createElement('div');
-            card.className = `agenda-mobile-block-card day-${activeDay.key}`;
-
-            const head = document.createElement('div');
-            head.className = 'agenda-mobile-block-head';
-            head.innerHTML = `
-                <div class="agenda-mobile-block-head-left">
-                    ${bloque.svg}
-                    <span>${bloqueLabelLoc}</span>
-                </div>
-                <span>${blockItems.length}</span>
-            `;
-
-            const body = document.createElement('div');
-            body.className = 'agenda-mobile-block-body';
-
-            if (!blockItems.length) {
-                const empty = document.createElement('p');
-                empty.className = 'agenda-empty-block';
-                empty.textContent = tUi('No activities matching active filters', 'Sin actividades con los filtros activos');
-                body.appendChild(empty);
-            } else {
-                appendCategorizedAgendaItems(body, blockItems);
-            }
-
-            const addBtn = document.createElement('button');
-            addBtn.type = 'button';
-            addBtn.className = 'agenda-cell-add';
             addBtn.textContent = `+ ${tUi('Add to', 'Agregar a')} ${bloqueLabelLoc.toLowerCase()}`;
             addBtn.addEventListener('click', () => abrirAgendaModal({
                 fecha: activeDay.fecha,
@@ -11994,100 +11974,109 @@ function programarExpiracionDomingo(expiraEnIso) {
 
 function enterAppSession(user) {
     currentUser = user;
-    resetPasswordToggles();
-
-    const isPsiquiatra = user.rol === 'psiquiatra';
-
-    const userNameEl = document.getElementById('sidebarUserName');
-    const userEmailEl = document.getElementById('sidebarUserEmail');
-    const roleLabelEl = document.getElementById('sidebarRoleLabel');
-    const readonlyBanner = document.getElementById('medicoReadonlyBanner');
-
-    if (userNameEl) {
-        protectUserNode(userNameEl);
-        userNameEl.textContent = user.nombre;
-    }
-    if (userEmailEl) {
-        protectUserNode(userEmailEl);
-        userEmailEl.textContent = user.email;
-    }
-    if (roleLabelEl) {
-        roleLabelEl.textContent = isPsiquiatra
-            ? tUi('Psychiatrist Mode (Read-Only)', 'Modo Psiquiatra (Solo Lectura)')
-            : tUi('Owner (Admin)', 'Propietario (Admin)');
-    }
-
-    document.querySelectorAll('.admin-only-nav').forEach(el => {
-        el.hidden = isPsiquiatra;
-    });
-    if (readonlyBanner) {
-        readonlyBanner.hidden = !isPsiquiatra;
-    }
-
-    actualizarCabecerasDeFecha();
-    if (!isCurrentTabSuspended) {
-        programarExpiracionDomingo(user.expira_en);
-    }
-    if (typeof cargarVersionInfo === 'function') {
-        cargarVersionInfo();
-    }
-
-    if (isPsiquiatra) {
-        showView('resumen', true);
-    } else {
-        fetch('/api/settings', { cache: 'no-store' })
-            .then(r => (r.ok ? r.json() : null))
-            .then(data => {
-                if (data && data.settings) {
-                    aplicarSettingsEnEstado(data.settings, { syncAgendaDefaults: true });
-                    if (data.settings.languageMemory && typeof updateAiMemoryBadgeUI === 'function') {
-                        updateAiMemoryBadgeUI(data.settings.languageMemory);
-                    }
-                }
-            })
-            .catch(() => { });
-
-        if (!isCurrentTabSuspended) {
-            cargarRecordatoriosActivos();
-            if (reminderPollInterval) clearInterval(reminderPollInterval);
-            reminderPollInterval = setInterval(() => {
-                if (!isCurrentTabSuspended && currentUser && currentUser.rol === 'admin') {
-                    cargarRecordatoriosActivos();
-                }
-            }, 60 * 1000);
-        }
-
-        const urlParams = new URLSearchParams(window.location.search);
-        const rView = urlParams.get('rView');
-        const shouldCaptureGps = urlParams.get('captureGps') === '1';
-        const initialHash = window.location.hash.replace('#', '');
-        if (rView && VALID_VIEWS.has(rView)) {
-            openReminderTarget({
-                targetView: rView,
-                targetDate: urlParams.get('rDate') || '',
-                targetMoment: urlParams.get('rMoment') || '',
-                targetTime: urlParams.get('rTime') || '',
-                targetBlock: urlParams.get('rBlock') || '',
-                targetTab: urlParams.get('rTab') || '',
-                refId: urlParams.get('rRef') || null
-            });
-            history.replaceState(null, '', `${window.location.pathname}#${rView}`);
-            if (shouldCaptureGps && currentUser?.rol === 'admin') {
-                setTimeout(() => triggerSmartGpsCapture('current'), 450);
-            }
-        } else if (shouldCaptureGps && currentUser?.rol === 'admin') {
-            openReminderTarget({ targetView: 'horario', targetTab: 'locations' });
-            history.replaceState(null, '', `${window.location.pathname}#horario`);
-            setTimeout(() => triggerSmartGpsCapture('current'), 450);
-        } else {
-            const startView = VALID_VIEWS.has(initialHash) ? initialHash : 'inicio';
-            showView(startView, false);
-        }
-    }
-
+    // Release boot screen immediately and guarantee reveal in finally so no widget error can trap "Checking session..."
     hideBootScreen();
     if (authOverlay) authOverlay.hidden = true;
     if (appShell) appShell.hidden = false;
+
+    try {
+        resetPasswordToggles();
+
+        const isPsiquiatra = user.rol === 'psiquiatra';
+
+        const userNameEl = document.getElementById('sidebarUserName');
+        const userEmailEl = document.getElementById('sidebarUserEmail');
+        const roleLabelEl = document.getElementById('sidebarRoleLabel');
+        const readonlyBanner = document.getElementById('medicoReadonlyBanner');
+
+        if (userNameEl) {
+            protectUserNode(userNameEl);
+            userNameEl.textContent = user.nombre;
+        }
+        if (userEmailEl) {
+            protectUserNode(userEmailEl);
+            userEmailEl.textContent = user.email;
+        }
+        if (roleLabelEl) {
+            roleLabelEl.textContent = isPsiquiatra
+                ? tUi('Psychiatrist Mode (Read-Only)', 'Modo Psiquiatra (Solo Lectura)')
+                : tUi('Owner (Admin)', 'Propietario (Admin)');
+        }
+
+        document.querySelectorAll('.admin-only-nav').forEach(el => {
+            el.hidden = isPsiquiatra;
+        });
+        if (readonlyBanner) {
+            readonlyBanner.hidden = !isPsiquiatra;
+        }
+
+        actualizarCabecerasDeFecha();
+        if (!isCurrentTabSuspended) {
+            programarExpiracionDomingo(user.expira_en);
+        }
+        if (typeof cargarVersionInfo === 'function') {
+            cargarVersionInfo();
+        }
+
+        if (isPsiquiatra) {
+            showView('resumen', true);
+        } else {
+            fetch('/api/settings', { cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : null))
+                .then(data => {
+                    if (data && data.settings) {
+                        aplicarSettingsEnEstado(data.settings, { syncAgendaDefaults: true });
+                        if (data.settings.languageMemory && typeof updateAiMemoryBadgeUI === 'function') {
+                            updateAiMemoryBadgeUI(data.settings.languageMemory);
+                        }
+                    }
+                })
+                .catch(() => { });
+
+            if (!isCurrentTabSuspended) {
+                cargarRecordatoriosActivos();
+                if (reminderPollInterval) clearInterval(reminderPollInterval);
+                reminderPollInterval = setInterval(() => {
+                    if (!isCurrentTabSuspended && currentUser && currentUser.rol === 'admin') {
+                        cargarRecordatoriosActivos();
+                    }
+                }, 60 * 1000);
+            }
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const rView = urlParams.get('rView');
+            const shouldCaptureGps = urlParams.get('captureGps') === '1';
+            const initialHash = window.location.hash.replace('#', '');
+            if (rView && VALID_VIEWS.has(rView)) {
+                openReminderTarget({
+                    targetView: rView,
+                    targetDate: urlParams.get('rDate') || '',
+                    targetMoment: urlParams.get('rMoment') || '',
+                    targetTime: urlParams.get('rTime') || '',
+                    targetBlock: urlParams.get('rBlock') || '',
+                    targetTab: urlParams.get('rTab') || '',
+                    refId: urlParams.get('rRef') || null
+                });
+                history.replaceState(null, '', `${window.location.pathname}#${rView}`);
+                if (shouldCaptureGps && currentUser?.rol === 'admin') {
+                    setTimeout(() => triggerSmartGpsCapture('current'), 450);
+                }
+            } else if (shouldCaptureGps && currentUser?.rol === 'admin') {
+                openReminderTarget({ targetView: 'horario', targetTab: 'locations' });
+                history.replaceState(null, '', `${window.location.pathname}#horario`);
+                setTimeout(() => triggerSmartGpsCapture('current'), 450);
+            } else {
+                const startView = VALID_VIEWS.has(initialHash) ? initialHash : 'inicio';
+                showView(startView, false);
+            }
+        }
+    } catch (bootErr) {
+        console.error('[SESSION_INIT_WARN]', bootErr);
+    } finally {
+        hideBootScreen();
+        if (authOverlay) authOverlay.hidden = true;
+        if (appShell) appShell.hidden = false;
+    }
 }
 
 function cargarMedicos() {
@@ -16303,16 +16292,36 @@ function initApp() {
         return;
     }
 
-    fetch('/api/auth/me', { cache: 'no-store' })
+    const authCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const authFetchTimeout = authCtrl ? setTimeout(() => { try { authCtrl.abort(); } catch (_) {} }, 7500) : null;
+    const bootFailsafeTimer = setTimeout(() => {
+        const bootEl = document.getElementById('appBootScreen');
+        if (bootEl && !bootEl.hidden && !currentUser) {
+            showAuthScreen('authLoginForm');
+        }
+    }, 8500);
+
+    fetch('/api/auth/me', {
+        cache: 'no-store',
+        ...(authCtrl ? { signal: authCtrl.signal } : {})
+    })
         .then(res => {
             if (!res.ok) throw new Error('Not authenticated');
             return res.json();
         })
         .then(data => {
-            enterAppSession(data.user);
+            if (data && data.user) {
+                enterAppSession(data.user);
+            } else {
+                showAuthScreen('authLoginForm');
+            }
         })
         .catch(() => {
             showAuthScreen('authLoginForm');
+        })
+        .finally(() => {
+            if (authFetchTimeout) clearTimeout(authFetchTimeout);
+            clearTimeout(bootFailsafeTimer);
         });
 }
 
