@@ -716,4 +716,147 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
         assert.ok(frontendJs.includes('bootFailsafeTimer') && /finally\s*\{\s*hideBootScreen\(\);/.test(frontendJs));
         assert.ok(serverJs.includes('/api/language/korean-practice-drive') && serverJs.includes('/api/language/korean-symbol-compare'));
     });
+
+    it('arranca frontend.js sin errores TDZ ni bloqueo de appBootScreen en navegador simulado', async () => {
+        const vm = require('node:vm');
+        const crypto = require('node:crypto');
+        const indexHtml = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+        const elementsById = new Map();
+        const makeEl = (id = '', tag = 'DIV') => ({
+            id,
+            tagName: tag,
+            hidden: false,
+            value: '',
+            textContent: '',
+            innerHTML: '',
+            style: { setProperty() {}, removeProperty() {} },
+            dataset: {},
+            classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+            addEventListener() {},
+            removeEventListener() {},
+            setAttribute() {},
+            getAttribute() { return ''; },
+            removeAttribute() {},
+            appendChild() {},
+            append() {},
+            prepend() {},
+            replaceChildren() {},
+            remove() {},
+            querySelector() { return null; },
+            querySelectorAll() { return []; },
+            closest() { return null; },
+            matches() { return false; },
+            focus() {},
+            click() {},
+            dispatchEvent() {}
+        });
+        for (const m of indexHtml.matchAll(/\bid=(?:"([^"]+)"|'([^']+)')/g)) {
+            const id = m[1] || m[2];
+            elementsById.set(id, makeEl(id));
+        }
+        const doc = {
+            readyState: 'complete',
+            body: makeEl('body', 'BODY'),
+            documentElement: makeEl('html', 'HTML'),
+            getElementById(id) { return elementsById.get(id) || null; },
+            querySelector(sel) {
+                const m = String(sel || '').match(/#([a-zA-Z0-9_-]+)/);
+                if (m && elementsById.has(m[1])) return elementsById.get(m[1]);
+                return makeEl(sel);
+            },
+            querySelectorAll() { return []; },
+            createElement(tag) { return makeEl('', String(tag || 'DIV').toUpperCase()); },
+            createDocumentFragment() { return makeEl('', 'FRAGMENT'); },
+            createTextNode(t) { return { textContent: t }; },
+            addEventListener() {},
+            removeEventListener() {},
+            dispatchEvent() {}
+        };
+        const fetchCalls = [];
+        const win = {
+            document: doc,
+            window: null,
+            globalThis: null,
+            addEventListener() {},
+            removeEventListener() {},
+            location: { search: '', hash: '', pathname: '/', href: 'https://example.ts.net/' },
+            history: { replaceState() {}, pushState() {} },
+            localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
+            sessionStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
+            navigator: { userAgent: 'Mozilla/5.0', clipboard: { writeText: async () => {} } },
+            crypto: crypto.webcrypto,
+            fetch: async (url) => {
+                fetchCalls.push(String(url));
+                if (String(url).startsWith('/api/language/korean-practice-drive')) {
+                    return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ ok: true, notes: { title: 'Test', intro: '', vowelsIntro: '', basicVowels: [], compoundVowels: [], consonantsIntro: '', basicConsonants: [], doubleConsonants: [], formationIntro: '', formationRules: [], practicalExamples: [] } }), text: async () => '{}' };
+                }
+                if (String(url).startsWith('/api/language/korean-symbol-compare')) {
+                    return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ ok: true, analysis: { primary: { input: '' } } }), text: async () => '{}' };
+                }
+                if (String(url).startsWith('/api/get-') || String(url).startsWith('/api/language/')) {
+                    return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ([]), text: async () => '[]' };
+                }
+                return { ok: false, status: 401, headers: { get() { return null; } }, json: async () => ({}), text: async () => '' };
+            },
+            Headers,
+            Response,
+            Request,
+            URL,
+            URLSearchParams,
+            AbortController,
+            BroadcastChannel: function BroadcastChannel() { this.postMessage = () => {}; this.close = () => {}; },
+            MutationObserver: function MutationObserver() { this.observe = () => {}; this.disconnect = () => {}; },
+            IntersectionObserver: function IntersectionObserver() { this.observe = () => {}; this.disconnect = () => {}; },
+            CustomEvent: function CustomEvent(t, o) { this.type = t; this.detail = o && o.detail; },
+            Event: function Event(t) { this.type = t; },
+            NodeFilter: { SHOW_TEXT: 4 },
+            matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
+            setTimeout: () => 1,
+            clearTimeout() {},
+            setInterval: () => 1,
+            clearInterval() {},
+            requestAnimationFrame() {},
+            scrollTo() {},
+            console
+        };
+        win.window = win;
+        win.globalThis = win;
+        const ctx = vm.createContext(win);
+
+        for (const rel of [
+            'public/vendor/crypto-js.min.js',
+            'public/transport-crypto.js',
+            'public/i18n.js',
+            'public/guia-visual.js',
+            'public/translator-widget.js',
+            'public/frontend.js'
+        ]) {
+            vm.runInContext(fs.readFileSync(path.join(ROOT, rel), 'utf8'), ctx, { filename: rel });
+        }
+
+        // Esperar microtasks del fetch('/api/auth/me')
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+
+        assert.strictEqual(elementsById.get('appBootScreen').hidden, true, 'El loader Checking session... debe ocultarse tras /api/auth/me 401');
+        assert.strictEqual(elementsById.get('authOverlay').hidden, false, 'La pantalla de login debe mostrarse cuando /api/auth/me responde 401');
+        assert.strictEqual(
+            fetchCalls.some((u) => u.startsWith('/api/language/korean-') || u.startsWith('/api/language/alphabet-guide')),
+            false,
+            'No debe disparar fetches autenticados de estudio antes del login'
+        );
+
+        ctx.enterAppSession({ id: 1, nombre: 'Flavio', email: 'flavio@example.com', rol: 'admin', expira_en: '2026-11-29T00:00:00Z' });
+        assert.strictEqual(elementsById.get('appBootScreen').hidden, true);
+        assert.strictEqual(elementsById.get('appShell').hidden, false);
+
+        for (const cat of ['vocabulary', 'grammar', 'phrasal_verb', 'notes', 'hangul_practice', 'korean_readonly_notes', 'korean_comparator', 'alphabet', 'music']) {
+            ctx.__switchEnglishStudioTab(cat);
+        }
+        for (let t = 0; t < 8; t++) {
+            await new Promise((r) => setImmediate(r));
+        }
+        assert.ok(fetchCalls.some((u) => u.startsWith('/api/language/korean-practice-drive')), `fetchCalls=${JSON.stringify(fetchCalls)}`);
+        assert.ok(fetchCalls.some((u) => u.startsWith('/api/language/korean-symbol-compare')), `fetchCalls=${JSON.stringify(fetchCalls)}`);
+    });
 });
