@@ -25,10 +25,12 @@
     <div class="boot-screen" id="appBootScreen" role="status" aria-live="polite">
         <div class="boot-card">
             <span class="auth-logo brand-emblem" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="9"/>
-                    <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
-                    <polygon points="10.5 10.5 16 8 13.5 13.5 8 16 10.5 10.5" fill="currentColor" stroke="none"/>
+                <svg class="ui-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3.5" y="3.5" width="7" height="7" rx="1.8" fill="currentColor" fill-opacity="0.24"/>
+                    <rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/>
+                    <rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/>
+                    <rect x="13.5" y="13.5" width="7" height="7" rx="1.8" fill="currentColor" fill-opacity="0.24"/>
+                    <circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/>
                 </svg>
             </span>
             <h1>Personal Daily Hub</h1>
@@ -47,7 +49,7 @@
             <div class="auth-top-bar">
                 <span class="tunnel-pill" id="authTunnelPill" title="Tu conexión viaja protegida y cifrada de extremo a extremo">🔐 Privacidad: Conectando...</span>
                 <div class="auth-top-actions">
-                    <a href="guia-visual.html" target="_blank" rel="noopener noreferrer" class="lang-toggle-pill auth-guide-link" title="Abrir guía visual rápida en una pestaña nueva">📖 Visual Guide</a>
+                    <a href="guia-visual.html" target="_blank" rel="noopener noreferrer" class="lang-toggle-pill auth-guide-link" title="Abrir guía visual rápida en una pestaña nueva"><span class="nav-inline-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor" fill-opacity="0.12"/><polygon points="10.2 10.2 16 8 13.8 13.8 8 16 10.2 10.2" fill="currentColor" stroke="none"/></svg></span><span>Visual Guide</span></a>
                     <button type="button" class="lang-toggle-pill" id="btnLangToggleAuth"
                         title="Cambiar el idioma de toda la aplicación (Inglés / Español)"
                         aria-label="Switch UI language (English / Español)">🌐 EN · English</button>
@@ -55,10 +57,12 @@
             </div>
             <div class="auth-brand">
                 <span class="auth-logo brand-emblem" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="9"/>
-                        <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
-                        <polygon points="10.5 10.5 16 8 13.5 13.5 8 16 10.5 10.5" fill="currentColor" stroke="none"/>
+                    <svg class="ui-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="3.5" y="3.5" width="7" height="7" rx="1.8" fill="currentColor" fill-opacity="0.24"/>
+                        <rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/>
+                        <rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/>
+                        <rect x="13.5" y="13.5" width="7" height="7" rx="1.8" fill="currentColor" fill-opacity="0.24"/>
+                        <circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/>
                     </svg>
                 </span>
                 <h1>Personal Daily Hub</h1>
@@ -214,12 +218,23 @@
                     <span class="hamburger-lines" aria-hidden="true">☰</span>
                 </button>
                 <button type="button" class="icon-btn mobile-home-btn" id="btnMobileHome" data-go-view="inicio"
-                    title="Volver rápido a la pantalla de Inicio" aria-label="Ir a Inicio">🏠</button>
+                    title="Volver rápido a la pantalla de Inicio" aria-label="Ir a Inicio">
+                    <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 10.8 12 3.5l9 7.3V20a1.2 1.2 0 0 1-1.2 1.2H14.5V15h-5v6.2H4.2A1.2 1.2 0 0 1 3 20v-9.2Z" fill="currentColor" fill-opacity="0.14"/>
+                    </svg>
+                </button>
             </div>
             <div class="mobile-topbar-title" id="mobileViewTitle">Home</div>
             <div class="mobile-topbar-right">
                 <button type="button" class="icon-btn admin-only-nav" id="btnMobileTranslator"
-                    title="Abrir el Traductor rápido (Alt+T)" aria-label="Open translator">🌐</button>
+                    title="Abrir el Traductor rápido (Alt+T)" aria-label="Open translator">
+                    <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="m4.2 16 3.3-9 3.3 9M5.2 13.4h4.6"/>
+                        <path d="M13 7h7M16.5 5v2"/>
+                        <path d="M18.8 7c-.5 3.3-2.3 5.7-5.3 7.2"/>
+                        <path d="M14.8 9.8c1 1.7 2.6 3.2 4.8 4.2"/>
+                    </svg>
+                </button>
                 <button type="button" class="tunnel-pill tunnel-pill-compact" id="mobileTunnelPill"
                     title="Ver estado de privacidad y conexión en Configuración" data-go-view="settings">🔐 Seguro</button>
                 <button type="button" class="icon-btn lang-icon-btn" id="btnLangToggleMobile"
@@ -236,10 +251,12 @@
             <div class="sidebar-header">
                 <div class="sidebar-brand">
                     <span class="brand-logo brand-emblem" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="9"/>
-                            <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
-                            <polygon points="10.5 10.5 16 8 13.5 13.5 8 16 10.5 10.5" fill="currentColor" stroke="none"/>
+                        <svg class="ui-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="3.5" y="3.5" width="7" height="7" rx="1.8" fill="currentColor" fill-opacity="0.24"/>
+                            <rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/>
+                            <rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/>
+                            <rect x="13.5" y="13.5" width="7" height="7" rx="1.8" fill="currentColor" fill-opacity="0.24"/>
+                            <circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/>
                         </svg>
                     </span>
                     <div class="sidebar-brand-text">
@@ -259,7 +276,9 @@
 
             <nav class="sidebar-nav">
                 <button type="button" class="nav-item admin-only-nav" data-view="inicio" title="Home">
-                    <span class="nav-icon" aria-hidden="true">🧭</span>
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.8 12 3.5l9 7.3V20a1.2 1.2 0 0 1-1.2 1.2H14.5V15h-5v6.2H4.2A1.2 1.2 0 0 1 3 20v-9.2Z" fill="currentColor" fill-opacity="0.14"/></svg>
+                    </span>
                     <span class="nav-label">Home</span>
                 </button>
 
@@ -270,28 +289,40 @@
                     </button>
                     <div class="nav-group-items">
                         <button type="button" class="nav-item" data-view="mood" title="Mood Tracker">
-                            <span class="nav-icon" aria-hidden="true">🧠</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12.6 12 20l-7.5-7.4A4.8 4.8 0 0 1 12 6.3a4.8 4.8 0 0 1 7.5 6.3Z" fill="currentColor" fill-opacity="0.14"/><path d="M7.8 12.2h2.1l1.2-2.2 1.7 4.2 1.2-2h2.2"/></svg>
+                            </span>
                             <span class="nav-label">Mood Tracker</span>
                         </button>
                         <button type="button" class="nav-item" data-view="crisis" title="Crisis Log">
-                            <span class="nav-icon" aria-hidden="true">⚠️</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.8v5.6c0 5.1 3.2 9.4 7.5 10.9 4.3-1.5 7.5-5.8 7.5-10.9V5.8L12 2.5Z" fill="currentColor" fill-opacity="0.14"/><path d="M7.2 12h2.3l1.3-3.1 2.1 6.2 1.3-3.1h2.6"/></svg>
+                            </span>
                             <span class="nav-label">Crisis Log</span>
                         </button>
                         <button type="button" class="nav-item" data-view="sueno" title="Sleep Tracker">
-                            <span class="nav-icon" aria-hidden="true">🌙</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 14.8A8.5 8.5 0 0 1 9.2 3.8a8.5 8.5 0 1 0 11 11Z" fill="currentColor" fill-opacity="0.16"/><path d="M17.5 4.5v3M16 6h3M14.2 9.2v2M13.2 10.2h2"/></svg>
+                            </span>
                             <span class="nav-label">Sleep Tracker</span>
                         </button>
                         <button type="button" class="nav-item" data-view="journal" title="Journal Notes">
-                            <span class="nav-icon" aria-hidden="true">🖋️</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.2" fill="currentColor" fill-opacity="0.12"/><path d="M3.5 7.5h3M3.5 12h3M3.5 16.5h3"/><path d="m14.8 8.7 2.2 2.2-5 5-2.5.4.4-2.5 4.9-5.1Z"/></svg>
+                            </span>
                             <span class="nav-label">Journal Notes</span>
                         </button>
                         <button type="button" class="nav-item" data-view="english" title="English Notebook">
-                            <span class="nav-icon" aria-hidden="true">📖</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5A2.5 2.5 0 0 1 6 2.5h13v15.5H6a2.5 2.5 0 0 0-2.5 2.5V5Z" fill="currentColor" fill-opacity="0.12"/><path d="M3.5 18.5A2.5 2.5 0 0 1 6 16h13v5H6a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M10.5 11.8V6.8l4.5-1v5"/><circle cx="9.2" cy="12" r="1.3"/><circle cx="13.7" cy="11" r="1.3"/></svg>
+                            </span>
                             <span class="nav-label">English Notebook</span>
                         </button>
                         <button type="button" class="nav-item admin-only-nav" id="btnSidebarOpenTranslator"
                             title="Floating Translator Extension (Alt+T)">
-                            <span class="nav-icon" aria-hidden="true">🌐</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4.2 16 3.3-9 3.3 9M5.2 13.4h4.6"/><path d="M13 7h7M16.5 5v2"/><path d="M18.8 7c-.5 3.3-2.3 5.7-5.3 7.2"/><path d="M14.8 9.8c1 1.7 2.6 3.2 4.8 4.2"/></svg>
+                            </span>
                             <span class="nav-label">Quick Translator</span>
                         </button>
                     </div>
@@ -304,30 +335,42 @@
                     </button>
                     <div class="nav-group-items">
                         <button type="button" class="nav-item admin-only-nav" data-view="agenda" title="Weekly Agenda">
-                            <span class="nav-icon" aria-hidden="true">🗓️</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.2" fill="currentColor" fill-opacity="0.12"/><path d="M8 2.8v3.4M16 2.8v3.4M3.5 9.2h17"/><path d="m8.2 14.5 2.2 2.2 4.8-4.8"/></svg>
+                            </span>
                             <span class="nav-label">Weekly Agenda</span>
                         </button>
                         <button type="button" class="nav-item admin-only-nav" data-view="horario" title="ITS Schedule, Residencias &amp; Work">
-                            <span class="nav-icon" aria-hidden="true">🎓</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2.5 8.5 12 13l9.5-4.5L12 4Z" fill="currentColor" fill-opacity="0.16"/><path d="M6.2 10.4v4.7c0 1.8 2.6 3.2 5.8 3.2s5.8-1.4 5.8-3.2v-4.7"/><path d="M21 8.8v6"/></svg>
+                            </span>
                             <span class="nav-label">ITS, Residencias &amp; Work</span>
                         </button>
                         <button type="button" class="nav-item" data-view="resumen" title="Weekly Summary">
-                            <span class="nav-icon" aria-hidden="true">📈</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 19.5h17"/><rect x="5.2" y="12.5" width="3" height="5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><rect x="10.5" y="9" width="3" height="8.5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><rect x="15.8" y="6" width="3" height="11.5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><path d="m5.5 10 5-3 6-2.5"/></svg>
+                            </span>
                             <span class="nav-label">Weekly Summary</span>
                         </button>
                         <button type="button" class="nav-item admin-only-nav" data-view="medico"
                             title="Psychiatrist Access">
-                            <span class="nav-icon" aria-hidden="true">🩺</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.2v4.5a4.5 4.5 0 0 0 9 0V4.2"/><path d="M3.8 4.2h3.2M13 4.2h3.2"/><path d="M10 13.2v2.3a4.3 4.3 0 0 0 8.6 0V13"/><circle cx="18.6" cy="11.2" r="1.8" fill="currentColor" fill-opacity="0.2"/></svg>
+                            </span>
                             <span class="nav-label">Psychiatrist Access</span>
                         </button>
                         <button type="button" class="nav-item" data-view="guia"
                             title="Visual Guide">
-                            <span class="nav-icon" aria-hidden="true">📖</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" fill="currentColor" fill-opacity="0.12"/><polygon points="10.2 10.2 16 8 13.8 13.8 8 16 10.2 10.2" fill="currentColor" stroke="none"/></svg>
+                            </span>
                             <span class="nav-label">Visual Guide</span>
                         </button>
                         <button type="button" class="nav-item admin-only-nav" data-view="settings"
                             title="Settings &amp; Reminders">
-                            <span class="nav-icon" aria-hidden="true">⚙️</span>
+                            <span class="nav-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2" fill="currentColor" fill-opacity="0.16"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+                            </span>
                             <span class="nav-label">Settings</span>
                         </button>
                     </div>
@@ -344,13 +387,17 @@
                     <span class="sidebar-status-text" id="sidebarMomentoActual">Moment: --</span>
                 </div>
                 <div class="sidebar-tunnel-row" id="sidebarTunnelBadge" title="Conexión privada protegida de extremo a extremo">
-                    <span class="tunnel-icon" aria-hidden="true">🔐</span>
+                    <span class="tunnel-icon" aria-hidden="true">
+                        <svg class="ui-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.8v5.5c0 5 3.2 9.4 7.5 10.9 4.3-1.5 7.5-5.9 7.5-10.9V5.8L12 2.5Z" fill="currentColor" fill-opacity="0.16"/><rect x="9.2" y="10.8" width="5.6" height="4.6" rx="1"/><path d="M10.4 10.8V9.2a1.6 1.6 0 0 1 3.2 0v1.6"/></svg>
+                    </span>
                     <span class="tunnel-label">Cifrado: Conectando...</span>
                 </div>
                 <div class="sidebar-date-text" id="sidebarFechaHoy">--</div>
                 <button type="button" class="sidebar-version-btn" id="btnOpenVersionHistory"
                     title="Ver historial de versiones y cambios recientes">
-                    <span aria-hidden="true">🏷️</span>
+                    <span class="sidebar-footer-icon" aria-hidden="true">
+                        <svg class="ui-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 13.4 13.4 20.5a2 2 0 0 1-2.8 0l-7.1-7.1V3.5h9.9l7.1 7.1a2 2 0 0 1 0 2.8Z" fill="currentColor" fill-opacity="0.14"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>
+                    </span>
                     <span class="sidebar-version-label">Version</span>
                     <strong id="sidebarVersionText">v1.0.0</strong>
                 </button>
@@ -359,7 +406,9 @@
                     <span class="lang-label">Language: English</span>
                 </button>
                 <button type="button" class="btn-logout-sidebar" id="btnLogout" title="Sign Out">
-                    <span aria-hidden="true">🔒</span>
+                    <span class="sidebar-footer-icon" aria-hidden="true">
+                        <svg class="ui-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4H5.8A1.8 1.8 0 0 0 4 5.8v12.4A1.8 1.8 0 0 0 5.8 20H10"/><path d="m14.5 16 4-4-4-4"/><path d="M9.5 12h9"/></svg>
+                    </span>
                     <span class="logout-text">Sign Out</span>
                 </button>
             </div>
@@ -392,7 +441,9 @@
                     <div class="home-summary-grid">
                         <article class="summary-card">
                             <div class="summary-card-header">
-                                <span class="summary-icon">🧠</span>
+                                <span class="summary-icon" aria-hidden="true">
+                                    <svg class="ui-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12.6 12 20l-7.5-7.4A4.8 4.8 0 0 1 12 6.3a4.8 4.8 0 0 1 7.5 6.3Z" fill="currentColor" fill-opacity="0.14"/><path d="M7.8 12.2h2.1l1.2-2.2 1.7 4.2 1.2-2h2.2"/></svg>
+                                </span>
                                 <h3>Mood Tracker</h3>
                             </div>
                             <div class="summary-card-body" id="homeMoodSummary">
@@ -403,7 +454,9 @@
 
                         <article class="summary-card">
                             <div class="summary-card-header">
-                                <span class="summary-icon">🌙</span>
+                                <span class="summary-icon" aria-hidden="true">
+                                    <svg class="ui-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 14.8A8.5 8.5 0 0 1 9.2 3.8a8.5 8.5 0 1 0 11 11Z" fill="currentColor" fill-opacity="0.16"/><path d="M17.5 4.5v3M16 6h3M14.2 9.2v2M13.2 10.2h2"/></svg>
+                                </span>
                                 <h3>Sleep</h3>
                             </div>
                             <div class="summary-card-body" id="homeSleepSummary">
@@ -414,7 +467,9 @@
 
                         <article class="summary-card">
                             <div class="summary-card-header">
-                                <span class="summary-icon">🗓️</span>
+                                <span class="summary-icon" aria-hidden="true">
+                                    <svg class="ui-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.2" fill="currentColor" fill-opacity="0.12"/><path d="M8 2.8v3.4M16 2.8v3.4M3.5 9.2h17"/><path d="m8.2 14.5 2.2 2.2 4.8-4.8"/></svg>
+                                </span>
                                 <h3>Today's Agenda</h3>
                             </div>
                             <div class="summary-card-body" id="homeAgendaSummary">
@@ -427,7 +482,9 @@
                     <h2 class="section-heading">All Features</h2>
                     <div class="home-shortcuts-grid">
                         <button type="button" class="shortcut-card" data-go-view="mood">
-                            <span class="shortcut-emoji">🧠</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12.6 12 20l-7.5-7.4A4.8 4.8 0 0 1 12 6.3a4.8 4.8 0 0 1 7.5 6.3Z" fill="currentColor" fill-opacity="0.14"/><path d="M7.8 12.2h2.1l1.2-2.2 1.7 4.2 1.2-2h2.2"/></svg>
+                            </span>
                             <div>
                                 <strong>Mood Tracker</strong>
                                 <p>Log how you feel at each time of day (including late night).</p>
@@ -435,7 +492,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="crisis">
-                            <span class="shortcut-emoji">⚠️</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.8v5.6c0 5.1 3.2 9.4 7.5 10.9 4.3-1.5 7.5-5.8 7.5-10.9V5.8L12 2.5Z" fill="currentColor" fill-opacity="0.14"/><path d="M7.2 12h2.3l1.3-3.1 2.1 6.2 1.3-3.1h2.6"/></svg>
+                            </span>
                             <div>
                                 <strong>Crisis Log</strong>
                                 <p>Record stress, anger, or panic episodes with time &amp; Spanish reason for your psychiatrist.</p>
@@ -443,7 +502,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="sueno">
-                            <span class="shortcut-emoji">🌙</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 14.8A8.5 8.5 0 0 1 9.2 3.8a8.5 8.5 0 1 0 11 11Z" fill="currentColor" fill-opacity="0.16"/><path d="M17.5 4.5v3M16 6h3M14.2 9.2v2M13.2 10.2h2"/></svg>
+                            </span>
                             <div>
                                 <strong>Sleep Tracker</strong>
                                 <p>Calculate your sleep duration and rest quality upon waking.</p>
@@ -451,7 +512,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="journal" title="Escribir notas privadas en tu diario">
-                            <span class="shortcut-emoji">🖋️</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.2" fill="currentColor" fill-opacity="0.12"/><path d="M3.5 7.5h3M3.5 12h3M3.5 16.5h3"/><path d="m14.8 8.7 2.2 2.2-5 5-2.5.4.4-2.5 4.9-5.1Z"/></svg>
+                            </span>
                             <div>
                                 <strong>Journal Notes</strong>
                                 <p>Write private thoughts in English and save them encrypted into your personal Word journal.</p>
@@ -459,7 +522,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="english" title="Practice English, Korean, Japanese &amp; study song lyrics">
-                            <span class="shortcut-emoji">📖</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5A2.5 2.5 0 0 1 6 2.5h13v15.5H6a2.5 2.5 0 0 0-2.5 2.5V5Z" fill="currentColor" fill-opacity="0.12"/><path d="M3.5 18.5A2.5 2.5 0 0 1 6 16h13v5H6a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M10.5 11.8V6.8l4.5-1v5"/><circle cx="9.2" cy="12" r="1.3"/><circle cx="13.7" cy="11" r="1.3"/></svg>
+                            </span>
                             <div>
                                 <strong>Language &amp; Music Studio</strong>
                                 <p>Practice English, Korean &amp; Japanese vocabulary, pronunciation, and song lyrics saved to your Word notebook.</p>
@@ -467,7 +532,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="agenda" title="Organizar actividades y tareas semanales">
-                            <span class="shortcut-emoji">🗓️</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.2" fill="currentColor" fill-opacity="0.12"/><path d="M8 2.8v3.4M16 2.8v3.4M3.5 9.2h17"/><path d="m8.2 14.5 2.2 2.2 4.8-4.8"/></svg>
+                            </span>
                             <div>
                                 <strong>Weekly Agenda</strong>
                                 <p>Manage University &amp; Personal events, recurring routines, and tasks (To Do, In Progress, Done).</p>
@@ -475,7 +542,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="horario">
-                            <span class="shortcut-emoji">🎓</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2.5 8.5 12 13l9.5-4.5L12 4Z" fill="currentColor" fill-opacity="0.16"/><path d="M6.2 10.4v4.7c0 1.8 2.6 3.2 5.8 3.2s5.8-1.4 5.8-3.2v-4.7"/><path d="M21 8.8v6"/></svg>
+                            </span>
                             <div>
                                 <strong>ITS Schedule, Residencias &amp; Work</strong>
                                 <p>Track Tec de Saltillo semesters, classrooms (R02, R11, N21), vacations, residencias, work shifts, and Maps traffic alerts.</p>
@@ -483,7 +552,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="resumen">
-                            <span class="shortcut-emoji">📈</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 19.5h17"/><rect x="5.2" y="12.5" width="3" height="5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><rect x="10.5" y="9" width="3" height="8.5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><rect x="15.8" y="6" width="3" height="11.5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><path d="m5.5 10 5-3 6-2.5"/></svg>
+                            </span>
                             <div>
                                 <strong>Weekly Summary</strong>
                                 <p>View your weekly mood color grid and sleep overview.</p>
@@ -491,7 +562,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="medico">
-                            <span class="shortcut-emoji">🩺</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.2v4.5a4.5 4.5 0 0 0 9 0V4.2"/><path d="M3.8 4.2h3.2M13 4.2h3.2"/><path d="M10 13.2v2.3a4.3 4.3 0 0 0 8.6 0V13"/><circle cx="18.6" cy="11.2" r="1.8" fill="currentColor" fill-opacity="0.2"/></svg>
+                            </span>
                             <div>
                                 <strong>Psychiatrist Access</strong>
                                 <p>Manage read-only accounts for your doctor or clinician.</p>
@@ -499,7 +572,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="settings">
-                            <span class="shortcut-emoji">⚙️</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2" fill="currentColor" fill-opacity="0.16"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+                            </span>
                             <div>
                                 <strong>Settings &amp; Reminders</strong>
                                 <p>Configure phone notifications, automatic reminders, English study alerts, and language.</p>
@@ -507,7 +582,9 @@
                         </button>
 
                         <button type="button" class="shortcut-card" data-go-view="guia">
-                            <span class="shortcut-emoji">📖</span>
+                            <span class="shortcut-emoji" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" fill="currentColor" fill-opacity="0.12"/><polygon points="10.2 10.2 16 8 13.8 13.8 8 16 10.2 10.2" fill="currentColor" stroke="none"/></svg>
+                            </span>
                             <div>
                                 <strong>Visual Guide</strong>
                                 <p>Quick visual cards, shortcuts, and step-by-step diagrams with minimal text.</p>
@@ -524,7 +601,9 @@
                 <div class="view-shell">
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">🧠</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12.6 12 20l-7.5-7.4A4.8 4.8 0 0 1 12 6.3a4.8 4.8 0 0 1 7.5 6.3Z" fill="currentColor" fill-opacity="0.14"/><path d="M7.8 12.2h2.1l1.2-2.2 1.7 4.2 1.2-2h2.2"/></svg>
+                            </span>
                             <div>
                                 <h2>My Mood Tracker</h2>
                                 <p class="view-header-subtitle">Pick your time block and current emotion. You can update today's current entry while its edit window stays open.</p>
@@ -641,7 +720,9 @@
                 <div class="view-shell">
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">⚠️</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.8v5.6c0 5.1 3.2 9.4 7.5 10.9 4.3-1.5 7.5-5.8 7.5-10.9V5.8L12 2.5Z" fill="currentColor" fill-opacity="0.14"/><path d="M7.2 12h2.3l1.3-3.1 2.1 6.2 1.3-3.1h2.6"/></svg>
+                            </span>
                             <div>
                                 <h2>Crisis &amp; Episode Log (Clinical Journal)</h2>
                                 <p class="view-header-subtitle">Registra fecha, hora exacta y motivo en español si tuviste una crisis de estrés, ira, rabia o ansiedad. Tu psiquiatra o psicóloga podrá consultarlo en modo solo lectura en el Resumen Semanal.</p>
@@ -744,7 +825,9 @@
                 <div class="view-shell">
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">🌙</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 14.8A8.5 8.5 0 0 1 9.2 3.8a8.5 8.5 0 1 0 11 11Z" fill="currentColor" fill-opacity="0.16"/><path d="M17.5 4.5v3M16 6h3M14.2 9.2v2M13.2 10.2h2"/></svg>
+                            </span>
                             <div>
                                 <h2>Sleep &amp; Desvelo Tracker</h2>
                                 <p class="view-header-subtitle">Log bedtime, wake-up time, late-night bedtimes (e.g. 3:00 AM), or all-nighters (Desvelo). Late-night patterns and notes are shared with your psychiatrist.</p>
@@ -874,7 +957,9 @@
                 <div class="view-shell">
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">🖋️</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.2" fill="currentColor" fill-opacity="0.12"/><path d="M3.5 7.5h3M3.5 12h3M3.5 16.5h3"/><path d="m14.8 8.7 2.2 2.2-5 5-2.5.4.4-2.5 4.9-5.1Z"/></svg>
+                            </span>
                             <div>
                                 <h2>Journal Notes</h2>
                                 <p class="view-header-subtitle">Write freely in English. Your note is protected privately in this browser before saving into your Word journal.</p>
@@ -947,7 +1032,9 @@
                 <div class="view-shell">
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">📖</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5A2.5 2.5 0 0 1 6 2.5h13v15.5H6a2.5 2.5 0 0 0-2.5 2.5V5Z" fill="currentColor" fill-opacity="0.12"/><path d="M3.5 18.5A2.5 2.5 0 0 1 6 16h13v5H6a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M10.5 11.8V6.8l4.5-1v5"/><circle cx="9.2" cy="12" r="1.3"/><circle cx="13.7" cy="11" r="1.3"/></svg>
+                            </span>
                             <div>
                                 <h2>Language Learning Studio (EN · 한국어 · 日本語 · K-Pop)</h2>
                                 <p class="view-header-subtitle">Study English (EN → ES), Korean (KO → EN), Japanese (JP), or K-Pop/J-Pop song lyrics with active practice and private sync to your Word notebook.</p>
@@ -1639,7 +1726,9 @@
                 <div class="agenda-wrapper view-shell">
                     <div class="agenda-header view-header-card">
                         <div class="agenda-title-block">
-                            <span class="view-header-icon agenda-calendar-icon" aria-hidden="true">🗓️</span>
+                            <span class="view-header-icon agenda-calendar-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.2" fill="currentColor" fill-opacity="0.12"/><path d="M8 2.8v3.4M16 2.8v3.4M3.5 9.2h17"/><path d="m8.2 14.5 2.2 2.2 4.8-4.8"/></svg>
+                            </span>
                             <div>
                                 <h1 class="agenda-title">Weekly Agenda</h1>
                                 <p class="agenda-subtitle" id="agendaWeekStats">Loading activities...</p>
@@ -1727,7 +1816,9 @@
                 <div class="view-shell">
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">🎓</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2.5 8.5 12 13l9.5-4.5L12 4Z" fill="currentColor" fill-opacity="0.16"/><path d="M6.2 10.4v4.7c0 1.8 2.6 3.2 5.8 3.2s5.8-1.4 5.8-3.2v-4.7"/><path d="M21 8.8v6"/></svg>
+                            </span>
                             <div>
                                 <h2>Tec de Saltillo (ITS) · Residencias · Work &amp; Maps Commute</h2>
                                 <p class="view-header-subtitle">Manage your semester class schedule by classroom (R02, R11, N21, etc.), vacation breaks, Residencias Profesionales, full/part-time work shifts, and smart traffic notifications.</p>
@@ -2164,7 +2255,9 @@
 
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">📈</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 19.5h17"/><rect x="5.2" y="12.5" width="3" height="5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><rect x="10.5" y="9" width="3" height="8.5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><rect x="15.8" y="6" width="3" height="11.5" rx="0.7" fill="currentColor" fill-opacity="0.2"/><path d="m5.5 10 5-3 6-2.5"/></svg>
+                            </span>
                             <div>
                                 <h1 class="tracker-title">Weekly Mood &amp; Sleep Summary</h1>
                                 <p class="view-header-subtitle">Review emotional patterns across all five daily time blocks alongside restorative sleep metrics.</p>
@@ -2323,7 +2416,9 @@
                 <div class="view-shell">
                     <div class="view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">🩺</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.2v4.5a4.5 4.5 0 0 0 9 0V4.2"/><path d="M3.8 4.2h3.2M13 4.2h3.2"/><path d="M10 13.2v2.3a4.3 4.3 0 0 0 8.6 0V13"/><circle cx="18.6" cy="11.2" r="1.8" fill="currentColor" fill-opacity="0.2"/></svg>
+                            </span>
                             <div>
                                 <h2>Psychiatrist Access</h2>
                                 <p class="view-header-subtitle" data-i18n-html="psychiatrist_privacy_hint">Create or manage a <strong>read-only</strong> clinician account. Doctors can view Weekly Mood, Sleep &amp; Crisis Summary only — never personal journal notes, agenda, or editing.</p>
@@ -2372,7 +2467,9 @@
                 <div class="settings-container view-shell">
                     <div class="settings-header-card view-header-card">
                         <div class="view-header-main">
-                            <span class="view-header-icon" aria-hidden="true">⚙️</span>
+                            <span class="view-header-icon" aria-hidden="true">
+                                <svg class="ui-icon" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2" fill="currentColor" fill-opacity="0.16"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+                            </span>
                             <div>
                                 <h2>Settings &amp; Reminders</h2>
                                 <p class="view-header-subtitle">Manage mobile notification bar alerts, automated reminders, workspace defaults, YouTube playback mode, language (Always Dark), and your local E2EE key.</p>
@@ -3455,7 +3552,10 @@
     <button type="button" id="btnMusicTranslateLyricsSel" class="btn-secondary btn-small floating-translate-sel-btn" hidden
         title="Traducir el texto seleccionado en el traductor flotante (arrastrable)">
         <span class="floating-translate-sel-grip" aria-hidden="true">⋮⋮</span>
-        <span>🌐 Traducir selección</span>
+        <span class="floating-translate-sel-icon" aria-hidden="true">
+            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4.2 16 3.3-9 3.3 9M5.2 13.4h4.6"/><path d="M13 7h7M16.5 5v2"/><path d="M18.8 7c-.5 3.3-2.3 5.7-5.3 7.2"/><path d="M14.8 9.8c1 1.7 2.6 3.2 4.8 4.2"/></svg>
+        </span>
+        <span>Traducir selección</span>
     </button>
 
     <!-- Global Extension-Style Floating Translator Drawer (Accessible on any tab / Alt+T) -->
@@ -3464,69 +3564,66 @@
         <div class="floating-translator-header" id="floatingTranslatorDragHandle" title="Drag to move window">
             <div class="floating-translator-title">
                 <span class="floating-translator-drag-grip" aria-hidden="true">⋮⋮</span>
-                <span aria-hidden="true">🌐</span>
+                <span class="floating-translator-icon" aria-hidden="true">
+                    <svg class="ui-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4.2 16 3.3-9 3.3 9M5.2 13.4h4.6"/><path d="M13 7h7M16.5 5v2"/><path d="M18.8 7c-.5 3.3-2.3 5.7-5.3 7.2"/><path d="M14.8 9.8c1 1.7 2.6 3.2 4.8 4.2"/></svg>
+                </span>
                 <strong>Quick Translator</strong>
                 <span class="lang-ai-badge">Alt+T</span>
             </div>
             <div class="floating-translator-win-actions">
-                <button type="button" class="btn-secondary btn-small" id="btnResetFloatTranslatorPos"
-                    title="Reset window position to bottom-right">↺</button>
-                <button type="button" class="btn-secondary btn-small" id="btnFloatPopoutTranslator"
-                    title="Open in separate mini browser window alongside YouTube / PDFs">🪟 Window</button>
-                <button type="button" class="btn-secondary btn-small" id="btnMinimizeFloatingTranslator"
-                    aria-expanded="true" aria-label="Minimize or compact translator window"
-                    title="Minimizar / Compactar traductor flotante">—</button>
-                <button type="button" class="modal-close-btn" id="btnCloseFloatingTranslator" aria-label="Close translator">✕</button>
+                <button type="button" class="modal-close-btn floating-translator-close-btn" id="btnCloseFloatingTranslator" aria-label="Close translator" title="Close translator">✕</button>
             </div>
         </div>
 
-        <div class="gt-lang-bar" id="floatTranslatorGtBar">
-            <div class="gt-lang-group gt-source-group" role="tablist" aria-label="Source language">
-                <button type="button" class="gt-lang-tab active" data-gt-src="auto" title="Detect source language automatically">🌐 Detect</button>
-                <button type="button" class="gt-lang-tab" data-gt-src="ko" title="Translate from Korean">🇰🇷 Korean</button>
-                <button type="button" class="gt-lang-tab" data-gt-src="ja" title="Translate from Japanese">🇯🇵 Japanese</button>
-                <button type="button" class="gt-lang-tab" data-gt-src="en" title="Translate from English (always to Spanish)">🇺🇸 English</button>
+        <div class="floating-translator-body" id="floatingTranslatorBody">
+            <div class="gt-lang-bar" id="floatTranslatorGtBar">
+                <div class="gt-lang-group gt-source-group" role="tablist" aria-label="Source language">
+                    <button type="button" class="gt-lang-tab active" data-gt-src="auto" title="Detect source language automatically">🌐 Detect</button>
+                    <button type="button" class="gt-lang-tab" data-gt-src="ko" title="Translate from Korean">🇰🇷 Korean</button>
+                    <button type="button" class="gt-lang-tab" data-gt-src="ja" title="Translate from Japanese">🇯🇵 Japanese</button>
+                    <button type="button" class="gt-lang-tab" data-gt-src="en" title="Translate from English (always to Spanish)">🇺🇸 English</button>
+                </div>
+                <span class="gt-arrow-divider" aria-hidden="true">→</span>
+                <div class="gt-lang-group gt-target-group" role="tablist" aria-label="Target language (English or Spanish)">
+                    <button type="button" class="gt-lang-tab active" data-gt-tgt="es" title="Translate to Spanish">🇪🇸 Spanish</button>
+                    <button type="button" class="gt-lang-tab" data-gt-tgt="en" title="Translate to English">🇺🇸 English</button>
+                </div>
             </div>
-            <span class="gt-arrow-divider" aria-hidden="true">→</span>
-            <div class="gt-lang-group gt-target-group" role="tablist" aria-label="Target language (English or Spanish)">
-                <button type="button" class="gt-lang-tab active" data-gt-tgt="es" title="Translate to Spanish">🇪🇸 Spanish</button>
-                <button type="button" class="gt-lang-tab" data-gt-tgt="en" title="Translate to English">🇺🇸 English</button>
+            <div id="floatTranslatorDetectedHint" class="gt-detected-hint" aria-live="polite"></div>
+
+            <div class="translator-popup-toolbar">
+                <button type="button" class="btn-secondary btn-small" id="btnFloatTranslatorPaste">📋 Paste &amp; Translate</button>
+                <button type="button" class="btn-secondary btn-small" id="btnFloatTranslatorClear">🧹 Clear</button>
+                <span class="lang-ai-badge">Drag Header · Alt+T</span>
             </div>
-        </div>
-        <div id="floatTranslatorDetectedHint" class="gt-detected-hint" aria-live="polite"></div>
 
-        <div class="translator-popup-toolbar">
-            <button type="button" class="btn-secondary btn-small" id="btnFloatTranslatorPaste">📋 Paste &amp; Translate</button>
-            <button type="button" class="btn-secondary btn-small" id="btnFloatTranslatorClear">🧹 Clear</button>
-            <span class="lang-ai-badge">Drag Header · Alt+T</span>
-        </div>
-
-        <div class="lang-translator-bar floating-translator-input-row">
-            <textarea id="floatTranslatorInput" class="english-textarea translator-extension-textarea" rows="4" maxlength="4000"
-                placeholder="Type or select text + Alt+T... Enter to translate (Shift+Enter for new line)"></textarea>
-            <div class="lang-translator-actions">
-                <select id="floatTranslatorDirectionSelect" class="select-input select-compact" hidden aria-hidden="true" style="display:none !important;" aria-label="Quick translation direction">
-                    <option value="auto" selected>Auto Detect (EN/KO/JP)</option>
-                    <option value="en_es">English → Spanish</option>
-                    <option value="ko_es">Korean → Spanish</option>
-                    <option value="ko_en">Korean → English</option>
-                    <option value="ja_es">Japanese → Spanish</option>
-                    <option value="ja_en">Japanese → English</option>
-                    <option value="en_ja">Japanese + English (JP-EN) → Spanish</option>
-                </select>
-                <select id="floatTranslatorEngineSelect" class="select-input select-compact" aria-label="Quick translator engine" title="Elige el modo de traducción">
-                    <option value="auto">Automático (Gemini / Local)</option>
-                    <option value="gemini">Google Gemini IA</option>
-                    <option value="offline">Modo Instantáneo Local</option>
-                </select>
-                <button type="button" class="btn-submit" id="btnRunFloatTranslator" title="Traducir texto y mostrar pronunciación">Traducir</button>
+            <div class="lang-translator-bar floating-translator-input-row">
+                <textarea id="floatTranslatorInput" class="english-textarea translator-extension-textarea" rows="4" maxlength="4000"
+                    placeholder="Type or select text + Alt+T... Enter to translate (Shift+Enter for new line)"></textarea>
+                <div class="lang-translator-actions">
+                    <select id="floatTranslatorDirectionSelect" class="select-input select-compact" hidden aria-hidden="true" style="display:none !important;" aria-label="Quick translation direction">
+                        <option value="auto" selected>Auto Detect (EN/KO/JP)</option>
+                        <option value="en_es">English → Spanish</option>
+                        <option value="ko_es">Korean → Spanish</option>
+                        <option value="ko_en">Korean → English</option>
+                        <option value="ja_es">Japanese → Spanish</option>
+                        <option value="ja_en">Japanese → English</option>
+                        <option value="en_ja">Japanese + English (JP-EN) → Spanish</option>
+                    </select>
+                    <select id="floatTranslatorEngineSelect" class="select-input select-compact" aria-label="Quick translator engine" title="Elige el modo de traducción">
+                        <option value="auto">Automático (Gemini / Local)</option>
+                        <option value="gemini">Google Gemini IA</option>
+                        <option value="offline">Modo Instantáneo Local</option>
+                    </select>
+                    <button type="button" class="btn-submit" id="btnRunFloatTranslator" title="Traducir texto y mostrar pronunciación">Traducir</button>
+                </div>
             </div>
+
+            <input type="text" class="translator-context-input" id="floatTranslatorContextInput" maxlength="400"
+                placeholder="Optional context (song, PDF, sentence)...">
+
+            <div id="floatTranslatorResultBox" class="lang-translator-result" hidden aria-live="polite"></div>
         </div>
-
-        <input type="text" class="translator-context-input" id="floatTranslatorContextInput" maxlength="400"
-            placeholder="Optional context (song, PDF, sentence)...">
-
-        <div id="floatTranslatorResultBox" class="lang-translator-result" hidden aria-live="polite"></div>
     </aside>
 
     <!-- Modal: Control de Límite de Pestañas y Redirección desde ntfy -->

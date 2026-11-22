@@ -1097,6 +1097,7 @@
         ['Minimize / Compact floating translator', 'Minimizar / Compactar traductor flotante'],
         ['Translate selected text in floating translator (draggable)', 'Traducir el texto seleccionado en el traductor flotante (arrastrable)'],
         ['🌐 Translate selection', '🌐 Traducir selección'],
+        ['Translate selection', 'Traducir selección'],
         ['🪟 Window', '🪟 Ventana'],
         ['Quick Translation Direction', 'Dirección rápida de traducción'],
         ['Quick translation direction', 'Dirección rápida de traducción'],

@@ -69,7 +69,9 @@ function updateTransportStatusBadges() {
         const iconSpan = sidebarBadge.querySelector('.tunnel-icon');
         const labelSpan = sidebarBadge.querySelector('.tunnel-label');
         if (iconSpan && labelSpan) {
-            iconSpan.textContent = iconText;
+            if (!iconSpan.querySelector('svg')) {
+                iconSpan.textContent = iconText;
+            }
             labelSpan.textContent = labelText;
         } else {
             sidebarBadge.textContent = `${iconText} ${labelText}`;
@@ -6439,23 +6441,6 @@ function applyFloatingTranslatorPosition(drawer, left, top) {
     return clamped;
 }
 
-function setFloatingTranslatorMinimized(drawer, minimized) {
-    if (!drawer) return;
-    const isMin = Boolean(minimized);
-    drawer.classList.toggle('is-minimized', isMin);
-    const btnMin = document.getElementById('btnMinimizeFloatingTranslator');
-    if (btnMin) {
-        btnMin.setAttribute('aria-expanded', isMin ? 'false' : 'true');
-        btnMin.textContent = isMin ? '▢' : '—';
-        btnMin.title = isMin
-            ? 'Expandir traductor flotante'
-            : 'Minimizar / Compactar traductor flotante';
-    }
-    if (!drawer.hidden) {
-        clampFloatingElementIntoViewport(drawer, 8);
-    }
-}
-
 function restoreFloatingTranslatorPosition(drawer) {
     if (!drawer || drawer.hidden) return;
     try {
@@ -6561,6 +6546,39 @@ function initFloatingTranslatorDrag(drawer) {
     }
 }
 
+let suppressSelectionTranslateUntil = 0;
+
+function clearActiveTextSelection() {
+    suppressSelectionTranslateUntil = Date.now() + 340;
+    try {
+        const sel = window.getSelection ? window.getSelection() : null;
+        if (sel) {
+            if (typeof sel.removeAllRanges === 'function') sel.removeAllRanges();
+            else if (typeof sel.empty === 'function') sel.empty();
+        }
+    } catch (_) { }
+    try {
+        const activeEl = document.activeElement;
+        if (
+            activeEl &&
+            (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT') &&
+            !activeEl.closest('#floatingTranslatorModal') &&
+            typeof activeEl.selectionStart === 'number' &&
+            typeof activeEl.selectionEnd === 'number' &&
+            activeEl.selectionEnd > activeEl.selectionStart
+        ) {
+            if (typeof activeEl.setSelectionRange === 'function') {
+                activeEl.setSelectionRange(activeEl.selectionEnd, activeEl.selectionEnd);
+            }
+            if (typeof activeEl.blur === 'function') {
+                activeEl.blur();
+            }
+        }
+    } catch (_) { }
+    const selBtn = document.getElementById('btnMusicTranslateLyricsSel');
+    if (selBtn) selBtn.hidden = true;
+}
+
 function openFloatingTranslator({ text = '', toggle = false, context = '' } = {}) {
     if (!currentUser || currentUser.rol !== 'admin') return;
     const drawer = document.getElementById('floatingTranslatorModal');
@@ -6571,10 +6589,12 @@ function openFloatingTranslator({ text = '', toggle = false, context = '' } = {}
         return;
     }
 
+    clearActiveTextSelection();
     drawer.hidden = false;
-    setFloatingTranslatorMinimized(drawer, false);
     restoreFloatingTranslatorPosition(drawer);
     clampFloatingElementIntoViewport(drawer, 8);
+    const bodyEl = drawer.querySelector('.floating-translator-body');
+    if (bodyEl) bodyEl.scrollTop = 0;
     if (floatingTranslatorController) {
         if (context && typeof floatingTranslatorController.setContextText === 'function') {
             floatingTranslatorController.setContextText(context);
@@ -6717,6 +6737,13 @@ function initGlobalSelectionTranslator() {
 
     const updateButton = () => {
         if (dragState) return;
+        if (Date.now() < suppressSelectionTranslateUntil) {
+            lastSelectedText = '';
+            lastSelectionFromMusic = false;
+            manualPos = false;
+            selBtn.hidden = true;
+            return;
+        }
         const selInfo = getSelectionInfo();
         if (!selInfo || !selInfo.text) {
             lastSelectedText = '';
@@ -6849,17 +6876,20 @@ function initGlobalSelectionTranslator() {
         const liveSel = getSelectionInfo();
         const selectedText = String((liveSel && liveSel.text) || lastSelectedText || '').trim();
         if (!selectedText) {
-            selBtn.hidden = true;
+            clearActiveTextSelection();
             return;
         }
         const isMusic = liveSel ? liveSel.fromMusic : lastSelectionFromMusic;
         const selSong = isMusic && typeof getCancionSeleccionada === 'function' ? getCancionSeleccionada() : null;
         const contextStr = selSong ? `${formatSongArtistsSummary(selSong)} - ${selSong.titulo}` : '';
+        lastSelectedText = '';
+        lastSelectionFromMusic = false;
+        manualPos = false;
+        clearActiveTextSelection();
         if (floatingTranslatorController && typeof floatingTranslatorController.setDirection === 'function') {
             floatingTranslatorController.setDirection('auto');
         }
         openFloatingTranslator({ text: selectedText, toggle: false, context: contextStr });
-        selBtn.hidden = true;
     });
 }
 
@@ -6891,7 +6921,7 @@ function initGlobalFloatingTranslator() {
         btnRun: document.getElementById('btnRunFloatTranslator'),
         btnPaste: document.getElementById('btnFloatTranslatorPaste'),
         btnClear: document.getElementById('btnFloatTranslatorClear'),
-        btnPopout: document.getElementById('btnFloatPopoutTranslator'),
+        btnPopout: null,
         resultBox: document.getElementById('floatTranslatorResultBox'),
         fetchJsonFn: resilientFetchJson,
         buttonLockFn: runWithButtonLock,
@@ -6939,25 +6969,9 @@ function initGlobalFloatingTranslator() {
         });
     }
 
-    const btnMinimize = document.getElementById('btnMinimizeFloatingTranslator');
-    if (btnMinimize) {
-        btnMinimize.addEventListener('click', () => {
-            setFloatingTranslatorMinimized(drawer, !drawer.classList.contains('is-minimized'));
-        });
-    }
-
     const btnClose = document.getElementById('btnCloseFloatingTranslator');
     if (btnClose) {
         btnClose.addEventListener('click', closeFloatingTranslator);
-    }
-
-    const btnResetPos = document.getElementById('btnResetFloatTranslatorPos');
-    if (btnResetPos) {
-        btnResetPos.addEventListener('click', () => {
-            setFloatingTranslatorMinimized(drawer, false);
-            resetFloatingTranslatorPosition(drawer);
-            showToast('ok', tUi('Translator window position reset.', 'Posición de la ventana del traductor restablecida.'));
-        });
     }
 
     initFloatingTranslatorDrag(drawer);
