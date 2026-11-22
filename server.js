@@ -6811,20 +6811,19 @@ app.get('/api/planner/reverse-geocode', apiReadLimiter.middleware, requireAdmin,
     }
 });
 
+const MAP_TILE_CACHE_VERSION = 'v2';
 const MAP_TILE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAP_TILE_MEM_MAX_ENTRIES = 300;
+const MAP_TILE_MIN_BYTES = 101;
 const MAP_TILE_MAX_BYTES = 512 * 1024;
-const MAP_TILE_FETCH_TIMEOUT_MS = 4500;
-const MAP_TILE_DISK_CACHE_DIR = path.join(os.tmpdir(), '.cache', 'map-tiles');
-const MAP_TILE_USER_AGENT = 'PersonalDailyHub/1.0 (+https://github.com/Flax64/personal-daily-hub)';
+const MAP_TILE_FETCH_TIMEOUT_MS = 4000;
+const MAP_TILE_DISK_CACHE_ROOT = path.join(os.tmpdir(), '.cache', 'map-tiles');
+const MAP_TILE_DISK_CACHE_DIR = path.join(MAP_TILE_DISK_CACHE_ROOT, MAP_TILE_CACHE_VERSION);
+const MAP_TILE_USER_AGENT = 'PersonalDailyHub/1.21 (+https://github.com/Flax64/personal-daily-hub)';
 const mapTileMemoryCache = new Map();
 
 const MAP_TILE_PROVIDERS = {
     streets: [
-        {
-            id: 'carto-voyager',
-            buildUrl: (z, x, y) => `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`
-        },
         {
             id: 'osm',
             buildUrl: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
@@ -6832,6 +6831,10 @@ const MAP_TILE_PROVIDERS = {
         {
             id: 'esri-streets',
             buildUrl: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${z}/${y}/${x}`
+        },
+        {
+            id: 'esri-topo',
+            buildUrl: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/${z}/${y}/${x}`
         }
     ],
     satellite: [
@@ -6840,25 +6843,40 @@ const MAP_TILE_PROVIDERS = {
             buildUrl: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`
         },
         {
-            id: 'carto-voyager',
-            buildUrl: (z, x, y) => `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`
-        },
-        {
-            id: 'osm',
-            buildUrl: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
+            id: 'esri-streets',
+            buildUrl: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${z}/${y}/${x}`
         }
     ]
 };
 
-function detectMapTileImageMime(buf, fallbackMime = 'image/png') {
-    if (!Buffer.isBuffer(buf) || buf.length < 4) return fallbackMime;
+function detectMapTileImageMime(buf) {
+    if (!Buffer.isBuffer(buf) || buf.length < 4) return null;
     if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png';
     if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
     if (buf.length >= 12 && buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') {
         return 'image/webp';
     }
-    if (buf.subarray(0, 4).toString('ascii') === 'GIF8') return 'image/gif';
-    return fallbackMime;
+    return null;
+}
+
+async function cleanupLegacyMapTileDiskCache() {
+    if (isAutomatedTestEnv()) return;
+    try {
+        const rootDir = path.resolve(MAP_TILE_DISK_CACHE_ROOT);
+        const entries = await fs.promises.readdir(rootDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (!entry || entry.name === MAP_TILE_CACHE_VERSION) continue;
+            const targetPath = path.resolve(rootDir, entry.name);
+            if (!targetPath.startsWith(rootDir + path.sep)) continue;
+            await fs.promises.rm(targetPath, { recursive: true, force: true });
+        }
+    } catch (_) {
+        // Best-effort cleanup; ignore missing cache root or permissions
+    }
+}
+
+if (!isAutomatedTestEnv()) {
+    cleanupLegacyMapTileDiskCache();
 }
 
 function getMapTileFromMemory(cacheKey) {
@@ -6875,7 +6893,7 @@ function getMapTileFromMemory(cacheKey) {
 }
 
 function setMapTileInMemory(cacheKey, entry) {
-    if (!entry || !Buffer.isBuffer(entry.buffer) || entry.buffer.length === 0) return;
+    if (!entry || !Buffer.isBuffer(entry.buffer) || entry.buffer.length < MAP_TILE_MIN_BYTES) return;
     if (mapTileMemoryCache.has(cacheKey)) {
         mapTileMemoryCache.delete(cacheKey);
     }
@@ -6909,12 +6927,14 @@ async function readMapTileFromDisk(layer, z, x, y) {
         const stat = await fs.promises.stat(loc.filePath);
         if (!stat.isFile()) return null;
         if (Date.now() - stat.mtimeMs > MAP_TILE_CACHE_TTL_MS) return null;
-        if (stat.size < 32 || stat.size > MAP_TILE_MAX_BYTES) return null;
+        if (stat.size < MAP_TILE_MIN_BYTES || stat.size > MAP_TILE_MAX_BYTES) return null;
         const buf = await fs.promises.readFile(loc.filePath);
-        if (!buf || buf.length < 32 || buf.length > MAP_TILE_MAX_BYTES) return null;
+        if (!buf || buf.length < MAP_TILE_MIN_BYTES || buf.length > MAP_TILE_MAX_BYTES) return null;
+        const detectedMime = detectMapTileImageMime(buf);
+        if (!detectedMime) return null;
         return {
             buffer: buf,
-            contentType: detectMapTileImageMime(buf, layer === 'satellite' ? 'image/jpeg' : 'image/png'),
+            contentType: detectedMime,
             provider: 'disk-cache'
         };
     } catch (_) {
@@ -6923,7 +6943,8 @@ async function readMapTileFromDisk(layer, z, x, y) {
 }
 
 async function writeMapTileToDisk(layer, z, x, y, buf) {
-    if (isAutomatedTestEnv() || !Buffer.isBuffer(buf) || buf.length < 32 || buf.length > MAP_TILE_MAX_BYTES) return;
+    if (isAutomatedTestEnv() || !Buffer.isBuffer(buf) || buf.length < MAP_TILE_MIN_BYTES || buf.length > MAP_TILE_MAX_BYTES) return;
+    if (!detectMapTileImageMime(buf)) return;
     const loc = resolveMapTileDiskPath(layer, z, x, y);
     if (!loc) return;
     try {
@@ -6955,7 +6976,7 @@ app.get('/api/planner/map-tile/:z/:x/:y.png', mapTileLimiter.middleware, require
     }
 
     const layer = String(req.query?.layer || '').trim().toLowerCase() === 'satellite' ? 'satellite' : 'streets';
-    const cacheKey = `${layer}/${z}/${x}/${y}`;
+    const cacheKey = `${MAP_TILE_CACHE_VERSION}/${layer}/${z}/${x}/${y}`;
 
     const memHit = getMapTileFromMemory(cacheKey);
     if (memHit) {
@@ -7000,27 +7021,29 @@ app.get('/api/planner/map-tile/:z/:x/:y.png', mapTileLimiter.middleware, require
                 },
                 ...(controller ? { signal: controller.signal } : {})
             });
-            if (!resp || !resp.ok) continue;
+            if (!resp || resp.status !== 200) continue;
 
             const rawCt = typeof resp.headers?.get === 'function'
                 ? resp.headers.get('content-type')
                 : (resp.headers?.['content-type'] || '');
             const cleanCt = String(rawCt || '').split(';')[0].trim().toLowerCase();
-            if (!/^image\/(png|jpeg|jpg|webp|gif)$/i.test(cleanCt)) continue;
+            if (!/^image\/(png|jpeg|jpg|webp)$/i.test(cleanCt)) continue;
 
             const buf = Buffer.from(await resp.arrayBuffer());
-            if (!buf || buf.length < 32 || buf.length > MAP_TILE_MAX_BYTES) continue;
+            if (!buf || buf.length < MAP_TILE_MIN_BYTES || buf.length > MAP_TILE_MAX_BYTES) continue;
 
-            const resolvedCt = cleanCt === 'image/jpg' ? 'image/jpeg' : cleanCt;
+            const detectedMime = detectMapTileImageMime(buf);
+            if (!detectedMime) continue;
+
             setMapTileInMemory(cacheKey, {
                 buffer: buf,
-                contentType: resolvedCt,
+                contentType: detectedMime,
                 provider: provider.id
             });
             writeMapTileToDisk(layer, z, x, y, buf);
 
             res.set({
-                'Content-Type': resolvedCt,
+                'Content-Type': detectedMime,
                 'Cache-Control': 'private, max-age=86400',
                 'X-Content-Type-Options': 'nosniff',
                 'X-Map-Tile-Provider': provider.id,
