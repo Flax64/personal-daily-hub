@@ -1,8 +1,32 @@
 {
   "standard": "SemVer 2.0.0 + Conventional Commits",
-  "currentVersion": "1.17.0",
-  "updatedAt": "2026-11-18T06:40:49.383Z",
+  "currentVersion": "1.21.1",
+  "updatedAt": "2026-11-22T21:17:18.158Z",
   "releases": [
+    {
+      "version": "1.21.1",
+      "tag": "v1.21.1",
+      "bumpType": "patch",
+      "previousVersion": "1.21.0",
+      "releasedAt": "2026-11-22T21:17:18.158Z",
+      "commitSha": "4dfe404",
+      "trigger": "push",
+      "summary": "fix(planner): proxy and cache map tiles server-side to resolve OSM 403 block",
+      "counts": {
+        "breaking": 0,
+        "features": 0,
+        "fixes": 1,
+        "maintenance": 0
+      },
+      "changes": {
+        "breaking": [],
+        "features": [],
+        "fixes": [
+          "fix(planner): proxy and cache map tiles server-side to resolve OSM 403 block (c3b684c)"
+        ],
+        "maintenance": []
+      }
+    },
     {
       "version": "1.17.0",
       "tag": "v1.17.0",
