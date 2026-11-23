@@ -449,6 +449,10 @@ jobs:
             fi
             git remote set-url origin "https://github.com/${GITHUB_REPO}.git"
             git fetch origin main
+            SKIPPED_FILES="$(git ls-files -v 2>/dev/null | sed -n 's/^S //p' || true)"
+            if [ -n "$SKIPPED_FILES" ]; then
+              printf '%s\n' "$SKIPPED_FILES" | xargs -r -d '\n' git update-index --no-skip-worktree -- 2>/dev/null || true
+            fi
             if [ "$(git symbolic-ref --short HEAD 2>/dev/null || true)" != "main" ]; then
               git checkout -f -B main origin/main
             fi
@@ -457,8 +461,13 @@ jobs:
             # se versionan en Git pero JAMÁS se ejecutan en EC2. Se eliminan de la copia de trabajo del
             # servidor tras cada reset (la imagen Docker ya los excluye vía .dockerignore).
             rm -rf "$HOME/projects/mood-tracker/sincronitation"
+            SYNC_TRACKED="$(git ls-files -- sincronitation 2>/dev/null || true)"
+            if [ -n "$SYNC_TRACKED" ]; then
+              printf '%s\n' "$SYNC_TRACKED" | xargs -r -d '\n' git update-index --skip-worktree -- 2>/dev/null || true
+            fi
             if [ -n "${RELEASE_HISTORY_B64:-}" ]; then
               printf '%s' "${RELEASE_HISTORY_B64}" | base64 -d > version-history.json
+              git update-index --skip-worktree -- version-history.json 2>/dev/null || true
             fi
             if [ -n "${APP_VERSION:-}" ]; then
               echo "Deploying version v${APP_VERSION}"
