@@ -1711,4 +1711,36 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
             assert.ok(deploy.includes(guardToken), `deploy.yml debe incluir validación idempotente: ${guardToken}`);
         }
     });
+
+    it('mantiene scripts/*.sh ejecutables en Git (100755) y evita dirty git status en deploy.yml', () => {
+        const scripts = [
+            'scripts/backup.sh',
+            'scripts/env-vault.sh',
+            'scripts/restore.sh',
+            'scripts/verify-ubuntu-local.sh'
+        ];
+        const stageOut = execFileSync('git', ['ls-files', '--stage', ...scripts], {
+            cwd: ROOT,
+            encoding: 'utf8'
+        }).trim();
+        const lines = stageOut.split(/\r?\n/).filter(Boolean);
+        assert.equal(lines.length, scripts.length, 'Todos los scripts/*.sh deben estar versionados en Git');
+        for (const scriptPath of scripts) {
+            const match = lines.find((line) => line.endsWith(`\t${scriptPath}`));
+            assert.ok(match, `Falta entrada en índice Git para ${scriptPath}`);
+            assert.ok(match.startsWith('100755 '), `${scriptPath} debe tener modo 100755 en Git (encontrado: ${match})`);
+        }
+
+        const deploy = readText('.github/workflows/deploy.yml');
+        const noSkipIdx = deploy.indexOf('--no-skip-worktree');
+        const resetIdx = deploy.indexOf('git reset --hard origin/main');
+        const rmSyncIdx = deploy.indexOf('rm -rf "$HOME/projects/mood-tracker/sincronitation"');
+        const skipSyncIdx = deploy.indexOf('git update-index --skip-worktree -- 2>/dev/null || true');
+        const skipHistoryIdx = deploy.indexOf('git update-index --skip-worktree -- version-history.json');
+
+        assert.ok(noSkipIdx !== -1, 'deploy.yml debe limpiar --no-skip-worktree antes de resetear');
+        assert.ok(resetIdx !== -1 && noSkipIdx < resetIdx, '--no-skip-worktree debe ejecutarse antes de git reset --hard origin/main');
+        assert.ok(rmSyncIdx !== -1 && skipSyncIdx > rmSyncIdx, 'deploy.yml debe marcar sincronitation con --skip-worktree tras rm -rf');
+        assert.ok(skipHistoryIdx !== -1, 'deploy.yml debe marcar version-history.json con --skip-worktree');
+    });
 });
