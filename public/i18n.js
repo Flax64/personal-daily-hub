@@ -1913,7 +1913,55 @@
         ['At least 1 valid crisis episode type (2-60 chars) is required.', 'Se requiere al menos 1 tipo de episodio válido (2 a 60 caracteres).'],
         ['Crisis episode types must be an array.', 'Los tipos de episodio de crisis deben ser una lista.'],
         ['Could not update crisis episode types.', 'No se pudieron actualizar los tipos de episodio de crisis.'],
-        ['E2EE key mismatch or integrity check failed for journal entry.', 'La llave E2EE no coincide o falló la verificación de integridad de la nota del diario.']
+        ['E2EE key mismatch or integrity check failed for journal entry.', 'La llave E2EE no coincide o falló la verificación de integridad de la nota del diario.'],
+
+        // --- Journal Encrypted Download (.docx) ---
+        ['Download Journal (.docx)', 'Descargar Diario (.docx)'],
+        ['📥 Download Journal (.docx)', '📥 Descargar Diario (.docx)'],
+        ['Download your encrypted Journal and decrypt it on this device as Word (.docx)', 'Descargar tu Diario cifrado y descifrarlo en este dispositivo como Word (.docx)'],
+        ['Journal download password (.docx salted E2EE):', 'Contraseña de descarga del Diario (.docx cifrado con salt):'],
+        ['8–128 chars to decrypt Journal downloads', '8–128 caracteres para descifrar descargas del Diario'],
+        ['Save password', 'Guardar contraseña'],
+        ['Save encrypted download password on the server', 'Guardar contraseña de descarga cifrada en el servidor'],
+        ['Clear password', 'Borrar contraseña'],
+        ['Remove configured download password', 'Quitar contraseña de descarga configurada'],
+        ['Protects Diario.docx downloads with an extra salted E2EE layer (8–128 chars) and decrypts only on your device.', 'Protege las descargas de Diario.docx con capa E2EE adicional con salt (8–128 caracteres) y se descifra solo en tu dispositivo.'],
+        ['Configured', 'Configurada'],
+        ['Not configured', 'Sin configurar'],
+        ['Enter your download password to receive your salted-E2EE Journal and decrypt it locally on this device as Word (.docx).', 'Ingresa tu contraseña de descarga para recibir tu Diario cifrado con salt y descifrarlo localmente en este dispositivo como Word (.docx).'],
+        ['Download password (8–128 chars):', 'Contraseña de descarga (8–128 caracteres):'],
+        ['Change configured password', 'Cambiar contraseña configurada'],
+        ['← Use current password', '← Usar contraseña actual'],
+        ['8–128 characters', '8–128 caracteres'],
+        ['Confirm password:', 'Confirmar contraseña:'],
+        ['Repeat the password', 'Repite la contraseña'],
+        ['Save this password for future downloads', 'Guardar esta contraseña para futuras descargas'],
+        ['📥 Decrypt & Download (.docx)', '📥 Descifrar y Descargar (.docx)'],
+        ['Enter your configured download password:', 'Ingresa tu contraseña configurada:'],
+        ['Your password stays in this browser to decrypt Diario.docx locally after receiving it salted-E2EE encrypted from the server.', 'Tu contraseña permanece en este navegador para descifrar Diario.docx localmente tras recibirlo cifrado con salt desde el servidor.'],
+        ['New configured password (8–128 characters):', 'Nueva contraseña configurada (8–128 caracteres):'],
+        ['Enter and confirm your new download password. It will update your saved setting and decrypt the downloaded Diario.docx.', 'Ingresa y confirma tu nueva contraseña de descarga. Se actualizará en tus ajustes y descifrará el Diario.docx descargado.'],
+        ['New download password (8–128 characters):', 'Nueva contraseña de descarga (8–128 caracteres):'],
+        ['Choose a password (8–128 characters) to encrypt Diario.docx with salt in transit and decrypt it on this device.', 'Elige una contraseña (8–128 caracteres) para cifrar Diario.docx con salt en tránsito y descifrarlo en este dispositivo.'],
+        ['Journal download password must be 8–128 characters without control characters.', 'La contraseña de descarga del Diario debe tener entre 8 y 128 caracteres sin caracteres de control.'],
+        ['Journal download password saved securely.', 'Contraseña de descarga del Diario guardada de forma segura.'],
+        ['Error saving download password.', 'Error al guardar la contraseña de descarga.'],
+        ['Remove Download Password?', '¿Borrar contraseña de descarga?'],
+        ['Remove the saved journal download password from your account? Next time you download Diario.docx you will be asked to enter one.', '¿Quitar la contraseña de descarga del Diario guardada en tu cuenta? La próxima vez que descargues Diario.docx se te pedirá una.'],
+        ['Journal download password removed.', 'Contraseña de descarga del Diario eliminada.'],
+        ['Error removing download password.', 'Error al eliminar la contraseña de descarga.'],
+        ['Clearing...', 'Borrando...'],
+        ['Update Download Password?', '¿Actualizar contraseña de descarga?'],
+        ['Replace your saved journal download password with this new one and download Diario.docx?', '¿Reemplazar tu contraseña de descarga guardada por esta nueva y descargar Diario.docx?'],
+        ['Update & Download', 'Actualizar y Descargar'],
+        ['No download password saved yet. Enter a new password below.', 'Aún no hay contraseña guardada. Ingresa una nueva abajo.'],
+        ['Could not download encrypted journal.', 'No se pudo descargar el diario cifrado.'],
+        ['Decrypting...', 'Descifrando...'],
+        ['Incorrect password: HMAC verification failed and no file was downloaded.', 'Contraseña incorrecta: la verificación HMAC falló y no se descargó ningún archivo.'],
+        ['Could not decrypt journal file with that password.', 'No se pudo descifrar el archivo del diario con esa contraseña.'],
+        ['Decrypted file is not a valid Word (.docx) document.', 'El archivo descifrado no es un documento Word (.docx) válido.'],
+        ['Configure or enter a download password first.', 'Configura o ingresa primero una contraseña de descarga.'],
+        ['Download password must be between 8 and 128 characters.', 'La contraseña de descarga debe tener entre 8 y 128 caracteres.']
     ];
 
     var EN_FROM_KEY = new Map();
@@ -2445,6 +2493,12 @@
             return pick(
                 'Synced ' + m[1] + ' schedule item(s) to Weekly Agenda' + tailEn,
                 'Se sincronizaron ' + m[1] + ' actividades a tu Agenda Semanal' + (m[2] || '')
+            );
+        }
+        if ((m = trim.match(/^(?:Journal decrypted and downloaded|Diario descifrado y descargado)\s*\(([^)]+)\)\.?$/i))) {
+            return pick(
+                'Journal decrypted and downloaded (' + m[1] + ').',
+                'Diario descifrado y descargado (' + m[1] + ').'
             );
         }
         return null;

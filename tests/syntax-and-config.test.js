@@ -456,7 +456,14 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         assert.match(indexHtml, /id="loginPassword"[^>]*autocomplete="current-password"/);
         assert.match(indexHtml, /<input\s+type="password"\s+id="loginPassword"/);
 
-        for (const maskedId of ['medicoPassword', 'setGeminiApiKey', 'e2eeKeyInput']) {
+        for (const maskedId of [
+            'medicoPassword',
+            'setGeminiApiKey',
+            'e2eeKeyInput',
+            'setJournalDownloadPassword',
+            'journalDownloadPasswordInput',
+            'journalDownloadPasswordConfirm'
+        ]) {
             assert.match(
                 indexHtml,
                 new RegExp(`type="text"[^>]*class="[^"]*secret-input-masked[^"]*"[^>]*id="${maskedId}"[^>]*data-secret-mask="true"`),
@@ -466,6 +473,10 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
                 indexHtml,
                 new RegExp(`id="${maskedId}"[^>]*autocomplete="off"[^>]*data-lpignore="true"`),
                 `#${maskedId} debe desactivar autocompletado del navegador`
+            );
+            assert.ok(
+                indexHtml.includes(`data-toggle-password="${maskedId}"`),
+                `#${maskedId} debe incluir botón ojito data-toggle-password`
             );
         }
 
@@ -1961,5 +1972,75 @@ describe('Arquitectura Blue-Green Caddy + Rollback y Modal de Canción (#musicSo
             assert.equal(match[0].includes('encriptarDiarioSaltedE2EE('), false,
                 '/api/send-english no debe cambiarse a encriptarDiarioSaltedE2EE');
         }
+    });
+
+    it('expone botón, modal, ajuste anti-autofill y descifrado local binario pdh-j2 para descargar Diario (.docx)', async () => {
+        const indexHtml = readText('public/index.html');
+        const frontendJs = readText('public/frontend.js');
+
+        for (const requiredToken of [
+            'id="btnDownloadJournalWord"',
+            'id="journalDownloadPasswordModal"',
+            'id="journalDownloadPasswordInput"',
+            'id="journalDownloadPasswordConfirm"',
+            'id="setJournalDownloadPassword"'
+        ]) {
+            assert.ok(indexHtml.includes(requiredToken), `public/index.html debe incluir ${requiredToken}`);
+        }
+
+        assert.match(frontendJs, /async\s+function\s+desencriptarDiarioBytesSaltedE2EE\s*\(/);
+        assert.ok(frontendJs.includes('/api/journal/download-encrypted'), 'frontend.js debe consumir /api/journal/download-encrypted');
+
+        // Validar interoperabilidad Node (encryptJournalSaltedBytesE2ee) -> navegador (desencriptarDiarioBytesSaltedE2EE)
+        // tanto en WebCrypto nativo como en el fallback CryptoJS sin subtle
+        const { webcrypto } = require('node:crypto');
+        const serverNotes = require(path.join(ROOT, 'lib', 'server-notes-service.js'));
+        const C = require(path.join(ROOT, 'public', 'vendor', 'crypto-js.min.js'));
+        const fnMatch = frontendJs.match(/async\s+function\s+desencriptarDiarioBytesSaltedE2EE\s*\([\s\S]*?\r?\n\}\r?\nif\s*\(typeof window/);
+        assert.ok(fnMatch, 'No se pudo extraer desencriptarDiarioBytesSaltedE2EE de public/frontend.js');
+        const fnBody = fnMatch[0].replace(/\r?\nif\s*\(typeof window[\s\S]*$/, '');
+        const validPwdFnMatch = frontendJs.match(/function\s+isJournalDownloadPwdValidClient\s*\([\s\S]*?\r?\n\}/);
+        assert.ok(validPwdFnMatch, 'No se pudo extraer isJournalDownloadPwdValidClient de public/frontend.js');
+
+        const sampleDocx = Buffer.concat([
+            Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]),
+            Buffer.from([0x00, 0xff, 0x80, 0x7f, 0xfe, 0x01, 0x02, 0x03]),
+            Buffer.from('word/document.xml-binary-payload-for-pc-and-mobile-word-2026', 'utf8')
+        ]);
+        const userPwd = 'ClaveDescargaWeb2026!';
+        const envelope = serverNotes.encryptJournalSaltedBytesE2ee(sampleDocx, userPwd);
+
+        const runInSandbox = async (useSubtle) => {
+            const sandbox = {
+                window: { crypto: useSubtle ? webcrypto : {} },
+                CryptoJS: C,
+                TextEncoder,
+                TextDecoder,
+                Uint8Array,
+                atob: (b64) => Buffer.from(b64, 'base64').toString('binary'),
+                btoa: (bin) => Buffer.from(bin, 'binary').toString('base64')
+            };
+            vm.runInNewContext(`${validPwdFnMatch[0]}\n${fnBody}\nthis.fn = desencriptarDiarioBytesSaltedE2EE;`, sandbox);
+            return sandbox.fn(envelope, userPwd);
+        };
+
+        const outSubtle = await runInSandbox(true);
+        assert.strictEqual(Buffer.compare(Buffer.from(outSubtle), sampleDocx), 0, 'WebCrypto debe descifrar bytes .docx exactos');
+
+        const outFallback = await runInSandbox(false);
+        assert.strictEqual(Buffer.compare(Buffer.from(outFallback), sampleDocx), 0, 'Fallback CryptoJS debe descifrar bytes .docx exactos sin corrupción UTF-8');
+
+        await assert.rejects(async () => {
+            const sandbox = {
+                window: { crypto: webcrypto },
+                CryptoJS: C,
+                TextEncoder,
+                TextDecoder,
+                Uint8Array,
+                atob: (b64) => Buffer.from(b64, 'base64').toString('binary')
+            };
+            vm.runInNewContext(`${validPwdFnMatch[0]}\n${fnBody}\nthis.fn = desencriptarDiarioBytesSaltedE2EE;`, sandbox);
+            await sandbox.fn(envelope, 'OtraClaveIncorrecta!');
+        }, /MAC_MISMATCH|Incorrect password/i);
     });
 });

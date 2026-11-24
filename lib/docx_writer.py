@@ -11,6 +11,7 @@ Cross-platform OOXML (.docx) writer for Personal Daily Hub on Linux/Docker serve
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -3732,6 +3733,117 @@ def verify_encrypted_journal_docx(
     }
 
 
+def export_decrypted_journal_docx(docx_path: str, password: str) -> dict:
+    """
+    Decrypts an encrypted OLE2 Diario.docx strictly in RAM and returns base64 OOXML bytes.
+    Never writes unencrypted .docx bytes to disk.
+    """
+    if not password:
+        return {
+            "ok": False,
+            "reason": "PASSWORD_MISSING",
+            "error": "WORD_PASSWORD is required to export local encrypted Journal.",
+        }
+
+    if not docx_path or not str(docx_path).strip():
+        return {
+            "ok": False,
+            "reason": "MISSING_FILE",
+            "error": "Local Diario.docx does not exist.",
+        }
+
+    target = os.path.abspath(str(docx_path))
+    if not os.path.exists(target) or not os.path.isfile(target) or os.path.getsize(target) == 0:
+        return {
+            "ok": False,
+            "reason": "MISSING_FILE",
+            "error": "Local Diario.docx does not exist or is empty.",
+        }
+
+    with open(target, "rb") as fh:
+        raw_bytes = fh.read()
+
+    if len(raw_bytes) < 8 or raw_bytes[:8] != b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return {
+            "ok": False,
+            "reason": "CORRUPT_DOCX",
+            "error": "Local Diario.docx is not a valid OLE2 encrypted container.",
+        }
+
+    try:
+        import msoffcrypto
+    except ImportError as imp_err:
+        return {
+            "ok": False,
+            "reason": "MSOFFCRYPTO_MISSING",
+            "error": f"msoffcrypto-tool not installed: {imp_err}",
+        }
+
+    try:
+        office = msoffcrypto.OfficeFile(io.BytesIO(raw_bytes))
+    except Exception as fmt_err:
+        return {
+            "ok": False,
+            "reason": "CORRUPT_DOCX",
+            "error": f"Local Diario.docx is not a valid Office container: {fmt_err}",
+        }
+
+    if not office.is_encrypted():
+        return {
+            "ok": False,
+            "reason": "CORRUPT_DOCX",
+            "error": "Local Diario.docx is not encrypted.",
+        }
+
+    try:
+        office.load_key(password=password, verify_password=True)
+    except Exception as pwd_err:
+        return {
+            "ok": False,
+            "reason": "WRONG_PASSWORD",
+            "error": f"WORD_PASSWORD rejected by existing Diario.docx: {pwd_err}",
+        }
+
+    plain_io = io.BytesIO()
+    try:
+        office.decrypt(plain_io)
+    except Exception as dec_err:
+        err_text = str(dec_err)
+        reason = "WRONG_PASSWORD" if "key" in err_text.lower() or "password" in err_text.lower() else "CORRUPT_DOCX"
+        return {
+            "ok": False,
+            "reason": reason,
+            "error": f"Could not decrypt Diario.docx in memory: {dec_err}",
+        }
+
+    plain_bytes = plain_io.getvalue()
+    if len(plain_bytes) < 64 or plain_bytes[:4] != b"PK\x03\x04":
+        return {
+            "ok": False,
+            "reason": "CORRUPT_DOCX",
+            "error": "Decrypted Diario.docx is not a valid OOXML ZIP container.",
+        }
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(plain_bytes), "r") as zf:
+            if "word/document.xml" not in zf.namelist():
+                raise KeyError("word/document.xml missing")
+            ET.fromstring(zf.read("word/document.xml"))
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, Exception) as zip_err:
+        return {
+            "ok": False,
+            "reason": "CORRUPT_DOCX",
+            "error": f"Decrypted Diario.docx is not a valid OOXML Word document: {zip_err}",
+        }
+
+    docx_b64 = base64.b64encode(plain_bytes).decode("ascii")
+    return {
+        "ok": True,
+        "docxBase64": docx_b64,
+        "sizeBytes": len(plain_bytes),
+    }
+
+
 def _reemplazo_atomico_archivo(target_path: str, payload: bytes) -> None:
     parent = os.path.dirname(target_path)
     if parent:
@@ -3778,13 +3890,13 @@ def main() -> int:
             cli_docx_path = args[i + 1].strip()
         elif a == "--no-backup":
             cli_no_backup = True
-    if mode not in ("english", "repair-english", "english-repair", "journal", "journal-inspect", "journal-verify"):
+    if mode not in ("english", "repair-english", "english-repair", "journal", "journal-inspect", "journal-verify", "journal-export-plain"):
         print(
             json.dumps(
                 {
                     "ok": False,
                     "reason": "INVALID_MODE",
-                    "error": "Use --mode english|repair-english|journal|journal-inspect|journal-verify",
+                    "error": "Use --mode english|repair-english|journal|journal-inspect|journal-verify|journal-export-plain",
                 }
             )
         )
@@ -3860,6 +3972,14 @@ def main() -> int:
                 through_date=payload.get("throughDateIso") or None,
                 create_if_missing=bool(payload.get("createIfMissing", False)),
                 fill_if_empty_doc=bool(payload.get("fillIfEmptyDoc", False)),
+            )
+            print(json.dumps(res, ensure_ascii=True))
+            return 0 if res.get("ok") else 1
+
+        if mode == "journal-export-plain":
+            res = export_decrypted_journal_docx(
+                docx_path=str(payload.get("docxPath") or ""),
+                password=str(payload.get("password") or ""),
             )
             print(json.dumps(res, ensure_ascii=True))
             return 0 if res.get("ok") else 1

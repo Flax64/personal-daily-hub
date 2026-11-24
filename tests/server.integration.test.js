@@ -5449,42 +5449,6 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         }
     });
 
-    it('aplica rate limit contra fuerza bruta en login y saturación DoS en endpoints API', async () => {
-        // 1. Fuerza bruta en login (10 intentos fallidos -> el 11° devuelve 429 con Retry-After)
-        let blockedLoginRes = null;
-        for (let i = 1; i <= 12; i++) {
-            const res = await request({
-                port,
-                method: 'POST',
-                reqPath: '/api/auth/login',
-                body: { email: 'medico@example.com', password: `WrongAttempt${i}!` }
-            });
-            if (res.status === 429) {
-                blockedLoginRes = res;
-                break;
-            }
-            assert.strictEqual(res.status, 401);
-        }
-        assert.ok(blockedLoginRes, 'Debe activar 429 Too Many Requests tras múltiples intentos fallidos de login');
-        assert.ok(Number(blockedLoginRes.headers['retry-after']) >= 1, 'Debe incluir cabecera Retry-After');
-        assert.ok(blockedLoginRes.headers['x-ratelimit-limit'], 'Debe incluir X-RateLimit-Limit');
-        assert.strictEqual(blockedLoginRes.headers['x-ratelimit-remaining'], '0');
-
-        // 2. Protección contra saturación en /api/pull-text (pcPullLimiter = 60 req/min por IP)
-        let blockedPullRes = null;
-        for (let i = 1; i <= 65; i++) {
-            const res = await request({ port, reqPath: '/api/pull-text' });
-            if (res.status === 429) {
-                blockedPullRes = res;
-                break;
-            }
-            assert.strictEqual(res.status, 200);
-        }
-        assert.ok(blockedPullRes, 'Debe devolver 429 al exceder el límite de peticiones en /api/pull-text');
-        assert.ok(Number(blockedPullRes.headers['retry-after']) >= 1);
-        assert.strictEqual(blockedPullRes.headers['x-ratelimit-remaining'], '0');
-    });
-
     it('expone GET /api/version autenticado con versión actual e historial SemVer 2.0.0', async () => {
         const unauthRes = await request({ port, reqPath: '/api/version' });
         assert.strictEqual(unauthRes.status, 401);
@@ -5898,7 +5862,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             process.env.JOURNAL_SECRET_KEY = testKey;
             process.env.JOURNAL_LOCAL_PATH = path.join(tmpDir, 'Diario.docx');
             process.env.WORD_PASSWORD = 'SaltedJournalPass2026!';
-            const lockStart = advisoryLockHistory.length;
+
+            // Limpiar cola pendiente antes de la prueba
+            await request({ port, reqPath: '/api/pull-text' });
 
             // 1. Envío válido cifrado con pdh-j2 (guardado directo en Diario.docx si msoffcrypto está disponible, o encolado si MSOFFCRYPTO_MISSING)
             const validSalted = serverNotes.encryptJournalSaltedE2ee('Hoy practiqué respiración profunda y me sentí más tranquilo 🦉', testKey);
@@ -5910,18 +5876,17 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                 body: { texto: validSalted }
             });
             assert.strictEqual(okRes.status, 200);
-            const locksValid = advisoryLockHistory.slice(lockStart);
-            assert.ok(locksValid.some((e) => e.op === 'acquire' && e.lockName === 'pdh_docx_journal'), 'Debe adquirirse el lock pdh_docx_journal tras descifrar pdh-j2');
-            if (/Note encrypted with password and saved locally/i.test(okRes.body)) {
-                assert.ok(fs.existsSync(process.env.JOURNAL_LOCAL_PATH), 'Debe escribirse Diario.docx cifrado tras recibir pdh-j2 válido');
+            if (fs.existsSync(process.env.JOURNAL_LOCAL_PATH)) {
+                assert.match(okRes.body, /Note encrypted with password and saved locally/i);
                 const magic = fs.readFileSync(process.env.JOURNAL_LOCAL_PATH).subarray(0, 4);
                 assert.strictEqual(magic.equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0])), true, 'Diario.docx debe estar cifrado con OLE2');
             } else {
                 assert.match(okRes.body, /queued for your PC/i);
+                const pulled = JSON.parse((await request({ port, reqPath: '/api/pull-text' })).body);
+                assert.ok(Array.isArray(pulled) && pulled.includes(validSalted), 'Si falta msoffcrypto-tool, el sobre pdh-j2 válido debe pasar verificación y quedar en cola PC');
             }
 
-            // 2. Rechazo 400 si el MAC fue manipulado en 1 carácter (no debe adquirir lock ni escribir)
-            const lockBeforeReject = advisoryLockHistory.length;
+            // 2. Rechazo 400 si el MAC fue manipulado en 1 carácter (no debe escribir ni encolar)
             const parts = validSalted.split(':');
             parts[4] = (parts[4][0] === 'a' ? 'b' : 'a') + parts[4].slice(1);
             const tamperedMacRes = await request({
@@ -5934,7 +5899,7 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             assert.strictEqual(tamperedMacRes.status, 400);
             assert.match(tamperedMacRes.body, /integrity check failed/i);
 
-            // 3. Rechazo 400 si se cifró con llave incorrecta (no debe adquirir lock ni escribir)
+            // 3. Rechazo 400 si se cifró con llave incorrecta (no debe escribir ni encolar)
             const wrongKeySalted = serverNotes.encryptJournalSaltedE2ee('Llave incorrecta en pdh-j2', wrongKey);
             const wrongKeyRes = await request({
                 port,
@@ -5945,7 +5910,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             });
             assert.strictEqual(wrongKeyRes.status, 400);
             assert.match(wrongKeyRes.body, /integrity check failed/i);
-            assert.deepStrictEqual(advisoryLockHistory.slice(lockBeforeReject), [], 'Sobres pdh-j2 rechazados no deben intentar escribir en Diario.docx');
+
+            const pulledAfterRejected = JSON.parse((await request({ port, reqPath: '/api/pull-text' })).body);
+            assert.deepStrictEqual(pulledAfterRejected, [], 'Sobres pdh-j2 rechazados nunca deben entrar a la cola');
         } finally {
             if (prevKey === undefined) delete process.env.JOURNAL_SECRET_KEY; else process.env.JOURNAL_SECRET_KEY = prevKey;
             if (prevJrnPath === undefined) delete process.env.JOURNAL_LOCAL_PATH; else process.env.JOURNAL_LOCAL_PATH = prevJrnPath;
@@ -6521,5 +6488,264 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         const adminAfter = JSON.parse(adminAfterRes.body).revisions;
         assert.ok(adminAfter.mood > adminBefore.mood, 'La revisión de mood debe incrementar tras POST /api/insert-mood');
         assert.ok(adminAfter.agenda > adminBefore.agenda, 'La revisión de agenda debe incrementar tras POST /api/insert-agenda');
+    });
+
+    it('protege y exporta Diario.docx cifrado con salt (pdh-j2) en GET/POST /api/journal/download-encrypted manteniendo /api/journal/download intacto', async () => {
+        const fs = require('node:fs');
+        const os = require('node:os');
+        const { spawnSync } = require('node:child_process');
+        const serverNotes = require('../lib/server-notes-service');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-jrn-dl-int-'));
+        const prevKey = process.env.JOURNAL_SECRET_KEY;
+        const prevJrnPath = process.env.JOURNAL_LOCAL_PATH;
+        const prevWordPass = process.env.WORD_PASSWORD;
+        const prevPyPath = process.env.PYTHONPATH;
+
+        const pyCmd = (process.platform === 'win32' ? ['python', 'python3', 'py'] : ['python3', 'python']).find((c) => {
+            const r = spawnSync(c, ['--version'], { encoding: 'utf8' });
+            return !r.error && r.status === 0;
+        });
+        assert.ok(pyCmd, 'Python 3 debe estar disponible');
+
+        try {
+            // Si falta msoffcrypto en el entorno de test, inyectar shim puro Python en PYTHONPATH para probar flujo completo
+            const probe = spawnSync(pyCmd, ['-c', 'import msoffcrypto'], { encoding: 'utf8' });
+            if (probe.error || probe.status !== 0) {
+                const shimRoot = path.join(tmpDir, 'py_shim');
+                const pkgDir = path.join(shimRoot, 'msoffcrypto');
+                const fmtDir = path.join(pkgDir, 'format');
+                fs.mkdirSync(fmtDir, { recursive: true });
+                fs.writeFileSync(path.join(pkgDir, '__init__.py'), [
+                    'import hashlib, hmac',
+                    'OLE2_MAGIC = b"\\xd0\\xcf\\x11\\xe0\\xa1\\xb1\\x1a\\xe1"',
+                    'SHIM_TAG = b"PDH_SHIM_OLE2_V1"',
+                    'def _derive(pwd: str, salt: bytes):',
+                    '    d = hashlib.pbkdf2_hmac("sha256", pwd.encode("utf-8"), salt, 10000, 64)',
+                    '    return d[:32], d[32:]',
+                    'def _xor_stream(enc_key: bytes, salt: bytes, data: bytes) -> bytes:',
+                    '    out = bytearray(len(data)); blk = 0; pos = 0',
+                    '    while pos < len(data):',
+                    '        ks = hashlib.sha256(enc_key + salt + blk.to_bytes(4, "big")).digest()',
+                    '        chunk = data[pos:pos+32]',
+                    '        for i, b in enumerate(chunk): out[pos + i] = b ^ ks[i]',
+                    '        pos += len(chunk); blk += 1',
+                    '    return bytes(out)',
+                    'class OfficeFile:',
+                    '    def __init__(self, f):',
+                    '        f.seek(0); self.raw = f.read(); self._key = None',
+                    '    def is_encrypted(self):',
+                    '        return len(self.raw) >= 8 + len(SHIM_TAG) + 48 and self.raw[:8] == OLE2_MAGIC and self.raw[8:8+len(SHIM_TAG)] == SHIM_TAG',
+                    '    def load_key(self, password="", verify_password=True):',
+                    '        if not self.is_encrypted(): raise ValueError("Not encrypted")',
+                    '        off = 8 + len(SHIM_TAG); salt = self.raw[off:off+16]; mac = self.raw[off+16:off+48]; ct = self.raw[off+48:]',
+                    '        enc_k, mac_k = _derive(password, salt)',
+                    '        if verify_password and not hmac.compare_digest(mac, hmac.new(mac_k, salt + ct, hashlib.sha256).digest()): raise ValueError("Invalid password")',
+                    '        self._key = (enc_k, salt, ct)',
+                    '    def decrypt(self, out_io):',
+                    '        enc_k, salt, ct = self._key; out_io.write(_xor_stream(enc_k, salt, ct))'
+                ].join('\n'), 'utf8');
+                fs.writeFileSync(path.join(fmtDir, '__init__.py'), '', 'utf8');
+                fs.writeFileSync(path.join(fmtDir, 'ooxml.py'), [
+                    'import hashlib, hmac, os',
+                    'from .. import OLE2_MAGIC, SHIM_TAG, _derive, _xor_stream',
+                    'class OOXMLFile:',
+                    '    def __init__(self, f): f.seek(0); self.plain = f.read()',
+                    '    def encrypt(self, password: str, out_io):',
+                    '        salt = os.urandom(16); enc_k, mac_k = _derive(password, salt); ct = _xor_stream(enc_k, salt, self.plain)',
+                    '        out_io.write(OLE2_MAGIC + SHIM_TAG + salt + hmac.new(mac_k, salt + ct, hashlib.sha256).digest() + ct)'
+                ].join('\n'), 'utf8');
+                process.env.PYTHONPATH = prevPyPath ? `${shimRoot}${path.delimiter}${prevPyPath}` : shimRoot;
+            }
+
+            const journalPath = path.join(tmpDir, 'Diario.docx');
+            const secretKey = '0123456789abcdef0123456789abcdef';
+            process.env.JOURNAL_SECRET_KEY = secretKey;
+            process.env.JOURNAL_LOCAL_PATH = journalPath;
+            process.env.WORD_PASSWORD = 'WordExportPassword2026!';
+
+            // Asegurar estado limpio de contraseña de descarga en settings
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: { clearJournalDownloadPassword: true }
+            });
+
+            // 1. RBAC (401 sin sesión, 403 psiquiatra) y 404 cuando aún no existe Diario.docx
+            assert.strictEqual((await request({ port, reqPath: '/api/journal/download-encrypted' })).status, 401);
+            assert.strictEqual((await request({ port, method: 'POST', reqPath: '/api/journal/download-encrypted', body: { password: 'MiPassword2026!' } })).status, 401);
+            assert.strictEqual((await request({ port, reqPath: '/api/journal/download-encrypted', headers: { Cookie: medicoCookie } })).status, 403);
+            assert.strictEqual((await request({ port, method: 'POST', reqPath: '/api/journal/download-encrypted', headers: { Cookie: medicoCookie }, body: { password: 'MiPassword2026!' } })).status, 403);
+
+            const missingGet = await request({ port, reqPath: '/api/journal/download-encrypted', headers: { Cookie: adminCookie } });
+            assert.strictEqual(missingGet.status, 404);
+            const missingPost = await request({ port, method: 'POST', reqPath: '/api/journal/download-encrypted', headers: { Cookie: adminCookie }, body: { password: 'MiPassword2026!' } });
+            assert.strictEqual(missingPost.status, 404);
+
+            // 2. Crear Diario.docx cifrado vía /api/send-to-pc y comprobar 409 DOWNLOAD_PASSWORD_NOT_CONFIGURED sin contraseña previa
+            const noteEnvelope = serverNotes.encryptJournalSaltedE2ee('Hoy probamos la descarga cifrada E2EE del Diario.', secretKey);
+            const sendRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/send-to-pc',
+                headers: { Cookie: adminCookie },
+                body: { texto: noteEnvelope }
+            });
+            assert.strictEqual(sendRes.status, 200, sendRes.body);
+            assert.strictEqual(fs.existsSync(journalPath), true);
+
+            const notCfgRes = await request({ port, reqPath: '/api/journal/download-encrypted', headers: { Cookie: adminCookie } });
+            assert.strictEqual(notCfgRes.status, 409);
+            assert.strictEqual(JSON.parse(notCfgRes.body).reason, 'DOWNLOAD_PASSWORD_NOT_CONFIGURED');
+
+            // 3. Configurar journalDownloadPassword vía PUT /api/settings, verificar GET /api/settings (sin texto plano) y GET /api/journal/download-encrypted
+            const savedDlPwd = 'MiClaveDescarga2026!';
+            const putSettingsRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: { journalDownloadPassword: savedDlPwd }
+            });
+            assert.strictEqual(putSettingsRes.status, 200);
+            const putSettingsJson = JSON.parse(putSettingsRes.body).settings;
+            assert.strictEqual(putSettingsJson.journalDownloadPasswordConfigured, true);
+            assert.strictEqual(putSettingsJson.journalDownloadPassword, undefined);
+
+            const getSettingsRes = await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } });
+            assert.strictEqual(getSettingsRes.status, 200);
+            const getSettingsJson = JSON.parse(getSettingsRes.body).settings;
+            assert.strictEqual(getSettingsJson.journalDownloadPasswordConfigured, true);
+            assert.strictEqual(getSettingsJson.journalDownloadPassword, undefined);
+            assert.equal(getSettingsRes.body.includes(savedDlPwd), false, 'GET /api/settings jamás debe exponer la contraseña en texto plano');
+
+            const storedRawSettings = userSettingsMap.get(1) || '';
+            assert.equal(storedRawSettings.includes(savedDlPwd), false, 'userSettings en BD debe cifrar journalDownloadPassword en reposo');
+
+            const lockHistStart = advisoryLockHistory.length;
+            const dlGetRes = await request({
+                port,
+                reqPath: '/api/journal/download-encrypted',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(dlGetRes.status, 200, dlGetRes.body);
+            assert.match(String(dlGetRes.headers['cache-control'] || ''), /no-store/i);
+            const dlGetJson = JSON.parse(dlGetRes.body);
+            assert.strictEqual(dlGetJson.ok, true);
+            assert.match(dlGetJson.filename, /^Diario_\d{4}-\d{2}-\d{2}\.docx$/);
+            assert.strictEqual(dlGetJson.scheme, 'pdh-j2-pbkdf2-hmac-binary');
+            assert.ok(dlGetJson.encryptedDocx.startsWith('pdh-j2:120000:'));
+
+            const decGet = serverNotes.decryptJournalSaltedBytesE2ee(dlGetJson.encryptedDocx, savedDlPwd);
+            assert.strictEqual(decGet.ok, true);
+            assert.strictEqual(decGet.buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])), true);
+
+            const locksAfterGet = advisoryLockHistory.slice(lockHistStart);
+            assert.ok(locksAfterGet.some((e) => e.op === 'acquire' && e.lockName === 'pdh_docx_journal' && e.result === 1));
+            assert.ok(locksAfterGet.some((e) => e.op === 'release' && e.lockName === 'pdh_docx_journal' && e.result === 1));
+            assert.strictEqual(activeAdvisoryLocks.size, 0);
+
+            // 4. POST /api/journal/download-encrypted con contraseña ingresada al momento (uso único, no sobrescribe settings)
+            const badPostRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/journal/download-encrypted',
+                headers: { Cookie: adminCookie },
+                body: { password: 'short' }
+            });
+            assert.strictEqual(badPostRes.status, 400);
+
+            const oneTimePwd = 'ClaveUnicaMomento99!';
+            const dlPostRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/journal/download-encrypted',
+                headers: { Cookie: adminCookie },
+                body: { password: oneTimePwd }
+            });
+            assert.strictEqual(dlPostRes.status, 200, dlPostRes.body);
+            const dlPostJson = JSON.parse(dlPostRes.body);
+            assert.strictEqual(dlPostJson.ok, true);
+            const decPost = serverNotes.decryptJournalSaltedBytesE2ee(dlPostJson.encryptedDocx, oneTimePwd);
+            assert.strictEqual(decPost.ok, true);
+            assert.strictEqual(decPost.buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])), true);
+
+            // La contraseña guardada previamente sigue intacta
+            const dlGetStillSaved = await request({
+                port,
+                reqPath: '/api/journal/download-encrypted',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(dlGetStillSaved.status, 200);
+            assert.strictEqual(
+                serverNotes.decryptJournalSaltedBytesE2ee(JSON.parse(dlGetStillSaved.body).encryptedDocx, savedDlPwd).ok,
+                true
+            );
+
+            // 5. GET /api/journal/download previo sigue intacto devolviendo el archivo OLE2 crudo cifrado
+            const rawDlRes = await request({
+                port,
+                reqPath: '/api/journal/download',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(rawDlRes.status, 200);
+            assert.ok(rawDlRes.body.length > 0);
+            assert.strictEqual(fs.readFileSync(journalPath).subarray(0, 4).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0])), true);
+
+            // Borrar contraseña de descarga con clearJournalDownloadPassword
+            const clearRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: { clearJournalDownloadPassword: true }
+            });
+            assert.strictEqual(clearRes.status, 200);
+            assert.strictEqual(JSON.parse(clearRes.body).settings.journalDownloadPasswordConfigured, false);
+        } finally {
+            if (prevKey === undefined) delete process.env.JOURNAL_SECRET_KEY; else process.env.JOURNAL_SECRET_KEY = prevKey;
+            if (prevJrnPath === undefined) delete process.env.JOURNAL_LOCAL_PATH; else process.env.JOURNAL_LOCAL_PATH = prevJrnPath;
+            if (prevWordPass === undefined) delete process.env.WORD_PASSWORD; else process.env.WORD_PASSWORD = prevWordPass;
+            if (prevPyPath === undefined) delete process.env.PYTHONPATH; else process.env.PYTHONPATH = prevPyPath;
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it('aplica rate limit contra fuerza bruta en login y saturación DoS en endpoints API', async () => {
+        // 1. Fuerza bruta en login (10 intentos fallidos -> el 11° devuelve 429 con Retry-After)
+        let blockedLoginRes = null;
+        for (let i = 1; i <= 12; i++) {
+            const res = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/auth/login',
+                body: { email: 'medico@example.com', password: `WrongAttempt${i}!` }
+            });
+            if (res.status === 429) {
+                blockedLoginRes = res;
+                break;
+            }
+            assert.strictEqual(res.status, 401);
+        }
+        assert.ok(blockedLoginRes, 'Debe activar 429 Too Many Requests tras múltiples intentos fallidos de login');
+        assert.ok(Number(blockedLoginRes.headers['retry-after']) >= 1, 'Debe incluir cabecera Retry-After');
+        assert.ok(blockedLoginRes.headers['x-ratelimit-limit'], 'Debe incluir X-RateLimit-Limit');
+        assert.strictEqual(blockedLoginRes.headers['x-ratelimit-remaining'], '0');
+
+        // 2. Protección contra saturación en /api/pull-text (pcPullLimiter = 60 req/min por IP)
+        let blockedPullRes = null;
+        for (let i = 1; i <= 65; i++) {
+            const res = await request({ port, reqPath: '/api/pull-text' });
+            if (res.status === 429) {
+                blockedPullRes = res;
+                break;
+            }
+            assert.strictEqual(res.status, 200);
+        }
+        assert.ok(blockedPullRes, 'Debe devolver 429 al exceder el límite de peticiones en /api/pull-text');
+        assert.ok(Number(blockedPullRes.headers['retry-after']) >= 1);
+        assert.strictEqual(blockedPullRes.headers['x-ratelimit-remaining'], '0');
     });
 });

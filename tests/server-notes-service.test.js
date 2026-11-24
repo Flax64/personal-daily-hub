@@ -20,6 +20,88 @@ function resolvePythonCmd() {
     return null;
 }
 
+function ensureMsoffcryptoTestEnv(pyCmd, tmpDir) {
+    const probe = spawnSync(pyCmd, ['-c', 'import msoffcrypto'], { encoding: 'utf8' });
+    if (!probe.error && probe.status === 0) {
+        return { env: process.env, shimmed: false };
+    }
+    const shimRoot = path.join(tmpDir, 'py_shim');
+    const pkgDir = path.join(shimRoot, 'msoffcrypto');
+    const fmtDir = path.join(pkgDir, 'format');
+    fs.mkdirSync(fmtDir, { recursive: true });
+
+    const initPy = [
+        'import hashlib, hmac, io',
+        'OLE2_MAGIC = b"\\xd0\\xcf\\x11\\xe0\\xa1\\xb1\\x1a\\xe1"',
+        'SHIM_TAG = b"PDH_SHIM_OLE2_V1"',
+        'def _derive(pwd: str, salt: bytes):',
+        '    d = hashlib.pbkdf2_hmac("sha256", pwd.encode("utf-8"), salt, 10000, 64)',
+        '    return d[:32], d[32:]',
+        'def _xor_stream(enc_key: bytes, salt: bytes, data: bytes) -> bytes:',
+        '    out = bytearray(len(data))',
+        '    blk = 0',
+        '    pos = 0',
+        '    while pos < len(data):',
+        '        ks = hashlib.sha256(enc_key + salt + blk.to_bytes(4, "big")).digest()',
+        '        chunk = data[pos:pos+32]',
+        '        for i, b in enumerate(chunk):',
+        '            out[pos + i] = b ^ ks[i]',
+        '        pos += len(chunk)',
+        '        blk += 1',
+        '    return bytes(out)',
+        'class OfficeFile:',
+        '    def __init__(self, f):',
+        '        f.seek(0)',
+        '        self.raw = f.read()',
+        '        self._key = None',
+        '    def is_encrypted(self):',
+        '        return len(self.raw) >= 8 + len(SHIM_TAG) + 48 and self.raw[:8] == OLE2_MAGIC and self.raw[8:8+len(SHIM_TAG)] == SHIM_TAG',
+        '    def load_key(self, password="", verify_password=True):',
+        '        if not self.is_encrypted():',
+        '            raise ValueError("Not encrypted")',
+        '        off = 8 + len(SHIM_TAG)',
+        '        salt = self.raw[off:off+16]',
+        '        mac = self.raw[off+16:off+48]',
+        '        ct = self.raw[off+48:]',
+        '        enc_k, mac_k = _derive(password, salt)',
+        '        exp = hmac.new(mac_k, salt + ct, hashlib.sha256).digest()',
+        '        if verify_password and not hmac.compare_digest(mac, exp):',
+        '            raise ValueError("Invalid password")',
+        '        self._key = (enc_k, salt, ct)',
+        '    def decrypt(self, out_io):',
+        '        if not self._key:',
+        '            raise ValueError("Key not loaded")',
+        '        enc_k, salt, ct = self._key',
+        '        out_io.write(_xor_stream(enc_k, salt, ct))',
+    ].join('\n');
+
+    const ooxmlPy = [
+        'import hashlib, hmac, os',
+        'from .. import OLE2_MAGIC, SHIM_TAG, _derive, _xor_stream',
+        'class OOXMLFile:',
+        '    def __init__(self, f):',
+        '        f.seek(0)',
+        '        self.plain = f.read()',
+        '    def encrypt(self, password: str, out_io):',
+        '        salt = os.urandom(16)',
+        '        enc_k, mac_k = _derive(password, salt)',
+        '        ct = _xor_stream(enc_k, salt, self.plain)',
+        '        mac = hmac.new(mac_k, salt + ct, hashlib.sha256).digest()',
+        '        out_io.write(OLE2_MAGIC + SHIM_TAG + salt + mac + ct)',
+    ].join('\n');
+
+    fs.writeFileSync(path.join(pkgDir, '__init__.py'), initPy, 'utf8');
+    fs.writeFileSync(path.join(fmtDir, '__init__.py'), '', 'utf8');
+    fs.writeFileSync(path.join(fmtDir, 'ooxml.py'), ooxmlPy, 'utf8');
+
+    const prevPyPath = process.env.PYTHONPATH || '';
+    const nextPyPath = prevPyPath ? `${shimRoot}${path.delimiter}${prevPyPath}` : shimRoot;
+    return {
+        env: { ...process.env, PYTHONPATH: nextPyPath },
+        shimmed: true
+    };
+}
+
 describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubuntu Server)', () => {
     it('cifra y descifra sobres E2EE compatibles con frontend.js (AES-256-CBC 32 bytes) y rechaza llaves erróneas', () => {
         const key32 = '1234567890abcdef1234567890abcdef';
@@ -1274,6 +1356,137 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
             assert.strictEqual(parsedReal.ok, true);
             assert.strictEqual(parsedReal.counts.vocabulary, 1);
             assert.strictEqual(parsedReal.counts.music, 2);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it('cifra y descifra bytes binarios .docx con pdh-j2 + contraseña libre de usuario y exporta Diario.docx cifrado estrictamente en RAM', async () => {
+        const pyCmd = resolvePythonCmd();
+        assert.ok(pyCmd, 'Python 3 debe estar disponible');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-jrn-export-'));
+        try {
+            // 1. Round-trip binario encryptJournalSaltedBytesE2ee <-> decryptJournalSaltedBytesE2ee con contraseña libre (distinta de 32 chars)
+            const docxGen = spawnSync(
+                pyCmd,
+                [
+                    '-c',
+                    [
+                        'import base64, sys',
+                        `sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'lib'))})`,
+                        'import docx_writer as dw',
+                        'b = dw._build_minimal_docx_bytes(mode="journal")',
+                        'b, _ = dw._append_journal_entry_to_docx_bytes(b, "Entrada secreta binaria 2026", "2026-11-24")',
+                        'print(base64.b64encode(b).decode("ascii"))'
+                    ].join('\n')
+                ],
+                { encoding: 'utf8' }
+            );
+            assert.strictEqual(docxGen.status, 0, docxGen.stderr || docxGen.stdout);
+            const sampleDocxBuf = Buffer.from(docxGen.stdout.trim(), 'base64');
+            assert.strictEqual(sampleDocxBuf.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])), true);
+
+            const userPwd = 'MiClavePersonal2026!';
+            assert.notStrictEqual(userPwd.length, 32);
+            const enc1 = serverNotes.encryptJournalSaltedBytesE2ee(sampleDocxBuf, userPwd);
+            const enc2 = serverNotes.encryptJournalSaltedBytesE2ee(sampleDocxBuf, userPwd);
+            assert.notStrictEqual(enc1, enc2);
+
+            const p1 = enc1.split(':');
+            const p2 = enc2.split(':');
+            assert.strictEqual(p1[0], 'pdh-j2');
+            assert.strictEqual(p1[1], '120000');
+            assert.notStrictEqual(p1[2], p2[2], 'Salt único por descarga');
+            assert.notStrictEqual(p1[3], p2[3], 'IV único por descarga');
+
+            const decOk = serverNotes.decryptJournalSaltedBytesE2ee(enc1, userPwd);
+            assert.strictEqual(decOk.ok, true);
+            assert.strictEqual(Buffer.compare(decOk.buffer, sampleDocxBuf), 0);
+            assert.strictEqual(decOk.buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])), true);
+
+            // Rechazo con contraseña incorrecta y ante alteración de 1 byte en MAC o ciphertext
+            const badPwd = serverNotes.decryptJournalSaltedBytesE2ee(enc1, 'ClaveIncorrecta999');
+            assert.strictEqual(badPwd.ok, false);
+            assert.strictEqual(badPwd.reason, 'MAC_MISMATCH');
+
+            const flipChar = (s, pos = 0) => (s[pos] === 'a' ? 'b' : 'a') + s.slice(pos + 1);
+            const tamperedMac = [p1[0], p1[1], p1[2], p1[3], flipChar(p1[4], 0), p1[5]].join(':');
+            const tamperedCt = [p1[0], p1[1], p1[2], p1[3], p1[4], flipChar(p1[5], 0)].join(':');
+            assert.strictEqual(serverNotes.decryptJournalSaltedBytesE2ee(tamperedMac, userPwd).ok, false);
+            assert.strictEqual(serverNotes.decryptJournalSaltedBytesE2ee(tamperedCt, userPwd).ok, false);
+
+            assert.throws(() => serverNotes.encryptJournalSaltedBytesE2ee(sampleDocxBuf, 'short7'));
+            assert.throws(() => serverNotes.encryptJournalSaltedBytesE2ee(sampleDocxBuf, 'x'.repeat(129)));
+            const lowIter = serverNotes.encryptJournalSaltedBytesE2ee(sampleDocxBuf, userPwd, { iterations: 99999 });
+            assert.strictEqual(serverNotes.decryptJournalSaltedBytesE2ee(lowIter, userPwd).reason, 'INVALID_ITERATIONS');
+
+            // 2. exportJournalDocxEncryptedForClient sobre Diario.docx cifrado con msoffcrypto (real o shim)
+            const { env: pyEnv } = ensureMsoffcryptoTestEnv(pyCmd, tmpDir);
+            const journalPath = path.join(tmpDir, 'Diario.docx');
+            const wordPassword = 'WordMasterPassword2026!';
+            const testEnv = { ...pyEnv, JOURNAL_LOCAL_PATH: journalPath, WORD_PASSWORD: wordPassword };
+
+            const writeRes = await serverNotes.saveJournalNoteLocalEncrypted({
+                plainText: 'Nota privada verificada en RAM.',
+                wordPassword,
+                targetDateIso: '2026-11-24',
+                env: testEnv,
+                rootDir: tmpDir
+            });
+            assert.strictEqual(writeRes.ok, true, JSON.stringify(writeRes));
+
+            const diskBefore = fs.readFileSync(journalPath);
+            assert.strictEqual(
+                diskBefore.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])),
+                true,
+                'Diario.docx en disco debe permanecer cifrado OLE2'
+            );
+
+            const exportRes = await serverNotes.exportJournalDocxEncryptedForClient({
+                wordPassword,
+                downloadPassword: userPwd,
+                env: testEnv,
+                rootDir: tmpDir
+            });
+            assert.strictEqual(exportRes.ok, true, JSON.stringify(exportRes));
+            assert.ok(exportRes.encryptedDocx.startsWith('pdh-j2:120000:'));
+            assert.ok(exportRes.sizeBytes > 100);
+
+            const decExport = serverNotes.decryptJournalSaltedBytesE2ee(exportRes.encryptedDocx, userPwd);
+            assert.strictEqual(decExport.ok, true);
+            assert.strictEqual(serverNotes.isValidDocxZipBuffer(decExport.buffer), true);
+
+            // Verificar que word/document.xml contenga la nota guardada
+            const xmlInspect = spawnSync(
+                pyCmd,
+                [
+                    '-c',
+                    'import base64, io, sys, zipfile; zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(sys.stdin.read())), "r"); print(zf.read("word/document.xml").decode("utf-8"))'
+                ],
+                { input: decExport.buffer.toString('base64'), encoding: 'utf8' }
+            );
+            assert.strictEqual(xmlInspect.status, 0, xmlInspect.stderr);
+            assert.ok(xmlInspect.stdout.includes('Nota privada verificada en RAM.'));
+
+            // Verificar que el archivo en disco sigue cifrado OLE2 y sin copias temporales en tmpDir
+            const diskAfter = fs.readFileSync(journalPath);
+            assert.strictEqual(
+                diskAfter.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])),
+                true
+            );
+            const entriesInDir = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.docx'));
+            assert.deepStrictEqual(entriesInDir, ['Diario.docx']);
+
+            // Error con WORD_PASSWORD incorrecto
+            const wrongWordRes = await serverNotes.exportJournalDocxEncryptedForClient({
+                wordPassword: 'WrongWordPassword!',
+                downloadPassword: userPwd,
+                env: testEnv,
+                rootDir: tmpDir
+            });
+            assert.strictEqual(wrongWordRes.ok, false);
+            assert.strictEqual(wrongWordRes.reason, 'WRONG_PASSWORD');
         } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }

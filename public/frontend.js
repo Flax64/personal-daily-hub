@@ -1231,6 +1231,212 @@ async function encriptarDiarioSaltedE2EE(textoPlano, llaveTexto) {
     return `pdh-j2:${iterations}:${saltHex}:${ivHex}:${macHex}:${cipherB64}`;
 }
 
+function isJournalDownloadPwdValidClient(password) {
+    if (typeof password !== 'string') return false;
+    if (password.length < 8 || password.length > 128) return false;
+    if (password.trim().length === 0) return false;
+    if (/[\x00-\x1F\x7F]/.test(password)) return false;
+    return true;
+}
+
+async function desencriptarDiarioBytesSaltedE2EE(sobreCifrado, password) {
+    if (typeof sobreCifrado !== 'string' || !sobreCifrado.trim()) {
+        const err = new Error('Invalid encrypted journal envelope.');
+        err.code = 'INVALID_ENVELOPE';
+        throw err;
+    }
+    const parts = sobreCifrado.trim().split(':');
+    if (parts.length !== 6 || parts[0] !== 'pdh-j2') {
+        const err = new Error('Invalid encrypted journal envelope format.');
+        err.code = 'INVALID_ENVELOPE';
+        throw err;
+    }
+    const [, iterStr, saltHex, ivHex, macHex, cipherB64] = parts;
+    if (
+        !/^\d{1,7}$/.test(iterStr)
+        || !/^[0-9a-f]{32}$/.test(saltHex)
+        || !/^[0-9a-f]{32}$/.test(ivHex)
+        || !/^[0-9a-f]{64}$/.test(macHex)
+        || !/^[A-Za-z0-9+/]+={0,2}$/.test(cipherB64)
+    ) {
+        const err = new Error('Invalid encrypted journal envelope fields.');
+        err.code = 'INVALID_ENVELOPE';
+        throw err;
+    }
+    const iterations = Number(iterStr);
+    if (!Number.isSafeInteger(iterations) || iterations < 100000 || iterations > 600000 || String(iterations) !== iterStr) {
+        const err = new Error('Unsupported PBKDF2 iteration count in encrypted journal.');
+        err.code = 'INVALID_ITERATIONS';
+        throw err;
+    }
+    if (!isJournalDownloadPwdValidClient(password)) {
+        const err = new Error('Download password must be between 8 and 128 characters.');
+        err.code = 'INVALID_PASSWORD';
+        throw err;
+    }
+
+    const fromHex = (hex) => {
+        const out = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < out.length; i += 1) {
+            out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        }
+        return out;
+    };
+    const fromBase64 = (b64) => {
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i += 1) {
+            out[i] = bin.charCodeAt(i);
+        }
+        return out;
+    };
+    const timingSafeEqualBytes = (a, b) => {
+        if (!a || !b || a.length !== b.length) return false;
+        let diff = 0;
+        for (let i = 0; i < a.length; i += 1) {
+            diff |= (a[i] ^ b[i]);
+        }
+        return diff === 0;
+    };
+
+    const saltBytes = fromHex(saltHex);
+    const ivBytes = fromHex(ivHex);
+    const providedMacBytes = fromHex(macHex);
+    const cipherBytes = fromBase64(cipherB64);
+    if (saltBytes.length !== 16 || ivBytes.length !== 16 || providedMacBytes.length !== 32 || cipherBytes.length === 0 || cipherBytes.length % 16 !== 0) {
+        const err = new Error('Encrypted journal ciphertext has invalid length.');
+        err.code = 'INVALID_CIPHERTEXT';
+        throw err;
+    }
+
+    const authPayload = `pdh-j2:${iterStr}:${saltHex}:${ivHex}:${cipherB64}`;
+    let docxBytes = null;
+
+    const hasSubtle = typeof window !== 'undefined'
+        && window.crypto
+        && window.crypto.subtle
+        && typeof TextEncoder !== 'undefined';
+
+    if (hasSubtle) {
+        let subtleAvailable = true;
+        try {
+            const encoder = new TextEncoder();
+            const baseKey = await window.crypto.subtle.importKey(
+                'raw',
+                encoder.encode(password),
+                { name: 'PBKDF2' },
+                false,
+                ['deriveBits']
+            );
+            const derivedBits = await window.crypto.subtle.deriveBits(
+                { name: 'PBKDF2', salt: saltBytes, iterations, hash: 'SHA-256' },
+                baseKey,
+                512
+            );
+            const derivedBytes = new Uint8Array(derivedBits);
+            try {
+                const macKey = await window.crypto.subtle.importKey(
+                    'raw',
+                    derivedBytes.slice(32, 64),
+                    { name: 'HMAC', hash: 'SHA-256' },
+                    false,
+                    ['sign']
+                );
+                const expectedMacBuf = await window.crypto.subtle.sign('HMAC', macKey, encoder.encode(authPayload));
+                if (!timingSafeEqualBytes(providedMacBytes, new Uint8Array(expectedMacBuf))) {
+                    const err = new Error('Incorrect password: HMAC verification failed and no file was downloaded.');
+                    err.code = 'MAC_MISMATCH';
+                    throw err;
+                }
+                const encKey = await window.crypto.subtle.importKey(
+                    'raw',
+                    derivedBytes.slice(0, 32),
+                    { name: 'AES-CBC' },
+                    false,
+                    ['decrypt']
+                );
+                const plainBuf = await window.crypto.subtle.decrypt(
+                    { name: 'AES-CBC', iv: ivBytes },
+                    encKey,
+                    cipherBytes
+                );
+                docxBytes = new Uint8Array(plainBuf);
+            } finally {
+                derivedBytes.fill(0);
+            }
+        } catch (subtleErr) {
+            if (subtleErr && subtleErr.code === 'MAC_MISMATCH') {
+                throw subtleErr;
+            }
+            if (subtleErr && subtleErr.name === 'OperationError') {
+                const err = new Error('Could not decrypt journal file with that password.');
+                err.code = 'DECRYPT_FAILED';
+                throw err;
+            }
+            subtleAvailable = false;
+        }
+        if (subtleAvailable && docxBytes) {
+            if (docxBytes.length < 64 || docxBytes[0] !== 0x50 || docxBytes[1] !== 0x4b || docxBytes[2] !== 0x03 || docxBytes[3] !== 0x04) {
+                const err = new Error('Decrypted file is not a valid Word (.docx) document.');
+                err.code = 'CORRUPT_DOCX';
+                throw err;
+            }
+            return docxBytes;
+        }
+    }
+
+    if (typeof CryptoJS === 'undefined') {
+        throw new Error('Local CryptoJS library failed to load. Reload the page.');
+    }
+
+    const saltWA = CryptoJS.enc.Hex.parse(saltHex);
+    const ivWA = CryptoJS.enc.Hex.parse(ivHex);
+    const derivedWA = CryptoJS.PBKDF2(CryptoJS.enc.Utf8.parse(password), saltWA, {
+        keySize: 16,
+        iterations,
+        hasher: CryptoJS.algo.SHA256
+    });
+    const encKeyWA = CryptoJS.lib.WordArray.create(derivedWA.words.slice(0, 8), 32);
+    const macKeyWA = CryptoJS.lib.WordArray.create(derivedWA.words.slice(8, 16), 32);
+    const expectedMacHex = CryptoJS.HmacSHA256(CryptoJS.enc.Utf8.parse(authPayload), macKeyWA)
+        .toString(CryptoJS.enc.Hex)
+        .toLowerCase();
+    if (!timingSafeEqualBytes(providedMacBytes, fromHex(expectedMacHex))) {
+        const err = new Error('Incorrect password: HMAC verification failed and no file was downloaded.');
+        err.code = 'MAC_MISMATCH';
+        throw err;
+    }
+
+    const cipherParams = CryptoJS.lib.CipherParams.create({
+        ciphertext: CryptoJS.enc.Base64.parse(cipherB64)
+    });
+    const decryptedWA = CryptoJS.AES.decrypt(cipherParams, encKeyWA, {
+        iv: ivWA,
+        mode: CryptoJS.mode.CBC,
+        padding: CryptoJS.pad.Pkcs7
+    });
+    const sigBytes = decryptedWA ? decryptedWA.sigBytes : 0;
+    if (!Number.isFinite(sigBytes) || sigBytes <= 0) {
+        const err = new Error('Could not decrypt journal file with that password.');
+        err.code = 'DECRYPT_FAILED';
+        throw err;
+    }
+    docxBytes = new Uint8Array(sigBytes);
+    const words = decryptedWA.words;
+    for (let i = 0; i < sigBytes; i += 1) {
+        docxBytes[i] = (words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
+    }
+    if (docxBytes.length < 64 || docxBytes[0] !== 0x50 || docxBytes[1] !== 0x4b || docxBytes[2] !== 0x03 || docxBytes[3] !== 0x04) {
+        const err = new Error('Decrypted file is not a valid Word (.docx) document.');
+        err.code = 'CORRUPT_DOCX';
+        throw err;
+    }
+    return docxBytes;
+}
+if (typeof window !== 'undefined') {
+    window.desencriptarDiarioBytesSaltedE2EE = desencriptarDiarioBytesSaltedE2EE;
+}
+
 function desencriptarTextoE2EE(textoCifrado, llaveTexto) {
     if (typeof CryptoJS === 'undefined') {
         throw new Error('Local CryptoJS library failed to load. Reload the page.');
@@ -13411,7 +13617,15 @@ function initGlobalNoAutofillGuard() {
             const isSensitive =
                 el.hasAttribute('data-no-autofill') ||
                 el.hasAttribute('data-secret-mask') ||
-                ['medicoEmail', 'medicoPassword', 'setGeminiApiKey', 'e2eeKeyInput'].includes(el.id);
+                [
+                    'medicoEmail',
+                    'medicoPassword',
+                    'setGeminiApiKey',
+                    'e2eeKeyInput',
+                    'setJournalDownloadPassword',
+                    'journalDownloadPasswordInput',
+                    'journalDownloadPasswordConfirm'
+                ].includes(el.id);
 
             if (isSensitive) {
                 armSensitiveField(el);
@@ -14248,6 +14462,9 @@ function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false } = {}) 
     if (typeof renderCrisisTypePills === 'function') {
         renderCrisisTypePills();
     }
+    if (typeof updateJournalDownloadPasswordStatusUI === 'function') {
+        updateJournalDownloadPasswordStatusUI();
+    }
 
     if (syncAgendaDefaults) {
         if (settings.defaultAgendaCategory) {
@@ -14287,6 +14504,19 @@ function updateE2eeKeyStatusUI() {
             isReady ? tUi('E2EE Key Ready', 'Llave E2EE Lista') : tUi('Set 32-char Key', 'Definir Llave 32 chars')
         );
     });
+}
+
+function updateJournalDownloadPasswordStatusUI() {
+    const isConfigured = Boolean(currentSettings?.journalDownloadPasswordConfigured);
+    const statusEl = document.getElementById('settingsJournalDownloadPwdStatus');
+    if (statusEl) {
+        statusEl.textContent = isConfigured ? tUi('Configured', 'Configurada') : tUi('Not configured', 'Sin configurar');
+        statusEl.style.color = isConfigured ? '#16a34a' : '';
+    }
+    const clearBtn = document.getElementById('btnClearJournalDownloadPassword');
+    if (clearBtn) {
+        clearBtn.disabled = !isConfigured;
+    }
 }
 
 function setSettingsBanner(type, message) {
@@ -14396,6 +14626,19 @@ function populateSettingsForm(settings = {}) {
             : 'No Gemini key saved yet (Instant built-in 0-RAM Korean Romanization & EN/KR analyzer active).';
     }
 
+    const dlPwdEl = document.getElementById('setJournalDownloadPassword');
+    if (dlPwdEl) {
+        dlPwdEl.value = '';
+        dlPwdEl.dataset.pendingClear = '0';
+        delete dlPwdEl.dataset.userEdited;
+        dlPwdEl.readOnly = true;
+        if (typeof dlPwdEl.setAttribute === 'function') {
+            dlPwdEl.setAttribute('readonly', 'readonly');
+        }
+        resetPasswordToggles();
+    }
+
+    updateJournalDownloadPasswordStatusUI();
     updateE2eeKeyStatusUI();
     updateTransportStatusBadges();
 }
@@ -14461,6 +14704,15 @@ function collectSettingsFormPayload() {
         payload.clearGeminiApiKey = true;
     } else if (typedGeminiKey) {
         payload.geminiApiKey = typedGeminiKey;
+    }
+
+    const dlPwdInput = document.getElementById('setJournalDownloadPassword');
+    const typedDlPwd = String(dlPwdInput?.value || '');
+    const pendingClearDlPwd = dlPwdInput?.dataset?.pendingClear === '1';
+    if (pendingClearDlPwd) {
+        payload.clearJournalDownloadPassword = true;
+    } else if (typedDlPwd) {
+        payload.journalDownloadPassword = typedDlPwd;
     }
 
     return payload;
@@ -14686,6 +14938,92 @@ function initSettingsHandlers() {
             updateE2eeKeyStatusUI();
             setSettingsBanner('ok', tUi('Local E2EE key cleared from this browser.', 'Llave E2EE local eliminada de este navegador.'));
             showToast('info', tUi('Local E2EE key removed from this browser.', 'Llave E2EE local removida de este navegador.'));
+        });
+    }
+
+    const dlPwdInput = document.getElementById('setJournalDownloadPassword');
+    const btnSaveDlPwd = document.getElementById('btnSaveJournalDownloadPassword');
+    const btnClearDlPwd = document.getElementById('btnClearJournalDownloadPassword');
+    if (dlPwdInput) {
+        dlPwdInput.addEventListener('input', () => {
+            if (dlPwdInput.value) {
+                delete dlPwdInput.dataset.pendingClear;
+            }
+        });
+    }
+    if (btnSaveDlPwd) {
+        btnSaveDlPwd.addEventListener('click', () => {
+            const candidate = String(dlPwdInput?.value || '');
+            if (!isJournalDownloadPwdValidClient(candidate)) {
+                const msg = tUi(
+                    'Journal download password must be 8–128 characters without control characters.',
+                    'La contraseña de descarga del Diario debe tener entre 8 y 128 caracteres sin caracteres de control.'
+                );
+                setSettingsBanner('err', msg);
+                showToast('err', msg);
+                return;
+            }
+            runWithButtonLock(btnSaveDlPwd, async () => {
+                try {
+                    const resData = await submitMutationRequest({
+                        url: '/api/settings',
+                        method: 'PUT',
+                        scopeKey: 'settings-journal-dl-pwd-save',
+                        signature: `save-jdl:${candidate.length}:${Date.now()}`,
+                        buildBody: () => ({ journalDownloadPassword: candidate }),
+                        parseJson: true
+                    });
+                    if (resData && resData.settings) {
+                        aplicarSettingsEnEstado(resData.settings);
+                        populateSettingsForm(resData.settings);
+                    }
+                    const okMsg = tUi('Journal download password saved securely.', 'Contraseña de descarga del Diario guardada de forma segura.');
+                    setSettingsBanner('ok', okMsg);
+                    showToast('ok', okMsg);
+                } catch (err) {
+                    const errMsg = tServer(err.message || 'Error saving download password.');
+                    setSettingsBanner('err', errMsg);
+                    showToast('err', errMsg);
+                }
+            }, { loadingText: tUi('Saving...', 'Guardando...') });
+        });
+    }
+    if (btnClearDlPwd) {
+        btnClearDlPwd.addEventListener('click', async () => {
+            if (!currentSettings?.journalDownloadPasswordConfigured) return;
+            const ok = await openConfirmDialog({
+                title: tUi('Remove Download Password?', '¿Borrar contraseña de descarga?'),
+                message: tUi(
+                    'Remove the saved journal download password from your account? Next time you download Diario.docx you will be asked to enter one.',
+                    '¿Quitar la contraseña de descarga del Diario guardada en tu cuenta? La próxima vez que descargues Diario.docx se te pedirá una.'
+                ),
+                confirmText: tUi('Clear password', 'Borrar contraseña'),
+                danger: true
+            });
+            if (!ok) return;
+            runWithButtonLock(btnClearDlPwd, async () => {
+                try {
+                    const resData = await submitMutationRequest({
+                        url: '/api/settings',
+                        method: 'PUT',
+                        scopeKey: 'settings-journal-dl-pwd-clear',
+                        signature: `clear-jdl:${Date.now()}`,
+                        buildBody: () => ({ clearJournalDownloadPassword: true }),
+                        parseJson: true
+                    });
+                    if (resData && resData.settings) {
+                        aplicarSettingsEnEstado(resData.settings);
+                        populateSettingsForm(resData.settings);
+                    }
+                    const infoMsg = tUi('Journal download password removed.', 'Contraseña de descarga del Diario eliminada.');
+                    setSettingsBanner('ok', infoMsg);
+                    showToast('info', infoMsg);
+                } catch (err) {
+                    const errMsg = tServer(err.message || 'Error removing download password.');
+                    setSettingsBanner('err', errMsg);
+                    showToast('err', errMsg);
+                }
+            }, { loadingText: tUi('Clearing...', 'Borrando...') });
         });
     }
 
@@ -18878,6 +19216,9 @@ function refreshDynamicLanguageViews() {
     if (typeof renderCrisisTypePills === 'function') {
         renderCrisisTypePills();
     }
+    if (typeof updateJournalDownloadPasswordStatusUI === 'function') {
+        updateJournalDownloadPasswordStatusUI();
+    }
 
     if (activeViewEl) {
         const vid = activeViewEl.id;
@@ -19722,6 +20063,7 @@ function initApp() {
     initKeyboardShortcuts();
     initResponsiveTextareas();
     initVersionHistoryHandlers();
+    initJournalDownloadHandlers();
     if (window.DailyHubI18n && typeof window.DailyHubI18n.onChange === 'function') {
         window.DailyHubI18n.onChange(() => refreshDynamicLanguageViews());
     }
@@ -20162,6 +20504,315 @@ function initStudyNotebookViewer() {
     btnNext?.addEventListener('click', () => {
         if (viewerState.nextOffset === null) return;
         loadStudyPage(viewerState.nextOffset, { pushStack: true });
+    });
+}
+
+function initJournalDownloadHandlers() {
+    const btnDownload = document.getElementById('btnDownloadJournalWord');
+    const modal = document.getElementById('journalDownloadPasswordModal');
+    const form = document.getElementById('journalDownloadPasswordForm');
+    const subtitleEl = document.getElementById('journalDownloadModalSubtitle');
+    const labelEl = document.getElementById('journalDownloadPasswordLabel');
+    const pwdInput = document.getElementById('journalDownloadPasswordInput');
+    const confirmGroup = document.getElementById('journalDownloadConfirmGroup');
+    const confirmInput = document.getElementById('journalDownloadPasswordConfirm');
+    const saveGroup = document.getElementById('journalDownloadSaveGroup');
+    const saveCheck = document.getElementById('journalDownloadSavePassword');
+    const btnSwitchChange = document.getElementById('btnSwitchChangeJournalDownloadPwd');
+    const btnCancelChange = document.getElementById('btnCancelChangeJournalDownloadPwd');
+    const btnClose = document.getElementById('btnCloseJournalDownloadModal');
+    const btnCancel = document.getElementById('btnCancelJournalDownloadModal');
+    const btnConfirm = document.getElementById('btnConfirmJournalDownloadModal');
+
+    if (!btnDownload || !modal || !form || !pwdInput) return;
+
+    let modalMode = 'setup'; // 'configured' | 'setup' | 'change'
+
+    const resetSecretField = (el) => {
+        if (!el) return;
+        el.value = '';
+        delete el.dataset.userEdited;
+        delete el.dataset.programmaticValue;
+        el.readOnly = true;
+        if (typeof el.setAttribute === 'function') {
+            el.setAttribute('readonly', 'readonly');
+        }
+        if (isMaskedSecretInput(el)) {
+            el.type = 'text';
+            el.classList?.remove('is-secret-revealed');
+        }
+        const toggleBtn = document.querySelector(`.password-toggle-btn[data-toggle-password="${el.id}"]`);
+        if (toggleBtn) setPasswordVisibilityState(el, toggleBtn, false);
+    };
+
+    const setModalMode = (nextMode) => {
+        modalMode = nextMode;
+        setInlineBanner('journalDownloadModalStatus', '', '');
+        resetSecretField(pwdInput);
+        resetSecretField(confirmInput);
+
+        if (nextMode === 'configured') {
+            if (confirmGroup) confirmGroup.hidden = true;
+            if (confirmInput) confirmInput.required = false;
+            if (saveGroup) saveGroup.hidden = true;
+            if (btnSwitchChange) btnSwitchChange.hidden = false;
+            if (btnCancelChange) btnCancelChange.hidden = true;
+            if (labelEl) {
+                labelEl.textContent = tUi('Enter your configured download password:', 'Ingresa tu contraseña configurada:');
+            }
+            if (subtitleEl) {
+                subtitleEl.textContent = tUi(
+                    'Your password stays in this browser to decrypt Diario.docx locally after receiving it salted-E2EE encrypted from the server.',
+                    'Tu contraseña permanece en este navegador para descifrar Diario.docx localmente tras recibirlo cifrado con salt desde el servidor.'
+                );
+            }
+        } else if (nextMode === 'change') {
+            if (confirmGroup) confirmGroup.hidden = false;
+            if (confirmInput) confirmInput.required = true;
+            if (saveGroup) saveGroup.hidden = true;
+            if (btnSwitchChange) btnSwitchChange.hidden = true;
+            if (btnCancelChange) btnCancelChange.hidden = false;
+            if (labelEl) {
+                labelEl.textContent = tUi('New configured password (8–128 characters):', 'Nueva contraseña configurada (8–128 caracteres):');
+            }
+            if (subtitleEl) {
+                subtitleEl.textContent = tUi(
+                    'Enter and confirm your new download password. It will update your saved setting and decrypt the downloaded Diario.docx.',
+                    'Ingresa y confirma tu nueva contraseña de descarga. Se actualizará en tus ajustes y descifrará el Diario.docx descargado.'
+                );
+            }
+        } else {
+            if (confirmGroup) confirmGroup.hidden = false;
+            if (confirmInput) confirmInput.required = true;
+            if (saveGroup) saveGroup.hidden = false;
+            if (saveCheck) saveCheck.checked = true;
+            if (btnSwitchChange) btnSwitchChange.hidden = true;
+            if (btnCancelChange) btnCancelChange.hidden = true;
+            if (labelEl) {
+                labelEl.textContent = tUi('New download password (8–128 characters):', 'Nueva contraseña de descarga (8–128 caracteres):');
+            }
+            if (subtitleEl) {
+                subtitleEl.textContent = tUi(
+                    'Choose a password (8–128 characters) to encrypt Diario.docx with salt in transit and decrypt it on this device.',
+                    'Elige una contraseña (8–128 caracteres) para cifrar Diario.docx con salt en tránsito y descifrarlo en este dispositivo.'
+                );
+            }
+        }
+    };
+
+    const closeModal = () => {
+        resetSecretField(pwdInput);
+        resetSecretField(confirmInput);
+        setInlineBanner('journalDownloadModalStatus', '', '');
+        modal.hidden = true;
+        if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+    };
+
+    const openModal = async () => {
+        if (!currentUser || currentUser.rol !== 'admin') return;
+        if (!currentSettings) {
+            try {
+                const res = await fetch('/api/settings', { cache: 'no-store' });
+                if (res.ok) {
+                    const data = await res.json().catch(() => null);
+                    if (data && data.settings) {
+                        aplicarSettingsEnEstado(data.settings);
+                    }
+                }
+            } catch (_) {}
+        }
+        setModalMode(currentSettings?.journalDownloadPasswordConfigured ? 'configured' : 'setup');
+        modal.hidden = false;
+        if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+        setTimeout(() => {
+            pwdInput.readOnly = false;
+            if (typeof pwdInput.removeAttribute === 'function') pwdInput.removeAttribute('readonly');
+            pwdInput.focus();
+        }, 20);
+    };
+
+    btnDownload.addEventListener('click', () => {
+        openModal();
+    });
+
+    if (btnSwitchChange) {
+        btnSwitchChange.addEventListener('click', () => {
+            setModalMode('change');
+            setTimeout(() => {
+                pwdInput.readOnly = false;
+                if (typeof pwdInput.removeAttribute === 'function') pwdInput.removeAttribute('readonly');
+                pwdInput.focus();
+            }, 20);
+        });
+    }
+
+    if (btnCancelChange) {
+        btnCancelChange.addEventListener('click', () => {
+            setModalMode('configured');
+            setTimeout(() => {
+                pwdInput.readOnly = false;
+                if (typeof pwdInput.removeAttribute === 'function') pwdInput.removeAttribute('readonly');
+                pwdInput.focus();
+            }, 20);
+        });
+    }
+
+    if (btnClose) btnClose.addEventListener('click', closeModal);
+    if (btnCancel) btnCancel.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.hidden) closeModal();
+    });
+
+    const triggerBlobDownload = (docxBytes, rawFilename) => {
+        const cleanName = String(rawFilename || '').trim();
+        const safeFilename = /^[A-Za-z0-9._-]+$/.test(cleanName) && cleanName.toLowerCase().endsWith('.docx')
+            ? cleanName
+            : 'Diario.docx';
+        const blob = new Blob([docxBytes], {
+            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        });
+        docxBytes.fill(0);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = safeFilename;
+        a.rel = 'noopener';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 15000);
+        return safeFilename;
+    };
+
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!btnConfirm || busyActionElements.has(btnConfirm) || btnConfirm.disabled) return;
+
+        const pwd = String(pwdInput.value || '');
+        if (!isJournalDownloadPwdValidClient(pwd)) {
+            setInlineBanner(
+                'journalDownloadModalStatus',
+                'err',
+                tUi(
+                    'Download password must be 8–128 characters without control characters.',
+                    'La contraseña de descarga debe tener entre 8 y 128 caracteres sin caracteres de control.'
+                )
+            );
+            pwdInput.focus();
+            return;
+        }
+
+        if (modalMode === 'setup' || modalMode === 'change') {
+            const confirmPwd = String(confirmInput?.value || '');
+            if (pwd !== confirmPwd) {
+                setInlineBanner(
+                    'journalDownloadModalStatus',
+                    'err',
+                    tUi('Passwords do not match.', 'Las contraseñas no coinciden.')
+                );
+                confirmInput?.focus();
+                return;
+            }
+        }
+
+        runWithButtonLock(btnConfirm, async () => {
+            setInlineBanner('journalDownloadModalStatus', '', '');
+            try {
+                let usePostWithPassword = false;
+
+                if (modalMode === 'change') {
+                    const ok = await openConfirmDialog({
+                        title: tUi('Update Download Password?', '¿Actualizar contraseña de descarga?'),
+                        message: tUi(
+                            'Replace your saved journal download password with this new one and download Diario.docx?',
+                            '¿Reemplazar tu contraseña de descarga guardada por esta nueva y descargar Diario.docx?'
+                        ),
+                        confirmText: tUi('Update & Download', 'Actualizar y Descargar')
+                    });
+                    if (!ok) return;
+                    const savedRes = await submitMutationRequest({
+                        url: '/api/settings',
+                        method: 'PUT',
+                        scopeKey: 'journal-dl-update-pwd',
+                        signature: `upd:${pwd.length}:${Date.now()}`,
+                        buildBody: () => ({ journalDownloadPassword: pwd }),
+                        parseJson: true
+                    });
+                    if (savedRes && savedRes.settings) {
+                        aplicarSettingsEnEstado(savedRes.settings);
+                    }
+                } else if (modalMode === 'setup') {
+                    if (saveCheck && saveCheck.checked) {
+                        const savedRes = await submitMutationRequest({
+                            url: '/api/settings',
+                            method: 'PUT',
+                            scopeKey: 'journal-dl-save-pwd',
+                            signature: `set:${pwd.length}:${Date.now()}`,
+                            buildBody: () => ({ journalDownloadPassword: pwd }),
+                            parseJson: true
+                        });
+                        if (savedRes && savedRes.settings) {
+                            aplicarSettingsEnEstado(savedRes.settings);
+                        }
+                    } else {
+                        usePostWithPassword = true;
+                    }
+                }
+
+                const fetchOpts = usePostWithPassword
+                    ? {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: pwd }),
+                        cache: 'no-store'
+                    }
+                    : { method: 'GET', cache: 'no-store' };
+
+                const res = await fetch('/api/journal/download-encrypted', fetchOpts);
+                const rawText = await res.text().catch(() => '');
+                let data = null;
+                try {
+                    data = rawText ? JSON.parse(rawText) : null;
+                } catch (_) {}
+
+                if (!res.ok || !data || !data.ok) {
+                    if (res.status === 409 && data?.reason === 'DOWNLOAD_PASSWORD_NOT_CONFIGURED') {
+                        if (currentSettings) {
+                            currentSettings.journalDownloadPasswordConfigured = false;
+                            updateJournalDownloadPasswordStatusUI();
+                        }
+                        setModalMode('setup');
+                        setInlineBanner(
+                            'journalDownloadModalStatus',
+                            'info',
+                            tUi('No download password saved yet. Enter a new password below.', 'Aún no hay contraseña guardada. Ingresa una nueva abajo.')
+                        );
+                        return;
+                    }
+                    const serverErr = data?.error || rawText || `HTTP ${res.status}`;
+                    throw new Error(formatHumanNetworkError(res.status, serverErr));
+                }
+
+                const docxBytes = await desencriptarDiarioBytesSaltedE2EE(data.encryptedDocx, pwd);
+                const downloadedName = triggerBlobDownload(docxBytes, data.filename);
+
+                closeModal();
+                const okMsg = tUi(
+                    `Journal decrypted and downloaded (${downloadedName}).`,
+                    `Diario descifrado y descargado (${downloadedName}).`
+                );
+                setInlineBanner('journalStatusBanner', 'ok', okMsg);
+                showToast('ok', okMsg);
+            } catch (err) {
+                const msg = tServer(err.message || 'Could not download encrypted journal.');
+                setInlineBanner('journalDownloadModalStatus', 'err', msg);
+                showToast('err', msg);
+            }
+        }, { loadingText: tUi('Decrypting...', 'Descifrando...') });
     });
 }
 
