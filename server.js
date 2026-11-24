@@ -4390,76 +4390,327 @@ function buildGoogleMapsDirectionsUrl(originCoords, destCoords, mode = 'driving'
     return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destParam)}&travelmode=${travelMode}`;
 }
 
+const _liveDrivingRouteCache = new Map();
+const LIVE_DRIVING_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function _buildDrivingCacheKey(originCoords, destCoords) {
+    if (!originCoords || !destCoords) return '';
+    const oLat = Number(originCoords.lat);
+    const oLng = Number(originCoords.lng);
+    const dLat = Number(destCoords.lat);
+    const dLng = Number(destCoords.lng);
+    if (!isValidNonZeroCoords(oLat, oLng) || !isValidNonZeroCoords(dLat, dLng)) return '';
+    return `${oLat.toFixed(4)},${oLng.toFixed(4)}->${dLat.toFixed(4)},${dLng.toFixed(4)}`;
+}
+
+function getCachedLiveDrivingMinutes(originCoords, destCoords) {
+    const key = _buildDrivingCacheKey(originCoords, destCoords);
+    if (!key) return null;
+    const hit = _liveDrivingRouteCache.get(key);
+    if (!hit) return null;
+    if (Date.now() - hit.savedAt > LIVE_DRIVING_CACHE_TTL_MS) {
+        _liveDrivingRouteCache.delete(key);
+        return null;
+    }
+    return hit.driveMinutes;
+}
+
+async function resolveLiveDrivingMinutes(originCoords, destCoords, fallbackDriveMin, { minutesOfDay = 9 * 60, weekday = 1 } = {}) {
+    const safeFallback = Math.max(1, Math.round(Number(fallbackDriveMin) || 20));
+    if (isAutomatedTestEnv()) return safeFallback;
+    const cacheKey = _buildDrivingCacheKey(originCoords, destCoords);
+    if (!cacheKey) return safeFallback;
+
+    const cached = getCachedLiveDrivingMinutes(originCoords, destCoords);
+    if (cached !== null) return cached;
+
+    const oLat = Number(originCoords.lat);
+    const oLng = Number(originCoords.lng);
+    const dLat = Number(destCoords.lat);
+    const dLng = Number(destCoords.lng);
+
+    try {
+        let resolvedMinutes = null;
+        const gmapsKey = String(process.env.GOOGLE_MAPS_API_KEY || '').trim();
+        if (gmapsKey) {
+            const gUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(`${oLat},${oLng}`)}&destinations=${encodeURIComponent(`${dLat},${dLng}`)}&mode=driving&departure_time=now&key=${encodeURIComponent(gmapsKey)}`;
+            const resp = await fetch(gUrl, { signal: AbortSignal.timeout(2500) });
+            if (resp.ok) {
+                const data = await resp.json();
+                const elem = data?.rows?.[0]?.elements?.[0];
+                const secs = Number(elem?.duration_in_traffic?.value ?? elem?.duration?.value);
+                if (elem?.status === 'OK' && Number.isFinite(secs) && secs > 0) {
+                    resolvedMinutes = Math.max(1, Math.round(secs / 60));
+                }
+            }
+        } else {
+            const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${oLng},${oLat};${dLng},${dLat}?overview=false`;
+            const resp = await fetch(osrmUrl, { signal: AbortSignal.timeout(2500) });
+            if (resp.ok) {
+                const data = await resp.json();
+                const secs = Number(data?.routes?.[0]?.duration);
+                if (Number.isFinite(secs) && secs > 0) {
+                    const traffic = getSaltilloTrafficFactor(minutesOfDay, weekday);
+                    resolvedMinutes = Math.max(1, Math.round((secs / 60) * traffic.factor));
+                }
+            }
+        }
+
+        if (resolvedMinutes !== null) {
+            if (_liveDrivingRouteCache.size >= 250) {
+                const oldestKey = _liveDrivingRouteCache.keys().next().value;
+                if (oldestKey) _liveDrivingRouteCache.delete(oldestKey);
+            }
+            _liveDrivingRouteCache.set(cacheKey, { driveMinutes: resolvedMinutes, savedAt: Date.now() });
+            return resolvedMinutes;
+        }
+    } catch (_) {
+        // Fallback inmediato a estimación local determinista ante timeout o red inestable
+    }
+    return safeFallback;
+}
+
+function computeCommuteAlertMilestones({
+    originCoords,
+    homeCoords = null,
+    destCoords = null,
+    driveMinutes = 20,
+    nearRadiusKm = 0.85,
+    homeRadiusKm = null,
+    hasLiveGps = null
+} = {}) {
+    const effNearRadius = Number.isFinite(Number(nearRadiusKm)) && Number(nearRadiusKm) > 0
+        ? Number(nearRadiusKm)
+        : 0.85;
+    const effHomeRadius = Number.isFinite(Number(homeRadiusKm)) && Number(homeRadiusKm) > 0
+        ? Number(homeRadiusKm)
+        : effNearRadius;
+
+    const validOrigin = Boolean(originCoords && isValidNonZeroCoords(Number(originCoords.lat), Number(originCoords.lng)));
+    const validDest = Boolean(destCoords && isValidNonZeroCoords(Number(destCoords.lat), Number(destCoords.lng)));
+    const validHome = Boolean(homeCoords && isValidNonZeroCoords(Number(homeCoords.lat), Number(homeCoords.lng)));
+
+    const isNear = Boolean(
+        validOrigin && validDest &&
+        calculateHaversineKm(Number(originCoords.lat), Number(originCoords.lng), Number(destCoords.lat), Number(destCoords.lng)) <= effNearRadius
+    );
+
+    if (isNear) {
+        return {
+            zone: 'near_destination',
+            isNear: true,
+            isAtHome: false,
+            milestones: [20, 15],
+            recommendedLeadMinutes: 20
+        };
+    }
+
+    let isAtHome = false;
+    if (validOrigin && validHome) {
+        const distHomeKm = calculateHaversineKm(
+            Number(originCoords.lat),
+            Number(originCoords.lng),
+            Number(homeCoords.lat),
+            Number(homeCoords.lng)
+        );
+        isAtHome = distHomeKm <= effHomeRadius;
+    } else if (hasLiveGps === false) {
+        isAtHome = true;
+    } else if (!validOrigin && !validHome) {
+        isAtHome = true;
+    }
+
+    const T = Math.max(1, Math.round(Number(driveMinutes) || 20));
+    if (isAtHome) {
+        const stages = Array.from(new Set([T + 20, T + 10, T, 10].filter((m) => Number.isFinite(m) && m > 0)))
+            .sort((a, b) => b - a);
+        return {
+            zone: 'home',
+            isNear: false,
+            isAtHome: true,
+            milestones: stages,
+            recommendedLeadMinutes: stages[0]
+        };
+    }
+
+    const awayLead = T + 10;
+    return {
+        zone: 'away_far',
+        isNear: false,
+        isAtHome: false,
+        milestones: [awayLead],
+        recommendedLeadMinutes: awayLead
+    };
+}
+
+function pickActiveCommuteMilestone(startMin, minutesOfDay, milestones = [], postStartGraceMin = 15) {
+    if (!Array.isArray(milestones) || milestones.length === 0) return null;
+    if (minutesOfDay > startMin + postStartGraceMin) return null;
+    const triggered = milestones
+        .map((m) => Number(m))
+        .filter((m) => Number.isFinite(m) && m > 0 && minutesOfDay >= Math.max(0, startMin - m))
+        .sort((a, b) => a - b);
+    return triggered.length > 0 ? triggered[0] : null;
+}
+
 function estimateCommuteDetails({
     originCoords,
+    homeCoords = null,
     destCoords,
     targetMinutesOfDay = 9 * 60,
     weekday = 1,
     isFirstOfDay = true,
     nearRadiusKm = 0.85,
-    minFarLeadMinutes = 30,
-    nearLeadMinutes = 10,
-    parkingBufferMinutes = 8
+    hasLiveGps = null
 }) {
     if (!destCoords || !isValidNonZeroCoords(Number(destCoords.lat), Number(destCoords.lng))) {
+        const fallbackDrive = isFirstOfDay ? 20 : 0;
+        if (!isFirstOfDay) {
+            return {
+                hasOrigin: false,
+                isNear: true,
+                isAtHome: false,
+                commuteZone: 'near_destination',
+                alertMilestones: [20, 15],
+                distanceKm: 0,
+                roadDistanceKm: 0,
+                driveMinutes: 0,
+                walkMinutes: 6,
+                trafficLabel: 'Ruta estándar',
+                recommendedLeadMinutes: 20,
+                mapsUrl: ''
+            };
+        }
+        const zoneMeta = computeCommuteAlertMilestones({
+            originCoords: null,
+            homeCoords,
+            destCoords: null,
+            driveMinutes: fallbackDrive,
+            nearRadiusKm,
+            hasLiveGps: hasLiveGps ?? false
+        });
         return {
             hasOrigin: false,
-            isNear: !isFirstOfDay,
+            isNear: false,
+            isAtHome: zoneMeta.isAtHome,
+            commuteZone: zoneMeta.zone,
+            alertMilestones: zoneMeta.milestones,
             distanceKm: 0,
             roadDistanceKm: 0,
-            driveMinutes: isFirstOfDay ? 22 : 0,
+            driveMinutes: fallbackDrive,
             walkMinutes: 6,
             trafficLabel: 'Ruta estándar',
-            recommendedLeadMinutes: isFirstOfDay ? Math.max(30, minFarLeadMinutes) : nearLeadMinutes,
+            recommendedLeadMinutes: zoneMeta.recommendedLeadMinutes,
             mapsUrl: ''
         };
     }
 
     if (!originCoords || !isValidNonZeroCoords(Number(originCoords.lat), Number(originCoords.lng))) {
-        const fallbackLead = isFirstOfDay ? Math.max(30, minFarLeadMinutes) : nearLeadMinutes;
+        if (!isFirstOfDay) {
+            return {
+                hasOrigin: false,
+                isNear: true,
+                isAtHome: false,
+                commuteZone: 'near_destination',
+                alertMilestones: [20, 15],
+                distanceKm: 0,
+                roadDistanceKm: 0,
+                driveMinutes: 0,
+                walkMinutes: 5,
+                trafficLabel: 'En campus / cerca',
+                recommendedLeadMinutes: 20,
+                mapsUrl: buildGoogleMapsDirectionsUrl(null, destCoords, 'walking')
+            };
+        }
+        const fallbackDrive = 20;
+        const zoneMeta = computeCommuteAlertMilestones({
+            originCoords: null,
+            homeCoords,
+            destCoords,
+            driveMinutes: fallbackDrive,
+            nearRadiusKm,
+            hasLiveGps: false
+        });
         return {
             hasOrigin: false,
-            isNear: !isFirstOfDay,
+            isNear: false,
+            isAtHome: zoneMeta.isAtHome,
+            commuteZone: zoneMeta.zone,
+            alertMilestones: zoneMeta.milestones,
             distanceKm: 0,
             roadDistanceKm: 0,
-            driveMinutes: isFirstOfDay ? 20 : 0,
+            driveMinutes: fallbackDrive,
             walkMinutes: 5,
-            trafficLabel: isFirstOfDay ? 'Estimado desde casa (sin GPS activo)' : 'En campus / cerca',
-            recommendedLeadMinutes: fallbackLead,
-            mapsUrl: buildGoogleMapsDirectionsUrl(null, destCoords, isFirstOfDay ? 'driving' : 'walking')
+            trafficLabel: 'Estimado desde casa (sin GPS activo)',
+            recommendedLeadMinutes: zoneMeta.recommendedLeadMinutes,
+            mapsUrl: buildGoogleMapsDirectionsUrl(null, destCoords, 'driving')
         };
     }
 
     const straightKm = calculateHaversineKm(originCoords.lat, originCoords.lng, destCoords.lat, destCoords.lng);
     const roadKm = Number((straightKm * 1.32).toFixed(2));
-    const isNear = straightKm <= nearRadiusKm;
     const traffic = getSaltilloTrafficFactor(targetMinutesOfDay, weekday);
-    // Velocidad base urbana en Saltillo ~30 km/h ajustada por factor de tráfico
-    const baseDriveMin = (roadKm / 30) * 60 * traffic.factor;
-    const driveMinutes = Math.max(3, Math.round(baseDriveMin));
+    // Velocidad base urbana en Saltillo ~30 km/h ajustada por factor de tráfico (o ruta real Maps cacheada)
+    const baseDriveMin = Math.max(3, Math.round((roadKm / 30) * 60 * traffic.factor));
+    const cachedLiveMin = getCachedLiveDrivingMinutes(originCoords, destCoords);
+    const driveMinutes = cachedLiveMin !== null ? cachedLiveMin : baseDriveMin;
     const walkMinutes = Math.max(2, Math.round((straightKm * 1.25 / 4.6) * 60));
 
-    let recommendedLeadMinutes;
-    if (isNear && !isFirstOfDay) {
-        recommendedLeadMinutes = Math.max(nearLeadMinutes, Math.min(25, walkMinutes + 4));
-    } else if (isNear && isFirstOfDay) {
-        recommendedLeadMinutes = Math.max(nearLeadMinutes, Math.min(25, walkMinutes + 5));
-    } else {
-        recommendedLeadMinutes = Math.min(120, Math.max(30, minFarLeadMinutes, driveMinutes + parkingBufferMinutes));
-    }
+    const zoneMeta = computeCommuteAlertMilestones({
+        originCoords,
+        homeCoords,
+        destCoords,
+        driveMinutes,
+        nearRadiusKm,
+        hasLiveGps
+    });
 
     return {
         hasOrigin: true,
-        isNear,
+        isNear: zoneMeta.isNear,
+        isAtHome: zoneMeta.isAtHome,
+        commuteZone: zoneMeta.zone,
+        alertMilestones: zoneMeta.milestones,
         distanceKm: Number(straightKm.toFixed(2)),
         roadDistanceKm: roadKm,
         driveMinutes,
         walkMinutes,
         trafficLevel: traffic.level,
         trafficLabel: traffic.label,
-        recommendedLeadMinutes,
-        mapsUrl: buildGoogleMapsDirectionsUrl(originCoords, destCoords, isNear ? 'walking' : 'driving')
+        recommendedLeadMinutes: zoneMeta.recommendedLeadMinutes,
+        mapsUrl: buildGoogleMapsDirectionsUrl(originCoords, destCoords, zoneMeta.isNear ? 'walking' : 'driving')
     };
+}
+
+async function warmLiveDrivingRoutesForPlanner(planner, localNow) {
+    if (isAutomatedTestEnv() || !planner || typeof planner !== 'object') return;
+    const originInfo = resolveUserOriginCoords(planner, true);
+    const originCoords = originInfo.coords;
+    if (!originCoords || !isValidNonZeroCoords(Number(originCoords.lat), Number(originCoords.lng))) return;
+
+    const effNear = planner.nearRadiusKm || 0.85;
+    const targets = [];
+    const campusDir = getEffectiveCampusDirectory(planner);
+    for (const campus of Object.values(campusDir)) {
+        if (campus && isValidNonZeroCoords(Number(campus.lat), Number(campus.lng))) {
+            targets.push({ lat: Number(campus.lat), lng: Number(campus.lng) });
+        }
+    }
+    const resCoords = parseCoordinatesFromInput(planner.residencias?.location || {});
+    if (resCoords) targets.push(resCoords);
+    const workCoords = parseCoordinatesFromInput(planner.work?.location || {});
+    if (workCoords) targets.push(workCoords);
+
+    await Promise.all(targets.map(async (dest) => {
+        const km = calculateHaversineKm(originCoords.lat, originCoords.lng, dest.lat, dest.lng);
+        if (km <= effNear) return;
+        const traffic = getSaltilloTrafficFactor(localNow?.minutesOfDay ?? 540, localNow?.weekday ?? 1);
+        const fallbackMin = Math.max(3, Math.round(((km * 1.32) / 30) * 60 * traffic.factor));
+        await resolveLiveDrivingMinutes(originCoords, dest, fallbackMin, {
+            minutesOfDay: localNow?.minutesOfDay ?? 540,
+            weekday: localNow?.weekday ?? 1
+        });
+    }));
 }
 
 function getDefaultAcademicPlanner() {
@@ -4623,7 +4874,12 @@ function sanitizeLocationObject(rawLoc = {}, fallback = {}) {
     if (parsedCoords) {
         base.lat = parsedCoords.lat;
         base.lng = parsedCoords.lng;
-    } else if (rawLoc.lat === null || rawLoc.lat === '' || rawLoc.lng === null || rawLoc.lng === '') {
+    } else if (
+        rawLoc.lat === null || rawLoc.lat === '' ||
+        rawLoc.lng === null || rawLoc.lng === '' ||
+        (rawLoc.lat !== undefined && Number.isFinite(Number(rawLoc.lat)) && Math.abs(Number(rawLoc.lat)) < 0.001) ||
+        (rawLoc.lng !== undefined && Number.isFinite(Number(rawLoc.lng)) && Math.abs(Number(rawLoc.lng)) < 0.001)
+    ) {
         base.lat = null;
         base.lng = null;
     }
@@ -5435,6 +5691,9 @@ function computeCandidateReminders({
     const planner = sanitizeAcademicPlanner(settings.academicPlanner);
     const effectiveCampusDir = getEffectiveCampusDirectory(planner);
     const activeVacation = isDateInVacation(dateStr, planner.vacations);
+    const savedHomeCoords = parseCoordinatesFromInput(planner.locations?.home || {});
+    const liveCurrCoords = parseCoordinatesFromInput(planner.locations?.current || {});
+    const hasLiveGps = Boolean(liveCurrCoords);
 
     if (planner.classRemindersEnabled && !activeVacation) {
         const activeSem = planner.semesters.find(s => s.id === planner.activeSemesterId) ||
@@ -5456,7 +5715,7 @@ function computeCandidateReminders({
                 const prevRoomMeta = prevCourse ? resolveItsClassroom(prevCourse.room, effectiveCampusDir) : null;
 
                 let originInfo;
-                if (!isFirstOrAfterLongBreak && prevRoomMeta && !parseCoordinatesFromInput(planner.locations?.current || {})) {
+                if (!isFirstOrAfterLongBreak && prevRoomMeta && !liveCurrCoords) {
                     originInfo = {
                         coords: { lat: prevRoomMeta.lat, lng: prevRoomMeta.lng },
                         sourceLabel: `Aula ${prevRoomMeta.room} (${prevRoomMeta.campusName})`
@@ -5467,31 +5726,35 @@ function computeCandidateReminders({
 
                 const commute = estimateCommuteDetails({
                     originCoords: originInfo.coords,
+                    homeCoords: savedHomeCoords,
                     destCoords: { lat: roomMeta.lat, lng: roomMeta.lng },
                     targetMinutesOfDay: startMin,
                     weekday,
                     isFirstOfDay: isFirstOrAfterLongBreak,
                     nearRadiusKm: planner.nearRadiusKm || 0.85,
-                    minFarLeadMinutes: planner.farLeadMinutesMin || 30,
-                    nearLeadMinutes: planner.nearLeadMinutes || 10,
-                    parkingBufferMinutes: planner.parkingBufferMinutes ?? 8
+                    hasLiveGps
                 });
 
-                const leadMin = commute.recommendedLeadMinutes;
-                const triggerMin = Math.max(0, startMin - leadMin);
-                const endMin = Math.min(1439, startMin + 45);
+                const milestones = commute.alertMilestones || [commute.recommendedLeadMinutes];
+                const activeStageMin = pickActiveCommuteMilestone(startMin, minutesOfDay, milestones, 15);
 
-                if (minutesOfDay >= triggerMin && minutesOfDay <= endMin) {
+                if (activeStageMin !== null) {
+                    const seriesKey = `class:${activeSem.id}:${course.id}:${dateStr}`;
                     const routeSummary = commute.isNear
                         ? `En el Tec / cerca (~${commute.walkMinutes} min caminando desde ${originInfo.sourceLabel})`
-                        : `Desde ${originInfo.sourceLabel}: ~${commute.driveMinutes} min en carro (${commute.trafficLabel}, ${commute.roadDistanceKm || '--'} km) + estacionamiento`;
+                        : `Desde ${originInfo.sourceLabel}: ~${commute.driveMinutes} min en carro (${commute.trafficLabel}, ${commute.roadDistanceKm || '--'} km)`;
 
                     candidates.push({
-                        key: `class:${activeSem.id}:${course.id}:${dateStr}`,
+                        key: `${seriesKey}:m${activeStageMin}`,
+                        seriesKey,
+                        ackKey: seriesKey,
+                        stageMin: activeStageMin,
+                        milestones,
+                        commuteZone: commute.commuteZone,
                         type: 'class',
                         refId: null,
                         title: `[Clase ITS ${course.startTime}] ${course.name} · Aula ${roomMeta.room}`,
-                        message: `${roomMeta.campusName} (${roomMeta.plano} · ${roomMeta.building}). ${routeSummary}. Aviso ${leadMin} min antes.`,
+                        message: `${roomMeta.campusName} (${roomMeta.plano} · ${roomMeta.building}). ${routeSummary}. Aviso ${activeStageMin} min antes.`,
                         targetView: 'horario',
                         targetTab: 'semesters',
                         targetDate: dateStr,
@@ -5513,24 +5776,33 @@ function computeCandidateReminders({
         const originInfo = resolveUserOriginCoords(planner, true);
         const commute = estimateCommuteDetails({
             originCoords: originInfo.coords,
+            homeCoords: savedHomeCoords,
             destCoords,
             targetMinutesOfDay: resStartMin,
             weekday,
             isFirstOfDay: true,
             nearRadiusKm: planner.nearRadiusKm || 0.85,
-            minFarLeadMinutes: planner.farLeadMinutesMin || 30,
-            nearLeadMinutes: 15,
-            parkingBufferMinutes: planner.parkingBufferMinutes ?? 8
+            hasLiveGps
         });
-        const leadMin = planner.residencias.modality === 'remoto' ? 10 : commute.recommendedLeadMinutes;
-        const triggerMin = Math.max(0, resStartMin - leadMin);
-        if (minutesOfDay >= triggerMin && minutesOfDay <= Math.min(1439, resStartMin + 60)) {
+        const isRemoteRes = planner.residencias.modality === 'remoto';
+        const milestones = isRemoteRes ? [10] : (commute.alertMilestones || [commute.recommendedLeadMinutes]);
+        const activeStageMin = pickActiveCommuteMilestone(resStartMin, minutesOfDay, milestones, 15);
+
+        if (activeStageMin !== null) {
+            const seriesKey = `residencias:${dateStr}:${planner.residencias.startTime}`;
             const placeLabel = planner.residencias.companyName || planner.residencias.location?.label || 'Residencias Profesionales';
-            const transitText = planner.residencias.modality === 'remoto'
+            const transitText = isRemoteRes
                 ? 'Modalidad remota — prepárate para iniciar sesión.'
-                : `Traslado en carro: ~${commute.driveMinutes} min (${commute.trafficLabel}) hacia ${placeLabel}.`;
+                : (commute.isNear
+                    ? `Cerca de ${placeLabel} (~${commute.walkMinutes} min caminando). Aviso ${activeStageMin} min antes.`
+                    : `Traslado en carro: ~${commute.driveMinutes} min (${commute.trafficLabel}) hacia ${placeLabel}. Aviso ${activeStageMin} min antes.`);
             candidates.push({
-                key: `residencias:${dateStr}:${planner.residencias.startTime}`,
+                key: `${seriesKey}:m${activeStageMin}`,
+                seriesKey,
+                ackKey: seriesKey,
+                stageMin: activeStageMin,
+                milestones,
+                commuteZone: isRemoteRes ? 'remote' : commute.commuteZone,
                 type: 'residencias',
                 refId: null,
                 title: `[Residencias ${planner.residencias.startTime}] ${placeLabel}`,
@@ -5538,7 +5810,7 @@ function computeCandidateReminders({
                 targetView: 'horario',
                 targetTab: 'residencias',
                 targetDate: dateStr,
-                mapsUrl: planner.residencias.modality === 'remoto' ? '' : commute.mapsUrl,
+                mapsUrl: isRemoteRes ? '' : commute.mapsUrl,
                 canSnooze: true,
                 canComplete: false
             });
@@ -5551,25 +5823,34 @@ function computeCandidateReminders({
         const originInfo = resolveUserOriginCoords(planner, true);
         const commute = estimateCommuteDetails({
             originCoords: originInfo.coords,
+            homeCoords: savedHomeCoords,
             destCoords,
             targetMinutesOfDay: workStartMin,
             weekday,
             isFirstOfDay: true,
             nearRadiusKm: planner.nearRadiusKm || 0.85,
-            minFarLeadMinutes: planner.farLeadMinutesMin || 30,
-            nearLeadMinutes: 15,
-            parkingBufferMinutes: planner.parkingBufferMinutes ?? 8
+            hasLiveGps
         });
-        const leadMin = planner.work.modality === 'remoto' ? 10 : commute.recommendedLeadMinutes;
-        const triggerMin = Math.max(0, workStartMin - leadMin);
-        if (minutesOfDay >= triggerMin && minutesOfDay <= Math.min(1439, workStartMin + 60)) {
+        const isRemoteWork = planner.work.modality === 'remoto';
+        const milestones = isRemoteWork ? [10] : (commute.alertMilestones || [commute.recommendedLeadMinutes]);
+        const activeStageMin = pickActiveCommuteMilestone(workStartMin, minutesOfDay, milestones, 15);
+
+        if (activeStageMin !== null) {
+            const seriesKey = `work:${dateStr}:${planner.work.startTime}`;
             const shiftTypeLabel = planner.work.scheduleType === 'tiempo_completo' ? 'Tiempo Completo' : 'Medio Tiempo';
             const companyLabel = planner.work.companyName || planner.work.location?.label || 'Trabajo';
-            const transitText = planner.work.modality === 'remoto'
+            const transitText = isRemoteWork
                 ? 'Turno remoto por iniciar.'
-                : `Ruta en carro: ~${commute.driveMinutes} min (${commute.trafficLabel}) hacia ${companyLabel}.`;
+                : (commute.isNear
+                    ? `Cerca de ${companyLabel} (~${commute.walkMinutes} min caminando). Aviso ${activeStageMin} min antes.`
+                    : `Ruta en carro: ~${commute.driveMinutes} min (${commute.trafficLabel}) hacia ${companyLabel}. Aviso ${activeStageMin} min antes.`);
             candidates.push({
-                key: `work:${dateStr}:${planner.work.startTime}`,
+                key: `${seriesKey}:m${activeStageMin}`,
+                seriesKey,
+                ackKey: seriesKey,
+                stageMin: activeStageMin,
+                milestones,
+                commuteZone: isRemoteWork ? 'remote' : commute.commuteZone,
                 type: 'work',
                 refId: null,
                 title: `[Trabajo ${shiftTypeLabel} ${planner.work.startTime}] ${companyLabel}`,
@@ -5577,7 +5858,7 @@ function computeCandidateReminders({
                 targetView: 'horario',
                 targetTab: 'work',
                 targetDate: dateStr,
-                mapsUrl: planner.work.modality === 'remoto' ? '' : commute.mapsUrl,
+                mapsUrl: isRemoteWork ? '' : commute.mapsUrl,
                 canSnooze: true,
                 canComplete: false
             });
@@ -5768,7 +6049,51 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
         };
         const actions = [];
 
-        if ((reminder.canSnooze || reminder.previewActions) && userId && reminder.key) {
+        const commuteAckKey = String(reminder.ackKey || reminder.seriesKey || '').trim();
+        const isCommuteAckReminder = Boolean(
+            commuteAckKey && ['class', 'residencias', 'work'].includes(String(reminder.type || ''))
+        );
+
+        if (isCommuteAckReminder && userId) {
+            const ackToken = signReminderActionToken(userId, commuteAckKey);
+            const ackPayload = {
+                userId,
+                key: commuteAckKey,
+                action: 'ack',
+                minutes: 0,
+                type: reminder.type || 'class',
+                refId: reminder.refId || null,
+                title: reminder.title || '',
+                message: reminder.message || '',
+                token: ackToken
+            };
+            const ackQs = new URLSearchParams({
+                userId: String(userId),
+                key: commuteAckKey,
+                action: 'ack',
+                minutes: '0',
+                type: String(reminder.type || 'class'),
+                token: String(ackToken)
+            }).toString();
+
+            actions.push({
+                action: 'http',
+                label: 'OK',
+                url: `${baseUrl}/api/reminders/action?${ackQs}`,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(ackPayload),
+                clear: true
+            });
+            if (hasValidMapsUrl) {
+                actions.push({
+                    action: 'view',
+                    label: 'Google Maps Route',
+                    url: reminder.mapsUrl
+                });
+            }
+            actions.push(openAppAction);
+        } else if ((reminder.canSnooze || reminder.previewActions) && userId && reminder.key) {
             const actionToken = signReminderActionToken(userId, reminder.key);
             const buildNtfyHttpAction = ({ label, actionName, minutes = 0, clear = true }) => {
                 const actionPayload = {
@@ -5915,6 +6240,8 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
         )
     ]);
 
+    await warmLiveDrivingRoutesForPlanner(settings.academicPlanner, localNow);
+
     const candidates = computeCandidateReminders({
         settings,
         localNow,
@@ -5931,6 +6258,28 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
     const snoozed = [];
 
     for (const candidate of candidates) {
+        if (candidate.ackKey) {
+            const ackRow = stateMap.get(candidate.ackKey);
+            if (ackRow && ackRow.estado === 'dismissed') {
+                continue;
+            }
+            const stagePrefix = `${candidate.ackKey}:m`;
+            const hasStaleStageRows = Array.from(stateMap.keys()).some(
+                (k) => k.startsWith(stagePrefix) && k !== candidate.key
+            );
+            if (hasStaleStageRows) {
+                await dbQueryAsync(
+                    "DELETE FROM RecordatoriosEstado WHERE usuario_id = ? AND clave_unica LIKE CONCAT(?, ':m%') AND clave_unica <> ?",
+                    [user.id, candidate.ackKey, candidate.key]
+                );
+                for (const k of Array.from(stateMap.keys())) {
+                    if (k.startsWith(stagePrefix) && k !== candidate.key) {
+                        stateMap.delete(k);
+                    }
+                }
+            }
+        }
+
         const existing = stateMap.get(candidate.key);
         if (existing && existing.estado === 'dismissed') {
             continue;
@@ -6157,6 +6506,7 @@ function buildLiveCommutePreview(planner, localNow) {
     const originCoords = originInfo.coords;
     const currCoords = parseCoordinatesFromInput(planner?.locations?.current || {});
     const homeCoords = parseCoordinatesFromInput(planner?.locations?.home || {});
+    const hasLiveGps = Boolean(currCoords);
     const originKind = currCoords ? 'current' : (homeCoords ? 'home' : 'none');
     const campusDirectory = getEffectiveCampusDirectory(planner);
     const campuses = {};
@@ -6164,14 +6514,13 @@ function buildLiveCommutePreview(planner, localNow) {
     for (const [key, campus] of Object.entries(campusDirectory)) {
         const comm = estimateCommuteDetails({
             originCoords,
+            homeCoords,
             destCoords: { lat: campus.lat, lng: campus.lng },
             targetMinutesOfDay: localNow.minutesOfDay,
             weekday: localNow.weekday,
             isFirstOfDay: true,
             nearRadiusKm: planner.nearRadiusKm || 0.85,
-            minFarLeadMinutes: planner.farLeadMinutesMin || 30,
-            nearLeadMinutes: planner.nearLeadMinutes || 10,
-            parkingBufferMinutes: planner.parkingBufferMinutes ?? 8
+            hasLiveGps
         });
         campuses[key] = {
             ...campus,
@@ -6181,6 +6530,9 @@ function buildLiveCommutePreview(planner, localNow) {
             campusKey: key,
             target: campus.name,
             isNearCampus: comm.isNear,
+            isAtHome: comm.isAtHome,
+            commuteZone: comm.commuteZone,
+            alertMilestones: comm.alertMilestones,
             distanceKm: comm.distanceKm,
             driveMinutesWithTraffic: comm.driveMinutes,
             trafficLabel: comm.trafficLabel,
@@ -6204,27 +6556,25 @@ function buildLiveCommutePreview(planner, localNow) {
         residenciasCommute: resCoords
             ? estimateCommuteDetails({
                 originCoords,
+                homeCoords,
                 destCoords: resCoords,
                 targetMinutesOfDay: hhmmToMinutes(planner.residencias?.startTime || '08:00'),
                 weekday: localNow.weekday,
                 isFirstOfDay: true,
                 nearRadiusKm: planner.nearRadiusKm || 0.85,
-                minFarLeadMinutes: planner.farLeadMinutesMin || 30,
-                nearLeadMinutes: 15,
-                parkingBufferMinutes: planner.parkingBufferMinutes ?? 8
+                hasLiveGps
             })
             : null,
         workCommute: workCoords
             ? estimateCommuteDetails({
                 originCoords,
+                homeCoords,
                 destCoords: workCoords,
                 targetMinutesOfDay: hhmmToMinutes(planner.work?.startTime || '08:00'),
                 weekday: localNow.weekday,
                 isFirstOfDay: true,
                 nearRadiusKm: planner.nearRadiusKm || 0.85,
-                minFarLeadMinutes: planner.farLeadMinutesMin || 30,
-                nearLeadMinutes: 15,
-                parkingBufferMinutes: planner.parkingBufferMinutes ?? 8
+                hasLiveGps
             })
             : null
     };
@@ -6235,6 +6585,7 @@ app.get('/api/planner', apiReadLimiter.middleware, requireAdmin, async (req, res
         const settings = await loadUserSettings(req.user.id);
         const planner = sanitizeAcademicPlanner(settings.academicPlanner);
         const localNow = getLocalNowParts(settings.timezone);
+        await warmLiveDrivingRoutesForPlanner(planner, localNow);
         res.json({
             planner: sanitizePlannerForClient(planner),
             campusDirectory: getEffectiveCampusDirectory(planner),
@@ -6288,6 +6639,7 @@ app.put('/api/planner', apiWriteLimiter.middleware, requireAdmin, requireNonEmpt
         await saveUserSettings(req.user.id, nextSettings);
         bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
+        await warmLiveDrivingRoutesForPlanner(nextPlanner, localNow);
         res.json({
             message: 'Academic, Residencias & Work schedule saved.',
             planner: sanitizePlannerForClient(nextPlanner),
@@ -6638,6 +6990,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
         await saveUserSettings(req.user.id, nextSettings);
         bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
+        await warmLiveDrivingRoutesForPlanner(planner, localNow);
         const preview = buildLiveCommutePreview(planner, localNow);
         res.json({
             message: target === 'home'
@@ -6767,6 +7120,7 @@ async function handlePhoneLocationWebhook(req, res) {
         await saveUserSettings(parsed.userId, nextSettings);
         bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
+        await warmLiveDrivingRoutesForPlanner(planner, localNow);
         const preview = buildLiveCommutePreview(planner, localNow);
 
         res.json({
@@ -7509,7 +7863,7 @@ app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, p
 app.get('/api/reminders/active', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
     try {
         const state = await evaluateAndDispatchUserReminders(req.user, {
-            dispatchPush: false,
+            dispatchPush: req.query.dispatchPush === '1',
             req
         });
         res.json({
@@ -7524,6 +7878,21 @@ app.get('/api/reminders/active', apiReadLimiter.middleware, requireAdmin, async 
 });
 
 async function applyReminderSnoozeOrDismiss({ userId, key, type = 'general', refId = null, action = 'snooze', minutes = 15, title = 'Reminder', message = '' }) {
+    if (action === 'ack') {
+        const baseSeriesKey = String(key || '').trim().replace(/:m\d+$/, '');
+        await dbQueryAsync(
+            `INSERT INTO RecordatoriosEstado (usuario_id, clave_unica, tipo, ref_id, titulo, mensaje, estado, snooze_hasta)
+             VALUES (?, ?, ?, ?, ?, ?, 'dismissed', NULL)
+             ON DUPLICATE KEY UPDATE estado = 'dismissed', snooze_hasta = NULL`,
+            [userId, baseSeriesKey, type, refId, title.slice(0, 140), message.slice(0, 320)]
+        );
+        await dbQueryAsync(
+            "DELETE FROM RecordatoriosEstado WHERE usuario_id = ? AND clave_unica LIKE CONCAT(?, ':m%')",
+            [userId, baseSeriesKey]
+        );
+        return { action: 'acknowledged', key: baseSeriesKey, snoozeUntil: null };
+    }
+
     if (action === 'dismiss') {
         await dbQueryAsync(
             `INSERT INTO RecordatoriosEstado (usuario_id, clave_unica, tipo, ref_id, titulo, mensaje, estado, snooze_hasta)
@@ -7552,7 +7921,9 @@ async function applyReminderSnoozeOrDismiss({ userId, key, type = 'general', ref
 app.post('/api/reminders/snooze', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const key = typeof req.body.key === 'string' ? req.body.key.trim() : '';
     const rawAction = typeof req.body.action === 'string' ? req.body.action.trim().toLowerCase() : 'snooze';
-    const action = rawAction === 'skip' ? 'skip' : (rawAction === 'dismiss' ? 'dismiss' : 'snooze');
+    const action = rawAction === 'ack'
+        ? 'ack'
+        : (rawAction === 'skip' ? 'skip' : (rawAction === 'dismiss' ? 'dismiss' : 'snooze'));
     const type = typeof req.body.type === 'string' && req.body.type.trim() ? req.body.type.trim().slice(0, 30) : 'general';
     const title = typeof req.body.title === 'string' ? req.body.title : 'Reminder';
     const message = typeof req.body.message === 'string' ? req.body.message : '';
@@ -7577,11 +7948,20 @@ app.post('/api/reminders/snooze', apiWriteLimiter.middleware, requireAdmin, requ
             key,
             type,
             refId,
-            action: action === 'snooze' ? 'snooze' : 'dismiss',
+            action: action === 'ack' ? 'ack' : (action === 'snooze' ? 'snooze' : 'dismiss'),
             minutes: Number(req.body.minutes ?? 15),
             title,
             message
         });
+        if (action === 'ack') {
+            return res.json({
+                ok: true,
+                key: result.key || key,
+                action: 'acknowledged',
+                snoozeUntil: null,
+                message: 'Entendido (OK). No se enviarán más avisos para esta clase/turno hoy.'
+            });
+        }
         res.json({
             message: action === 'skip'
                 ? 'Reminder skipped.'
@@ -7677,6 +8057,24 @@ const handleReminderExternalAction = async (req, res) => {
                 message
             });
             return res.json({ ok: true, action: 'complete_agenda', key, refId, message: 'Agenda item marked as Done.' });
+        }
+
+        if (action === 'ack') {
+            const ackRes = await applyReminderSnoozeOrDismiss({
+                userId: effectiveUserId,
+                key,
+                type,
+                refId,
+                action: 'ack',
+                title,
+                message
+            });
+            return res.json({
+                ok: true,
+                action: 'acknowledged',
+                key: ackRes.key || key,
+                message: 'Entendido (OK). No se enviarán más avisos para esta clase/turno hoy.'
+            });
         }
 
         if (action === 'skip' && refId) {
