@@ -1,10 +1,10 @@
 # Guía Paso a Paso: Instalación Mínima de Ubuntu Server 26.04 LTS y Despliegue 100 % Automático con GitHub Actions — Personal Daily Hub
 
-> Guía optimizada para convertir una PC local (Intel Core i7, ~8 GB RAM, ~500 GB HDD) en un **servidor Ubuntu Server 26.04 LTS 100 % autónomo y local**. Tú solo instalas lo mínimo indispensable (**Ubuntu Server + llave SSH/`sudo` + Docker + Tailscale**), ajustas las **GitHub Variables** y, con solo hacer **merge a la rama `main`**, [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) instala dependencias, configura el sistema, endurece la seguridad, levanta los **4 contenedores Docker** (`mood_db`, `mood_app`, `mood_app2`, `mood_proxy`), restaura la base de datos desde Google Drive, activa **Tailscale HTTPS Serve** y ejecuta la verificación completa `[1/10]`–`[10/10]`.
+> Guía optimizada para convertir una PC local (Intel Core i7, ~8 GB RAM, ~500 GB HDD) en un **servidor Ubuntu Server 26.04 LTS 100 % autónomo y local**. Tú solo instalas lo mínimo indispensable (**Ubuntu Server + llave SSH/`sudo` + Docker + Tailscale**), ajustas las **GitHub Variables** y, con solo hacer **merge a la rama `main`**, [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) instala dependencias, configura el sistema, endurece la seguridad, despliega en **Blue-Green con los 4 contenedores Docker** (`mood_db`, `mood_app_blue`, `mood_app_green`, `mood_proxy`), restaura la base de datos desde Google Drive, activa **Tailscale HTTPS Serve** y ejecuta la verificación completa `[1/10]`–`[10/10]`.
 
 ---
 
-## Índice
+## 📑 Índice
 
 | Paso | Sección |
 | :--- | :--- |
@@ -16,7 +16,7 @@
 | 6 | [6. Preparación MÍNIMA en Ubuntu Server (SSH + `sudo`, Docker, Tailscale y Word)](#6-preparación-mínima-en-ubuntu-server-ssh--sudo-docker-tailscale-y-word) |
 | 7 | [7. Configurar Variables y Secrets en GitHub (sin perder tus Secrets actuales)](#7-configurar-variables-y-secrets-en-github-sin-perder-tus-secrets-actuales) |
 | 8 | [8. Merge a `main` = Despliegue y Configuración Total Automática](#8-merge-a-main--despliegue-y-configuración-total-automática) |
-| 9 | [9. Verificación automática (`[1/10]`–`[10/10]`), Balanceador `pdh_lb` y App Web](#9-verificación-automática-1101010-balanceador-pdh_lb-y-app-web) |
+| 9 | [9. Verificación automática (`[1/10]`–`[10/10]`), Proxy Blue-Green Caddy y Rollback](#9-verificación-automática-1101010-proxy-blue-green-caddy-y-rollback) |
 | 10 | [10. Seguridad aplicada automáticamente y ACLs opcionales en Tailscale](#10-seguridad-aplicada-automáticamente-y-acls-opcionales-en-tailscale) |
 | 11 | [11. Operación diaria, cambio seguro de `DB_PASS`, Drive y solución de problemas](#11-operación-diaria-cambio-seguro-de-db_pass-drive-y-solución-de-problemas) |
 
@@ -385,17 +385,17 @@ Al detectar el merge/push en `main`, [`.github/workflows/deploy.yml`](../.github
 4. **Paquetes y utilidades:** instala/actualiza `git`, `curl`, `rclone`, `cron`, `openssl`, `python3`, `ffmpeg`, `ufw`, `fail2ban`, `unattended-upgrades`, `auditd` y `/usr/local/bin/yt-dlp -U`.
 5. **Sincronización limpia del código:** inicializa o resetea `~/projects/mood-tracker` a `origin/main` preservando `data/` (`Diario.docx`), `english-notes/` y `logs/`, y retira `sincronitation/`.
 6. **Entorno 100 % en RAM (`/dev/shm`) + Google Drive:** genera el entorno temporal desde tus GitHub Variables/Secrets, escribe `~/.config/rclone/rclone.conf` desde `RCLONE_CONF_B64` (`chmod 600`) y valida la carpeta en Drive.
-7. **Build y arranque de los 4 contenedores:** levanta `mood_db` (MySQL 8.0 tuned para HDD), `mood_app`, `mood_app2` y el balanceador Caddy `mood_proxy`, y espera a que los 4 reporten `healthy`.
+7. **Build y despliegue Blue-Green (4 contenedores):** levanta `mood_db` (MySQL 8.0 tuned para HDD), el slot inactivo entre `mood_app_blue` (`127.0.0.1:3001`) y `mood_app_green` (`127.0.0.1:3002`), y el proxy inverso Caddy `mood_proxy` (`127.0.0.1:8080`); ejecuta smoke test previo sobre el slot nuevo y realiza el corte atómico mediante `./scripts/blue-green.sh switch` dejando el slot previo en *warm standby* (solo el slot activo corre schedulers).
 8. **Auto-restauración de BD desde Google Drive:** si MySQL está vacío, `./scripts/restore.sh --if-empty` descarga `respaldo_mood_tracker.sql.gz` desde Drive y restaura todos tus datos.
-9. **Crons automáticos y zona horaria:** ajusta `TZ`, guarda `~/projects/respaldos/.backup.meta`, registra el respaldo diario (`BACKUP_CRON_SCHEDULE`), configura `/etc/cron.d/dailyhub-sys-update` como `root` (domingos `04:00` para `apt-get upgrade -y` y `/usr/local/bin/yt-dlp -U` sin requerir `NOPASSWD:ALL`) y registra en tu `crontab` el `yt-dlp -U` semanal de los domingos (`04:15`) para `mood_app` y `mood_app2`.
-10. **Tailscale Serve + Endurecimiento del SO:** activa `tailscale serve --bg http://127.0.0.1:8080`, aplica firewall UFW (cerrando `22/tcp` en LAN si `UFW_CLOSE_LAN_SSH=true`), bloquea logins SSH por contraseña (`PasswordAuthentication no`), configura `fail2ban`, `unattended-upgrades`, kernel anti-DoS (`tcp_syncookies = 1`), aislamiento `/proc` (`hidepid=2`) y reglas `auditd`.
+9. **Crons automáticos y zona horaria:** ajusta `TZ`, guarda `~/projects/respaldos/.backup.meta`, registra el respaldo diario (`BACKUP_CRON_SCHEDULE`), configura `/etc/cron.d/dailyhub-sys-update` como `root` (domingos `04:00` para `apt-get upgrade -y` y `/usr/local/bin/yt-dlp -U` sin requerir `NOPASSWD:ALL`) y registra en tu `crontab` el `yt-dlp -U` semanal de los domingos (`04:15`) para `mood_app_blue` y `mood_app_green`.
+10. **Tailscale Serve + Endurecimiento del SO:** activa `tailscale serve --bg http://127.0.0.1:8080` *(nota: si conviven otros proyectos en el mismo host, nunca ejecutes `tailscale serve reset` manual)*, aplica firewall UFW (cerrando `22/tcp` en LAN si `UFW_CLOSE_LAN_SSH=true`), bloquea logins SSH por contraseña (`PasswordAuthentication no`), configura `fail2ban`, `unattended-upgrades`, kernel anti-DoS (`tcp_syncookies = 1`), aislamiento `/proc` (`hidepid=2`) y reglas `auditd`.
 11. **Sellado y verificación `[1/10]`–`[10/10]`:** destruye el entorno temporal con `shred` (cero `.env` en disco) y corre `./scripts/verify-ubuntu-local.sh` imprimiendo el resumen completo en los logs de GitHub Actions.
 
-*(También puedes relanzar cualquier ajuste manualmente desde GitHub -> **Actions -> Deploy to Ubuntu Server (Tailscale / SSH) -> Run workflow**).*
+*(También puedes relanzar cualquier ajuste manualmente desde GitHub -> **Actions -> Deploy to Ubuntu Server (Tailscale / SSH) -> Run workflow**, o revertir en segundos con **Actions -> Rollback Blue-Green -> Run workflow** via [`.github/workflows/rollback.yml`](../.github/workflows/rollback.yml)).*
 
 ---
 
-## 9. Verificación automática (`[1/10]`–`[10/10]`), Balanceador `pdh_lb` y App Web
+## 9. Verificación automática (`[1/10]`–`[10/10]`), Proxy Blue-Green Caddy y Rollback
 
 ### 9.1 Verificación automatizada completa (`[1/10]`–`[10/10]`)
 
@@ -407,21 +407,21 @@ cd ~/projects/mood-tracker
 ```
 
 Audita las 10 secciones:
-* **`[1/10]`–`[2/10]`:** RAM/Swap/HDD (`vm.swappiness`) y estado `running (healthy)` de los **4 contenedores** (`mood_db`, `mood_app`, `mood_app2`, `mood_proxy`) + tuning InnoDB.
+* **`[1/10]`–`[2/10]`:** RAM/Swap/HDD (`vm.swappiness`) y estado `running (healthy)` de los **4 contenedores** (`mood_db`, `mood_app_blue`, `mood_app_green`, `mood_proxy`) + tuning InnoDB.
 * **`[3/10]`–`[6/10]`:** Puertos solo en `127.0.0.1`, UFW, `tailscale serve`, `node` + `tzdata`, `python3` + `msoffcrypto OOXMLFile`, `yt-dlp --js-runtimes node` + `ffmpeg`.
-* **`[7/10]`–`[8/10]`:** Salud en `127.0.0.1:3000/healthz` **y** balanceador Caddy en `127.0.0.1:8080/healthz` con sticky cookie `pdh_lb` + `X-Replica-Id`, `/vendor/crypto-js.min.js` local sin CDN, HSTS/426/CORS y permisos en `./data/journal`, `./english-notes`, `./logs`.
+* **`[7/10]`–`[8/10]`:** Salud en el slot activo (`127.0.0.1:3001/healthz` o `3002/healthz`) **y** proxy Caddy en `127.0.0.1:8080/healthz` con cabecera `X-Replica-Id` + `X-App-Version`, `/vendor/crypto-js.min.js` local sin CDN, HSTS/426/CORS y permisos en `./data/journal`, `./english-notes`, `./logs`.
 * **`[9/10]`–`[10/10]`:** Conectividad con Google Drive (`rclone`), `respaldo_mood_tracker.sql.gz` y `historico_completo.json.gz`, cron `yt-dlp -U`, contenedores endurecidos, cero `.env` plano, `tcp_syncookies`, `PasswordAuthentication no`, `fail2ban`, `unattended-upgrades` y `/proc` con `hidepid=2`.
 
-### 9.2 Probar manualmente el Balanceador de Cargas y Failover (Opcional)
+### 9.2 Probar manualmente el corte Blue-Green y Rollback instantáneo (Opcional)
 
 ```bash
-# 1) Primera petición al balanceador Caddy: observa Set-Cookie: pdh_lb=... y X-Replica-Id: app (o app2)
+# 1) Consultar qué slot (blue o green) atiende actualmente 127.0.0.1:8080
+./scripts/blue-green.sh status
 curl -i http://127.0.0.1:8080/healthz
 
-# 2) Prueba de Failover sin caída: detener mood_app2 y verificar que Caddy sigue sirviendo vía mood_app
-docker stop mood_app2
+# 2) Revertir tráfico al slot standby anterior en segundos (y devolverlo si quieres)
+./scripts/blue-green.sh rollback
 curl -i http://127.0.0.1:8080/healthz
-docker start mood_app2 && docker compose ps
 ```
 
 ### 9.3 Respaldos Google Drive vs almacenamiento estrictamente local
@@ -452,7 +452,7 @@ docker start mood_app2 && docker compose ps
 
 1. **Túnel WireGuard (Tailscale):** red privada cifrada con **0 puertos abiertos** en tu router.
 2. **HTTPS TLS 1.3 (`tailscale serve` -> Caddy `127.0.0.1:8080` + `REQUIRE_HTTPS=true`):** HSTS, CSP estricto, cookies `HttpOnly; Secure; SameSite=Lax`, rechazo HTTP plano (`426` en `/api/*`) y CORS restringido a `*.ts.net`.
-3. **Túnel de Transporte (`TransportCrypto`):** X25519 + HKDF-SHA256 + AES-256-CTR + HMAC-SHA256 sobre `/api/*` con sesiones sticky (`pdh_lb`).
+3. **Túnel de Transporte (`TransportCrypto`):** X25519 + HKDF-SHA256 + AES-256-CTR + HMAC-SHA256 sobre `/api/*` detrás del proxy atómico Blue-Green.
 4. **Cifrado E2EE (`JOURNAL_SECRET_KEY`):** sobres AES-256-CBC cifrados en navegador antes de viajar.
 
 ### 10.2 Endurecimiento ya automatizado en `deploy.yml`
@@ -492,18 +492,19 @@ En **Tailscale Admin Console -> Access controls** puedes restringir qué disposi
 
 ```bash
 cd ~/projects/mood-tracker
+./scripts/blue-green.sh status
 docker compose ps
-docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' mood_db mood_app mood_app2 mood_proxy
-docker compose logs --tail=60 -f proxy app app2
+docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' mood_db mood_app_blue mood_app_green mood_proxy
+docker compose logs --tail=60 -f proxy app_blue app_green
 ```
 
-### 11.2 Reinicio o despliegue sin tiempo de caída
+### 11.2 Reinicio, despliegue o rollback sin tiempo de caída
 
-* **Vía GitHub (recomendado):** cualquier cambio fusionado a `main` se despliega solo vía `.github/workflows/deploy.yml`.
-* **Reinicio manual por SSH (Rolling Restart):**
+* **Vía GitHub (recomendado):** cualquier cambio fusionado a `main` despliega en Blue-Green vía `.github/workflows/deploy.yml`, y `.github/workflows/rollback.yml` permite revertir al instante con `instant-switch`.
+* **Rollback o cambio manual por SSH:**
   ```bash
   cd ~/projects/mood-tracker
-  docker compose restart app2 && sleep 5 && docker compose restart app
+  ./scripts/blue-green.sh rollback
   ```
 
 ### 11.3 Cambiar `DB_PASS` en caliente sin perder datos
@@ -519,7 +520,7 @@ docker exec -e OLD_PW="TU_CONTRASENA_ACTUAL" mood_db sh -c \
   'MYSQL_PWD="$OLD_PW" mysql -u root -e "ALTER USER '\''root'\''@'\''%'\'' IDENTIFIED BY '\''TU_NUEVA_CONTRASENA_SEGURA'\''; ALTER USER '\''root'\''@'\''localhost'\'' IDENTIFIED BY '\''TU_NUEVA_CONTRASENA_SEGURA'\''; FLUSH PRIVILEGES;"'
 ```
 
-Luego actualiza el Secret **`DB_PASS`** en GitHub y lanza obligatoriamente **`Run workflow`** (en **Actions -> Deploy to Ubuntu Server**): esto recrea `mood_db` con la nueva variable de entorno `MYSQL_ROOT_PASSWORD` (necesaria para que `scripts/backup.sh` en modo sellado siga funcionando) y recrea `mood_app` / `mood_app2` con la nueva contraseña.
+Luego actualiza el Secret **`DB_PASS`** en GitHub y lanza obligatoriamente **`Run workflow`** (en **Actions -> Deploy to Ubuntu Server**): esto recrea `mood_db` con la nueva variable de entorno `MYSQL_ROOT_PASSWORD` (necesaria para que `scripts/backup.sh` en modo sellado siga funcionando) y actualiza `mood_app_blue` / `mood_app_green` con la nueva contraseña.
 
 ### 11.4 Mantenimiento frecuente (Drive, permisos, `yt-dlp` y restauración)
 
@@ -543,9 +544,9 @@ Luego actualiza el Secret **`DB_PASS`** en GitHub y lanza obligatoriamente **`Ru
   # Si existe .env plano en disco: ./scripts/restore.sh --force
   # Si usas cifrado local .env.enc: ./scripts/env-vault.sh restore --force
   ```
-* **Actualizar `yt-dlp` manualmente en host y ambas réplicas:**
+* **Actualizar `yt-dlp` manualmente en host y ambos slots Blue-Green:**
   ```bash
   sudo /usr/local/bin/yt-dlp -U || true
-  docker exec -u 0 mood_app yt-dlp -U
-  docker exec -u 0 mood_app2 yt-dlp -U
+  docker exec -u 0 mood_app_blue yt-dlp -U
+  docker exec -u 0 mood_app_green yt-dlp -U
   ```

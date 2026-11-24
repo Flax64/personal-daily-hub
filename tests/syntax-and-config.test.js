@@ -256,28 +256,24 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
     });
 
     it('reemplaza el arcoíris, expone controles de Settings/Jira/Recordatorios/Música y agrega índices a las guías', () => {
+        const activeDocs = [
+            'README.md',
+            'guides/GUIA_TECNICA_UNIFICADA.md',
+            'guides/GUIA_COMANDOS.md',
+            'guides/GUIA_COMANDOS_RAPIDOS.md',
+            'guides/GUIA_INSTALACION_UBUNTU_SERVER_26.md',
+            'guides/MANUAL_DE_USUARIO.md'
+        ];
         for (const relPath of [
             'public/index.html',
             'public/dashboard.html',
-            'README.md',
-            'guides/MANUAL_DE_USUARIO.md',
-            'guides/GUIA_TECNICA_ARQUITECTURA.md',
-            'guides/GUIA_OPERACION_Y_MIGRACION.md'
+            ...activeDocs
         ]) {
             const content = readText(relPath);
             assert.equal(content.includes('🌈'), false, `${relPath} no debe contener el emoji arcoíris`);
         }
 
-        for (const docPath of [
-            'README.md',
-            'guides/MANUAL_DE_USUARIO.md',
-            'guides/GUIA_TECNICA_ARQUITECTURA.md',
-            'guides/GUIA_OPERACION_Y_MIGRACION.md',
-            'guides/GUIA_COMANDOS.md',
-            'guides/GUIA_TECNICA.md',
-            'guides/GUIA_MIGRACION.md',
-            'guides/GUIA_INSTALACION_UBUNTU_SERVER_26.md'
-        ]) {
+        for (const docPath of activeDocs) {
             const top = readText(docPath).slice(0, 1200);
             assert.match(top, /## .*[ÍI]ndice/i, `${docPath} debe incluir un índice al inicio`);
         }
@@ -566,17 +562,33 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         }
 
         for (const guidePath of [
-            'guides/MANUAL_DE_USUARIO.md',
-            'guides/GUIA_TECNICA_ARQUITECTURA.md',
-            'guides/GUIA_OPERACION_Y_MIGRACION.md',
+            'README.md',
+            'guides/GUIA_TECNICA_UNIFICADA.md',
             'guides/GUIA_COMANDOS.md',
-            'guides/GUIA_TECNICA.md',
-            'guides/GUIA_MIGRACION.md',
-            'guides/GUIA_INSTALACION_UBUNTU_SERVER_26.md'
+            'guides/GUIA_COMANDOS_RAPIDOS.md',
+            'guides/GUIA_INSTALACION_UBUNTU_SERVER_26.md',
+            'guides/MANUAL_DE_USUARIO.md'
         ]) {
             const guide = readText(guidePath);
             assert.equal(guide.includes('file:///'), false, `${guidePath} no debe contener enlaces locales file:///`);
             assert.equal(guide.includes('docs-privados'), false, `${guidePath} no debe referenciar docs-privados`);
+        }
+
+        for (const removedGuide of [
+            'guides/GUIA_TECNICA.md',
+            'guides/GUIA_TECNICA_ARQUITECTURA.md',
+            'guides/GUIA_OPERACION_Y_MIGRACION.md',
+            'guides/GUIA_MIGRACION.md'
+        ]) {
+            assert.equal(fs.existsSync(path.resolve(ROOT, removedGuide)), false, `${removedGuide} debe haberse consolidado y eliminado`);
+        }
+
+        const readme = readText('README.md');
+        const guideLinkMatches = [...readme.matchAll(/\((guides\/[^)#\s]+\.md)(?:#[^)]*)?\)/g)];
+        assert.ok(guideLinkMatches.length >= 5, 'README.md debe enlazar las 5 guías vigentes de guides/');
+        for (const match of guideLinkMatches) {
+            const targetPath = match[1];
+            assert.equal(fs.existsSync(path.resolve(ROOT, targetPath)), true, `Enlace roto en README.md: ${targetPath}`);
         }
 
         const dockerfile = readText('Dockerfile');
@@ -1138,12 +1150,18 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
         assert.match(serverJs, /buildSafeRcloneExecEnv/, 'server.js debe limpiar variables RCLONE_* al invocar rclone CLI');
 
         const cmdGuide = readText('guides/GUIA_COMANDOS.md');
-        const techGuide = readText('guides/GUIA_TECNICA.md');
-        const migGuide = readText('guides/GUIA_MIGRACION.md');
+        const unifiedGuide = readText('guides/GUIA_TECNICA_UNIFICADA.md');
         assert.match(cmdGuide, /\| Parámetro/);
-        assert.match(techGuide, /Gratuito/i);
-        assert.match(techGuide, /Pago/i);
-        assert.match(migGuide, /Google Cloud Platform|GCP/i);
+        assert.match(cmdGuide, /Git Bash/i);
+        assert.match(cmdGuide, /Ubuntu|Linux/i);
+        assert.ok(unifiedGuide.includes('blue-green.sh'), 'GUIA_TECNICA_UNIFICADA.md debe documentar blue-green.sh');
+        assert.ok(unifiedGuide.includes('rollback.yml'), 'GUIA_TECNICA_UNIFICADA.md debe documentar rollback.yml');
+        assert.ok(unifiedGuide.includes('SyncRevisions'), 'GUIA_TECNICA_UNIFICADA.md debe documentar SyncRevisions SSE');
+        assert.match(unifiedGuide, /Gratuito/i);
+        assert.match(unifiedGuide, /Pago/i);
+        assert.match(unifiedGuide, /Dual Drive|STUDY_RCLONE/i);
+        assert.match(unifiedGuide, /Google Cloud Platform|GCP/i);
+        assert.match(unifiedGuide, /Ubuntu/i);
 
         for (const removedStudyId of [
             'id="studyViewerArtistFilter"',
