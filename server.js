@@ -11754,7 +11754,7 @@ app.get('/api/system/logs', apiReadLimiter.middleware, requireAdmin, (req, res) 
     });
 });
 
-<<<<<<< HEAD
+
 // =========================================================================
 // SINCRONIZACIÓN EN TIEMPO REAL ENTRE SESIONES Y RÉPLICAS (SSE + SyncRevisions)
 // =========================================================================
@@ -11821,7 +11821,7 @@ function filterSyncRevisionsForRole(revs = {}, rol = 'admin') {
     return filtered;
 }
 
-<<<<<<< HEAD
+
 async function fetchSyncRevisions({ force = false } = {}) {
     const now = Date.now();
     if (!force && syncRevisionsCacheAt > 0 && (now - syncRevisionsCacheAt) < SYNC_CACHE_TTL_MS) {
@@ -11838,7 +11838,7 @@ async function fetchSyncRevisions() {
         if (Array.isArray(rows)) {
             for (const row of rows) {
                 const scope = String(row?.scope || '').trim();
-<<<<<<< HEAD
+
                 if (!SYNC_SCOPES.includes(scope)) continue;
                 const rev = Number(row.revision);
                 if (Number.isFinite(rev) && rev > syncRevisionsSnapshot[scope]) {
@@ -11946,7 +11946,7 @@ function closeAllSseClients() {
 
 function bumpSyncRevision(scope) {
     if (!SYNC_SCOPES.includes(scope)) return;
-<<<<<<< HEAD
+
     syncRevisionsSnapshot[scope] = (Number(syncRevisionsSnapshot[scope]) || 1) + 1;
     syncRevisionsCacheAt = 0;
     const snapshotCopy = { ...syncRevisionsSnapshot };
@@ -12095,7 +12095,7 @@ app.get('/api/sync/stream', requireAuth, async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-<<<<<<< HEAD
+
     res.flushHeaders?.();
 
     const userId = Number(req.user.id);

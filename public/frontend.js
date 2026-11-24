@@ -224,7 +224,7 @@ if (rawBrowserFetch && clientTransportTunnel) {
         if (!headers.has('X-UI-Lang')) {
             headers.set('X-UI-Lang', i18nGetLang());
         }
-<<<<<<< HEAD
+
         const methodUpper = String(init.method || 'GET').toUpperCase();
         if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
             markLocalSyncMutation(inferSyncScopeFromUrl(urlStr));
@@ -1377,7 +1377,7 @@ function setMobileMenuOpen(isOpen) {
         sidebar.classList.remove('is-swiping');
         sidebar.style.transform = '';
     }
-<<<<<<< HEAD
+
     if (sidebarBackdrop) {
         sidebarBackdrop.style.opacity = '';
     }
@@ -1389,7 +1389,7 @@ function setMobileMenuOpen(isOpen) {
 }
 
 function initSidebarSwipeGesture() {
-<<<<<<< HEAD
+
     if (!appShell || !sidebar || sidebar.dataset.swipeWired === '1') return;
     sidebar.dataset.swipeWired = '1';
 
@@ -1480,7 +1480,7 @@ function initSidebarSwipeGesture() {
             }
         }
 
-<<<<<<< HEAD
+
         if (swipeState.directionLocked !== 'horizontal') return;
         const clampedX = Math.min(0, deltaX);
         swipeState.lastX = touch.clientX;
@@ -1524,7 +1524,7 @@ function initSidebarSwipeGesture() {
         }
     };
 
-<<<<<<< HEAD
+
     const onTouchCancel = () => {
         if (!swipeState) return;
         swipeState = null;
@@ -13226,7 +13226,7 @@ function enterAppSession(user) {
                 showView('inicio', false);
             }
         }
-<<<<<<< HEAD
+
         if (typeof startRealtimeSessionSync === 'function') {
             startRealtimeSessionSync();
 =======
