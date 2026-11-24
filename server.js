@@ -11816,7 +11816,7 @@ function filterSyncRevisionsForRole(revs = {}, rol = 'admin') {
     for (const scope of allowedScopes) {
         const val = Number(revs?.[scope]);
         filtered[scope] = Number.isFinite(val) && val > 0 ? val : 1;
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
     }
     return filtered;
 }
@@ -11831,7 +11831,7 @@ async function fetchSyncRevisions() {
     const base = {};
     for (const scope of SYNC_SCOPES) {
         base[scope] = Number(localSyncRevisions[scope]) || 1;
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
     }
     try {
         const rows = await dbQueryAsync('SELECT scope, revision FROM SyncRevisions');
@@ -11941,7 +11941,7 @@ function closeAllSseClients() {
         }
         sseSyncClients.delete(client);
     }
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
 }
 
 function bumpSyncRevision(scope) {
@@ -12087,7 +12087,7 @@ app.get('/api/sync/revisions', apiReadLimiter.middleware, requireAuth, async (re
         console.error('[SYNC_REVISIONS_ERROR]', err);
         return res.status(500).send('Error loading sync revisions.');
     }
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
 });
 
 app.get('/api/sync/stream', requireAuth, async (req, res) => {
@@ -12181,7 +12181,7 @@ app.get('/api/sync/stream', requireAuth, async (req, res) => {
     };
     req.on('close', cleanup);
     res.on('close', cleanup);
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
 });
 
 // Manejo controlado de rutas inexistentes y errores inesperados en API (sin filtrar stack traces)

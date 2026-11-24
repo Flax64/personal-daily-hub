@@ -236,7 +236,7 @@ if (rawBrowserFetch && clientTransportTunnel) {
             markLocalSyncMutation(init.method || 'GET');
         }
         return res;
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
     };
 }
 
@@ -1382,7 +1382,7 @@ function setMobileMenuOpen(isOpen) {
         sidebarBackdrop.style.opacity = '';
     }
 
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
     if (mobileMenuBtn) {
         mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
     }
@@ -1475,7 +1475,7 @@ function initSidebarSwipeGesture() {
                 sidebar.classList.add('is-swiping');
             } else {
                 tracking = false;
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
                 return;
             }
         }
@@ -1519,7 +1519,7 @@ function initSidebarSwipeGesture() {
         const shouldClose = isHorizontalSwipe && (lastDeltaX <= -65 || (velocity <= -0.45 && lastDeltaX <= -30));
         resetSwipeTransform();
         if (shouldClose) {
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
             setMobileMenuOpen(false);
         }
     };
@@ -1543,7 +1543,7 @@ function initSidebarSwipeGesture() {
         target.addEventListener('touchmove', handleTouchMove, { passive: true });
         target.addEventListener('touchend', handleTouchEnd, { passive: true });
         target.addEventListener('touchcancel', resetSwipeTransform, { passive: true });
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
     });
 }
 
@@ -13232,7 +13232,7 @@ function enterAppSession(user) {
 
         if (typeof initRealtimeSessionSync === 'function') {
             initRealtimeSessionSync();
->>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
+ 68af0d2b71750aa20f91dc814763197b1ba6055b
         }
     } catch (bootErr) {
         console.error('[SESSION_INIT_WARN]', bootErr);
