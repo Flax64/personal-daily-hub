@@ -1599,6 +1599,9 @@ function parseIsoDateToDayIndex(rawFecha) {
     return Number.isNaN(d.getTime()) ? -1 : d.getUTCDay();
 }
 
+let currentActiveView = '';
+let suppressNextHashChange = false;
+
 function showView(viewName, updateHash = true, options = {}) {
     let targetView = VALID_VIEWS.has(viewName) ? viewName : 'inicio';
 
@@ -1606,6 +1609,9 @@ function showView(viewName, updateHash = true, options = {}) {
     if (currentUser && currentUser.rol === 'psiquiatra') {
         targetView = 'resumen';
     }
+
+    const previousView = currentActiveView;
+    currentActiveView = targetView;
 
     actualizarCabecerasDeFecha();
 
@@ -1624,8 +1630,13 @@ function showView(viewName, updateHash = true, options = {}) {
         btn.classList.toggle('active', btn.getAttribute('data-view') === targetView);
     });
 
-    if (updateHash && window.location.hash !== `#${targetView}`) {
-        history.replaceState(null, '', `#${targetView}`);
+    if (updateHash && typeof history !== 'undefined') {
+        const targetHash = `#${targetView}`;
+        if (options.historyMode === 'replace' || !previousView) {
+            history.replaceState({ view: targetView }, '', targetHash);
+        } else if (targetView !== previousView || window.location.hash !== targetHash) {
+            history.pushState({ view: targetView }, '', targetHash);
+        }
     }
 
     setMobileMenuOpen(false);
@@ -1881,11 +1892,24 @@ if (appShell) {
         });
     });
 
-    // URL hash navigation support
-    window.addEventListener('hashchange', () => {
+    // Browser Back/Forward & URL hash navigation support
+    window.addEventListener('popstate', (event) => {
         if (!currentUser) return;
+        suppressNextHashChange = true;
+        setTimeout(() => { suppressNextHashChange = false; }, 0);
+        const rawView = (event && event.state && event.state.view)
+            || window.location.hash.replace('#', '')
+            || 'inicio';
+        const resolvedView = currentUser.rol === 'psiquiatra'
+            ? 'resumen'
+            : (VALID_VIEWS.has(rawView) ? rawView : 'inicio');
+        showView(resolvedView, false);
+    });
+
+    window.addEventListener('hashchange', () => {
+        if (!currentUser || suppressNextHashChange) return;
         const hashView = window.location.hash.replace('#', '');
-        if (VALID_VIEWS.has(hashView)) {
+        if (VALID_VIEWS.has(hashView) && hashView !== currentActiveView) {
             showView(hashView, false);
         }
     });
@@ -12964,6 +12988,7 @@ function showAuthForm(formId, subtitleText) {
 
 function showAuthScreen(defaultForm = 'authLoginForm') {
     currentUser = null;
+    currentActiveView = '';
     pendingMfaState = { token: '', email: '' };
     if (sundayWatcherInterval) {
         clearInterval(sundayWatcherInterval);
@@ -13068,7 +13093,10 @@ function enterAppSession(user) {
         }
 
         if (isPsiquiatra) {
-            showView('resumen', true);
+            if (typeof history !== 'undefined' && typeof history.replaceState === 'function') {
+                history.replaceState({ view: 'resumen' }, '', `${window.location.pathname}#resumen`);
+            }
+            showView('resumen', false);
         } else {
             fetch('/api/settings', { cache: 'no-store' })
                 .then(r => (r.ok ? r.json() : null))
@@ -13095,7 +13123,6 @@ function enterAppSession(user) {
             const urlParams = new URLSearchParams(window.location.search);
             const rView = urlParams.get('rView');
             const shouldCaptureGps = urlParams.get('captureGps') === '1';
-            const initialHash = window.location.hash.replace('#', '');
             if (rView && VALID_VIEWS.has(rView)) {
                 openReminderTarget({
                     targetView: rView,
@@ -13106,17 +13133,17 @@ function enterAppSession(user) {
                     targetTab: urlParams.get('rTab') || '',
                     refId: urlParams.get('rRef') || null
                 });
-                history.replaceState(null, '', `${window.location.pathname}#${rView}`);
+                history.replaceState({ view: rView }, '', `${window.location.pathname}#${rView}`);
                 if (shouldCaptureGps && currentUser?.rol === 'admin') {
                     setTimeout(() => triggerSmartGpsCapture('current'), 450);
                 }
             } else if (shouldCaptureGps && currentUser?.rol === 'admin') {
                 openReminderTarget({ targetView: 'horario', targetTab: 'locations' });
-                history.replaceState(null, '', `${window.location.pathname}#horario`);
+                history.replaceState({ view: 'horario' }, '', `${window.location.pathname}#horario`);
                 setTimeout(() => triggerSmartGpsCapture('current'), 450);
             } else {
-                const startView = VALID_VIEWS.has(initialHash) ? initialHash : 'inicio';
-                showView(startView, false);
+                history.replaceState({ view: 'inicio' }, '', `${window.location.pathname}#inicio`);
+                showView('inicio', false);
             }
         }
         if (typeof startRealtimeSessionSync === 'function') {
@@ -13131,7 +13158,70 @@ function enterAppSession(user) {
     }
 }
 
+function resetMedicoAutofillShield({ forceClear = false } = {}) {
+    if (typeof document === 'undefined') return;
+    const medicoFormEl = document.getElementById('medicoForm');
+    if (!medicoFormEl || typeof medicoFormEl.querySelectorAll !== 'function') return;
+    const fields = medicoFormEl.querySelectorAll('[data-no-autofill="true"]');
+    fields.forEach((field) => {
+        if (!field) return;
+        if (forceClear) {
+            delete field.dataset.userEdited;
+        }
+        if (forceClear || field.dataset.userEdited !== 'true') {
+            field.value = '';
+            field.readOnly = true;
+            if (typeof field.setAttribute === 'function') {
+                field.setAttribute('readonly', 'readonly');
+            }
+        }
+    });
+    if (!forceClear) {
+        setTimeout(() => {
+            fields.forEach((field) => {
+                if (field && field.dataset.userEdited !== 'true' && document.activeElement !== field) {
+                    field.value = '';
+                }
+            });
+        }, 120);
+    }
+}
+
+function initMedicoAutofillShield() {
+    if (typeof document === 'undefined') return;
+    const medicoFormEl = document.getElementById('medicoForm');
+    if (!medicoFormEl || medicoFormEl.dataset?.autofillShieldWired === '1') return;
+    if (medicoFormEl.dataset) medicoFormEl.dataset.autofillShieldWired = '1';
+
+    const unlockField = (field) => {
+        if (!field) return;
+        field.readOnly = false;
+        if (typeof field.removeAttribute === 'function') {
+            field.removeAttribute('readonly');
+        }
+    };
+
+    if (typeof medicoFormEl.querySelectorAll === 'function') {
+        medicoFormEl.querySelectorAll('[data-no-autofill="true"]').forEach((field) => {
+            if (!field || typeof field.addEventListener !== 'function') return;
+            ['focus', 'pointerdown', 'keydown'].forEach((evtName) => {
+                field.addEventListener(evtName, () => unlockField(field));
+            });
+            field.addEventListener('input', () => {
+                field.dataset.userEdited = 'true';
+            });
+        });
+    }
+
+    if (typeof medicoFormEl.addEventListener === 'function') {
+        medicoFormEl.addEventListener('reset', () => {
+            setTimeout(() => resetMedicoAutofillShield({ forceClear: true }), 0);
+        });
+    }
+}
+
 function cargarMedicos() {
+    resetMedicoAutofillShield({ forceClear: false });
     const container = document.getElementById('medicosList');
     if (!container || !currentUser || currentUser.rol !== 'admin') return;
 
@@ -13288,6 +13378,12 @@ function initPasswordToggles() {
 
         setPasswordVisibilityState(input, btn, false);
         btn.addEventListener('click', () => {
+            if (input.hasAttribute && input.hasAttribute('data-no-autofill')) {
+                input.readOnly = false;
+                if (typeof input.removeAttribute === 'function') {
+                    input.removeAttribute('readonly');
+                }
+            }
             const willShow = input.type === 'password';
             setPasswordVisibilityState(input, btn, willShow);
             input.focus();
@@ -13574,6 +13670,8 @@ function initAuthHandlers() {
         });
     }
 
+    initMedicoAutofillShield();
+
     let lastSavedMedicoSignature = '';
     bindLockedFormSubmit({
         formId: 'medicoForm',
@@ -13614,6 +13712,7 @@ function initAuthHandlers() {
             setInlineBanner('medicoStatusBanner', 'ok', data.message);
             showToast('ok', data.message);
             form.reset();
+            resetMedicoAutofillShield({ forceClear: true });
             resetPasswordToggles();
             cargarMedicos();
         }

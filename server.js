@@ -11521,6 +11521,7 @@ app.patch('/api/language/learning-toggle', apiWriteLimiter.middleware, requireAd
         };
         await saveUserSettings(uid, nextSettings);
 
+        bumpSyncRevision('settings');
         res.json({
             ok: true,
             studyEnabled: nextActive,
@@ -11641,6 +11642,7 @@ app.patch('/api/language/lessons/:id/complete', apiWriteLimiter.middleware, requ
             'UPDATE EstudioLecciones SET completada = 1, word_leido_en = COALESCE(word_leido_en, ?), completada_en = ? WHERE id = ? AND usuario_id = ?',
             [nowSql, nowSql, lesson.id, uid]
         );
+        bumpSyncRevision('music');
 
         bumpSyncRevision('music');
         res.json({ ok: true, id: lesson.id, completed: true });
