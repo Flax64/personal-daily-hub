@@ -304,11 +304,18 @@ body {
     display: flex;
     align-items: center;
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
+.password-input-wrap > input,
 .password-input-wrap input {
     width: 100%;
-    padding-right: 44px;
+    min-width: 0;
+    box-sizing: border-box;
+    padding-right: 46px;
+    text-overflow: ellipsis;
 }
 
 .password-input-wrap input::-ms-reveal,
@@ -316,13 +323,19 @@ body {
     display: none;
 }
 
+.password-input-wrap > .password-toggle-btn,
 .password-toggle-btn {
     position: absolute;
     right: 6px;
+    left: auto;
     top: 50%;
     transform: translateY(-50%);
     width: 34px;
+    min-width: 34px;
+    max-width: 34px;
     height: 34px;
+    flex: 0 0 34px;
+    z-index: 2;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -331,6 +344,7 @@ body {
     background: transparent;
     color: #64748b;
     cursor: pointer;
+    margin: 0;
     padding: 0;
     transition: color 0.15s, background-color 0.15s;
 }
@@ -4335,8 +4349,29 @@ body.modal-scroll-locked {
     font-size: 0.88rem;
 }
 
+.e2ee-key-box-full {
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.e2ee-key-box-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 10px;
+    flex-wrap: wrap;
+}
+
+.e2ee-key-box-full .form-hint {
+    margin: 0;
+}
+
 .settings-inline-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
     flex-wrap: wrap;
 }
@@ -5441,7 +5476,8 @@ body.modal-scroll-locked {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 4px 10px;
     margin-bottom: 7px;
 }
 
@@ -7074,8 +7110,8 @@ body {
         align-items: stretch;
     }
 
-    .music-yt-finder-bar button,
-    .music-inline-input button {
+    .music-yt-finder-bar > button:not(.password-toggle-btn),
+    .music-inline-input > button:not(.password-toggle-btn) {
         width: 100%;
     }
 
@@ -8392,8 +8428,9 @@ body {
         align-items: flex-start;
     }
 
-    .settings-inline-actions input,
-    .settings-inline-actions button {
+    .settings-inline-actions > input,
+    .settings-inline-actions > .password-input-wrap,
+    .settings-inline-actions > button:not(.password-toggle-btn) {
         width: 100%;
     }
 }
@@ -11366,13 +11403,23 @@ input[type="password"] {
         box-sizing: border-box;
     }
 
+    .e2ee-key-box > .settings-inline-actions {
+        width: 100%;
+    }
+
     .settings-inline-actions .secret-inline-wrap {
         width: 100%;
         flex: 1 1 100%;
     }
 
+    .settings-inline-actions .secret-inline-wrap > .password-toggle-btn {
+        width: 34px;
+        min-width: 34px;
+        max-width: 34px;
+    }
+
     .settings-inline-actions .secret-inline-wrap input[type="text"] {
-        padding-right: 44px;
+        padding-right: 46px;
     }
 
     .agenda-week-label {
@@ -11409,10 +11456,110 @@ input[type="password"] {
         width: auto;
     }
 
+    .mobile-topbar {
+        padding: 0 8px;
+        gap: 4px;
+    }
+
+    .mobile-topbar-left,
+    .mobile-topbar-right {
+        gap: 4px;
+        flex-shrink: 0;
+    }
+
+    .mobile-topbar-title {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 0.88rem;
+        padding: 0 2px;
+    }
+
+    .mobile-topbar .icon-btn {
+        width: 34px;
+        height: 34px;
+        font-size: 1.05rem;
+        border-radius: 9px;
+    }
+
     .mobile-topbar .icon-only-mobile {
-        min-width: 38px;
-        min-height: 36px;
-        padding: 6px 9px;
+        min-width: 34px;
+        width: 34px;
+        min-height: 34px;
+        height: 34px;
+        padding: 0;
+    }
+
+    .mobile-topbar .lang-icon-btn {
+        min-width: 34px;
+        width: auto;
+        height: 34px;
+        padding: 0 7px;
+        font-size: 0.74rem;
+    }
+
+    .mobile-topbar .moment-pill {
+        padding: 4px 8px;
+        font-size: 0.72rem;
+        max-width: 72px;
+        flex-shrink: 0;
+    }
+
+    #btnDownloadJournalWord {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        white-space: normal;
+        line-height: 1.25;
+    }
+}
+
+@media (max-width: 480px) {
+    .modal-card-compact .modal-actions,
+    .modal-actions-split {
+        flex-direction: column-reverse;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .modal-actions-split > .modal-actions {
+        flex-direction: column-reverse;
+        width: 100%;
+        margin-top: 0;
+        gap: 8px;
+    }
+
+    .modal-card-compact .modal-actions button,
+    .modal-actions-split > button {
+        flex: 0 0 auto;
+        width: 100%;
+    }
+}
+
+@media (max-width: 390px) {
+    .mobile-topbar .icon-btn,
+    .mobile-topbar .icon-only-mobile {
+        width: 32px;
+        min-width: 32px;
+        height: 32px;
+        min-height: 32px;
+    }
+
+    .mobile-topbar .lang-icon-btn {
+        min-width: 30px;
+        height: 32px;
+        padding: 0 6px;
+        font-size: 0.7rem;
+    }
+
+    .mobile-topbar .moment-pill {
+        padding: 3px 6px;
+        font-size: 0.68rem;
+        max-width: 64px;
+    }
+
+    .mobile-topbar-title {
+        font-size: 0.84rem;
     }
 }
 

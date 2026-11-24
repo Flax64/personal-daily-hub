@@ -1,251 +1,217 @@
-# 🛠️ Guía Rápida de Comandos del Proyecto (Git Bash, PC, Docker y AWS EC2)
+# ⚡ Guía de Comandos Rápidos (Copy-Paste) — Personal Daily Hub
 
-## Índice de Comandos
-1. [1. Comandos para Dividir Archivos y Cargar a la IA (Git Bash)](#1-comandos-para-dividir-archivos-y-cargar-a-la-ia-git-bash)
-   - [1.1 Script Completo por Tamaño (118 KB en `codigo_dividido/`)](#11-script-completo-por-tamaño-118-kb-en-codigo_dividido)
-   - [1.2 División con Número de Línea Exacto (`for-gemini/`)](#12-división-con-número-de-línea-exacto-for-gemini)
-2. [2. Comandos de Consulta de Información y Diagnóstico](#2-comandos-de-consulta-de-información-y-diagnóstico)
-3. [3. Comandos para Reiniciar, Iniciar y Detener Servicios](#3-comandos-para-reiniciar-iniciar-y-detener-servicios)
-4. [4. Comandos de la Bóveda de Seguridad (`.env.enc` y Windows DPAPI)](#4-comandos-de-la-bóveda-de-seguridad-envenc-y-windows-dpapi)
-5. [5. Comandos de Base de Datos MySQL y Respaldos en Google Drive (`rclone`)](#5-comandos-de-base-de-datos-mysql-y-respaldos-en-google-drive-rclone)
-6. [6. Comandos del Worker Local de PC (`sincronizador.py` y `yt-dlp`)](#6-comandos-del-worker-local-de-pc-sincronizadorpy-y-yt-dlp)
-7. [7. Comandos de Pruebas, Git, Commits Desglosados y Despliegue](#7-comandos-de-pruebas-git-commits-desglosados-y-despliegue)
+> Cheatsheet directo de **puros comandos** listos para copiar y pegar. Para explicación detallada de parámetros y banderas, consulta [GUIA_COMANDOS.md](./GUIA_COMANDOS.md).
 
 ---
 
-## 1. Comandos para Dividir Archivos y Cargar a la IA (Git Bash)
+## 📑 Índice
 
-### 1.1 Script Completo por Tamaño (118 KB en `codigo_dividido/`)
-Divide automáticamente todo el código fuente del proyecto en partes de `118 KB` listas para subir a la IA, excluyendo `.git`, `node_modules`, `for-gemini` y `codigo_dividido`:
-
-```bash
-# Eliminar extracción anterior
-rm -rf codigo_dividido
-
-# Crear carpeta
-mkdir -p codigo_dividido
-
-# Buscar archivos del proyecto y dividirlos en bloques de 118 KB
-find . -type f \( \
-    -name "*.java" -o -name "*.js" -o -name "*.html" -o -name "*.css" -o -name "*.sql" -o \
-    -name "*.cs" -o -name "*.py" -o -name "*.cpp" -o -name "*.h" -o -name "*.xml" -o \
-    -name "*.json" -o -name "*.yml" -o -name "*.yaml" -o -name "Dockerfile" -o \
-    -name "Dockerfile.*" -o -name "docker-compose*" -o -name "compose.yml" -o \
-    -name "compose.yaml" -o -name ".dockerignore" -o -name ".gitignore" -o \
-    -name ".env.example" -o -name "Makefile" \
-\) \
--not -path "./.git/*" \
--not -path "./node_modules/*" \
--not -path "./codigo_dividido/*" \
--not -path "./for-gemini/*" \
-| while IFS= read -r archivo; do
-
-    nombre=$(basename "$archivo")
-    nombre_limpio="${nombre%.*}"
-    extension="${nombre##*.}"
-
-    split -b 118K -d -a 3 \
-    --additional-suffix=".$extension.txt" \
-    "$archivo" "codigo_dividido/${nombre_limpio}_parte_"
-
-done
-```
-
-### 1.2 División con Número de Línea Exacto (`for-gemini/`)
-Útil cuando necesitas pasar un archivo específico o un rango de líneas numeradas a la IA:
-
-```bash
-# Preparar carpeta for-gemini limpia
-mkdir -p for-gemini && rm -f for-gemini/*.txt
-
-# Dividir archivos Python con números de línea exactos
-nl -ba sincronitation/yt_lyrics_helper.py | split -l 550 -d -a 2 - for-gemini/PY_HELPER_ && \
-for f in for-gemini/PY_HELPER_*; do mv "$f" "${f}.txt"; done
-
-nl -ba sincronitation/sincronizador.py | split -l 1200 -d -a 2 - for-gemini/PY_SINCRO_ && \
-for f in for-gemini/PY_SINCRO_*; do mv "$f" "${f}.txt"; done
-
-# Dividir frontend.js, server.js o style.css con números de línea
-nl -ba public/frontend.js | split -l 2500 -d -a 2 - for-gemini/FRONT_ && \
-for f in for-gemini/FRONT_*; do mv "$f" "${f}.txt"; done
-
-nl -ba server.js | split -l 2000 -d -a 2 - for-gemini/SERVER_ && \
-for f in for-gemini/SERVER_*; do mv "$f" "${f}.txt"; done
-
-# Guardar resultado de pruebas en archivo de texto para enviar a la IA
-npm test > for-gemini/error_actual.txt 2>&1 || true
-```
+1. [Git Bash — Ramas, commits, limpieza y pruebas](#1-git-bash--ramas-commits-limpieza-y-pruebas)
+2. [Ubuntu Server — Blue-Green, Docker, Caddy y Rollback manual](#2-ubuntu-server--blue-green-docker-caddy-y-rollback-manual)
+3. [Tailscale y verificación de puertos/servicios](#3-tailscale-y-verificación-de-puertosservicios)
+4. [MySQL, Backups y `rclone` (Google Drive)](#4-mysql-backups-y-rclone-google-drive)
+5. [Bóveda `.env.enc` (PC y Servidor)](#5-bóveda-envenc-pc-y-servidor)
+6. [Diagnóstico rápido de RAM, CPU, Disco, Procesos y Logs (Linux / WSL)](#6-diagnóstico-rápido-de-ram-cpu-disco-procesos-y-logs-linux--wsl)
+7. [Sincronizador local Python / `yt-dlp` en Windows](#7-sincronizador-local-python--yt-dlp-en-windows)
 
 ---
 
-## 2. Comandos de Consulta de Información y Diagnóstico
-
-### En tu PC Local (Git Bash)
-```bash
-# Consultar estado de la bóveda local (.env vs .env.enc)
-node scripts/local-vault.js status
-
-# Consultar desde dónde se resuelve yt-dlp en tu PC (PATH o GitHub Variable YT_DLP_PATH)
-python sincronitation/yt_lyrics_helper.py --check-yt-dlp
-
-# Ver las últimas 40 líneas del log del sincronizador en tu PC
-tail -n 40 sincronitation/historial.log
-
-# Ver en vivo lo que está haciendo sincronizador.py en tu PC
-tail -f sincronitation/historial.log
-
-# Consultar si hay procesos de Word (WINWORD.EXE) ocultos o colgados en Windows
-tasklist //FI "IMAGENAME eq WINWORD.EXE"
-```
-
-### En el Servidor AWS EC2 (vía SSH)
-```bash
-# Ver estado y consumo de contenedores Docker (App y MySQL)
-docker compose ps
-docker stats --no-stream
-
-# Ver memoria RAM y Swap disponible en la instancia t3.micro
-free -h
-
-# Ver espacio en disco disponible en la instancia
-df -h
-
-# Consultar logs en tiempo real del servidor Node.js (últimas 100 líneas)
-docker logs --tail 100 -f mood_app
-
-# Consultar logs del contenedor MySQL
-docker logs --tail 50 mood_db
-
-# Consultar registro del respaldo automático nocturno hacia Google Drive
-tail -n 50 ~/projects/respaldos/backup.log
-
-# Ver tareas programadas en Cron (respaldo diario 3:30 AM)
-crontab -l
-```
-
----
-
-## 3. Comandos para Reiniciar, Iniciar y Detener Servicios
-
-### En tu PC Local (Sincronizador y Entorno Local)
-```bash
-# Iniciar la app localmente leyendo .env.enc solo en memoria RAM (sin dejar .env en disco)
-node scripts/local-vault.js run -- npm start
-
-# Iniciar el sincronizador de Word + Puente de Letras en PC
-python sincronitation/sincronizador.py
-
-# Reiniciar el sincronizador en PC si ya estaba corriendo en segundo plano
-taskkill //F //IM python.exe //FI "WINDOWTITLE eq *sincronizador*" 2>/dev/null || true
-python sincronitation/sincronizador.py
-
-# Liberar procesos WINWORD.EXE colgados en segundo plano (si Word se bloqueó)
-taskkill //F //IM WINWORD.EXE
-```
-
-### En el Servidor AWS EC2 (Docker)
-```bash
-# Reiniciar únicamente el servidor Node.js (rápido, sin tocar MySQL)
-docker restart mood_app
-
-# Reiniciar la base de datos MySQL y la aplicación
-docker restart mood_db mood_app
-
-# Levantar o reconstruir contenedores usando la bóveda sellada (.env.enc)
-./scripts/env-vault.sh up
-
-# Detener todos los contenedores sin perder datos del volumen MySQL
-docker compose down
-```
-
----
-
-## 4. Comandos de la Bóveda de Seguridad (`.env.enc` y Windows DPAPI)
+## 1. Git Bash — Ramas, commits, limpieza y pruebas
 
 ```bash
-# Cifrar tu archivo .env local a .env.enc (AES-256-CBC + PBKDF2 600,000 iteraciones) y borrar .env plano
-node scripts/local-vault.js encrypt
-
-# Descifrar temporalmente .env.enc a .env para editar variables
-node scripts/local-vault.js decrypt
-
-# Volver a bloquear/borrar el .env plano asegurando que exista .env.enc
-node scripts/local-vault.js lock
-
-# Configurar el autoinicio en Windows (guarda la clave en Windows DPAPI de tu usuario)
-python sincronitation/sincronizador.py --configurar-autoinicio
-
-# Probar que el autoinicio Windows DPAPI descifra .env.enc en RAM correctamente
-python sincronitation/sincronizador.py --probar-autoinicio
-
-# Eliminar la clave guardada en Windows DPAPI
-python sincronitation/sincronizador.py --quitar-autoinicio
-```
-
----
-
-## 5. Comandos de Base de Datos MySQL y Respaldos en Google Drive (`rclone`)
-
-```bash
-# Ejecutar respaldo manual inmediato a Google Drive + actualizar historico_completo.json.gz + purga >30 días
-./scripts/backup.sh
-
-# Restaurar respaldo desde Google Drive solo si la base de datos está vacía
-./scripts/restore.sh --if-empty
-
-# Forzar restauración completa desde Google Drive (sobrescribe datos locales con el último backup)
-./scripts/restore.sh --force
-
-# Consultar conteo de registros actuales en MySQL local (ventana de 30 días)
-docker exec -i mood_db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root "$MYSQL_DATABASE" -e "
-SELECT \"Mood\" AS Tabla, COUNT(*) AS Registros FROM RegistrosMood
-UNION ALL SELECT \"Sleep\", COUNT(*) FROM RegistrosSleep
-UNION ALL SELECT \"Crisis\", COUNT(*) FROM RegistrosCrisis
-UNION ALL SELECT \"Agenda\", COUNT(*) FROM RegistrosAgenda
-UNION ALL SELECT \"Canciones\", COUNT(*) FROM MusicaCanciones;"'
-
-# Listar archivos de respaldo almacenados en Google Drive vía rclone
-rclone lsl gdrive:RespaldosApp
-```
-
----
-
-## 6. Comandos del Worker Local de PC (`sincronizador.py` y `yt-dlp`)
-
-```bash
-# Extraer letra limpia y metadatos de una canción de YouTube / YT Music y copiarla al portapapeles
-python sincronitation/yt_lyrics_helper.py "https://www.youtube.com/watch?v=VIDEO_ID" --clip
-
-# Extraer subtítulos en Coreano, Inglés y Español y guardarlos en archivo .txt UTF-8
-python sincronitation/yt_lyrics_helper.py "https://music.youtube.com/watch?v=VIDEO_ID" --langs ko,en,es --out letra.txt
-
-# Limpiar un archivo de subtítulos local (.vtt, .srt o .lrc) sin usar internet
-python sincronitation/yt_lyrics_helper.py --clean-file subtitulos.vtt --clip
-```
-
----
-
-## 7. Comandos de Pruebas, Git, Commits Desglosados y Despliegue
-
-```bash
-# Ejecutar la suite completa de 67 pruebas automatizadas (Sintaxis, Bóveda, API, Cripto, i18n, yt-dlp)
-npm test
-
-# Validar únicamente sintaxis rápida de Node.js y Bash
-node --check server.js && node --check public/frontend.js && bash -n scripts/*.sh
-
-# Ver estado de archivos modificados y rama actual
+# Ver estado de archivos y rama actual
 git status -sb
 
-# Crear commit desglosado con título corto (<50 chars para que GitHub no lo corte) y viñetas detalladas
-git add -A && git commit \
-  -m "feat(scope): short summary under 50 chars" \
-  -m "- Detalle 1 del cambio realizado." \
-  -m "- Detalle 2 del cambio realizado."
+# Actualizar main y crear nueva rama de trabajo
+git fetch --prune origin && git switch main && git pull --ff-only origin main && git checkout -b feat/cambio
 
-# Subir cambios a la rama actual en GitHub
-git push -u origin HEAD
+# Commit desglosado siguiendo Conventional Commits (calcula SemVer automático)
+git add . && git commit -m "feat: título del cambio" -m "- Detalle 1" -m "- Detalle 2"
 
-# Simular cálculo de siguiente versión SemVer 2.0.0 sin modificar archivos
-node scripts/release-version.js
+# Subir rama nueva a origin
+git push -u origin "$(git branch --show-current)"
+
+# Limpiar todas las ramas locales ya fusionadas dejando solo main y la rama actual
+git branch | grep -vE '^\*|(\s+main$)' | xargs -r git branch -d
+
+# Limpieza forzada de ramas locales sobrantes (deja solo main y la actual)
+git branch | grep -vE '^\*|(\s+main$)' | xargs -r git branch -D
+
+# Ver últimos commits y últimos tags SemVer desplegados
+git log --oneline -n 15 && git tag -l "v*" --sort=-v:refname | head -n 10
+
+# Ejecutar toda la suite de pruebas en Git Bash (en PowerShell usa: npm.cmd test)
+npm test
+
+# Validar sintaxis JS, Bash y simular siguiente versión SemVer (sin modificar archivos)
+node --check server.js && node --check public/frontend.js && node --check lib/server-notes-service.js && bash -n scripts/*.sh && node scripts/release-version.js
+```
+
+---
+
+## 2. Ubuntu Server — Blue-Green, Docker, Caddy y Rollback manual
+
+```bash
+# Ver estado de contenedores y puertos enlazados
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Ver slot Blue-Green activo, versión y upstream de Caddy
+./scripts/blue-green.sh status
+
+# Inicializar estado Blue-Green en instalación limpia apuntando a blue
+./scripts/blue-green.sh init-state blue
+
+# Cambiar tráfico atómicamente al slot opuesto (ejemplo: pasar a green)
+./scripts/blue-green.sh switch green
+
+# Rollback instantáneo al slot standby anterior sin recompilar ni tirar conexiones
+./scripts/blue-green.sh rollback
+
+# Recargar Caddy en caliente sin reiniciar mood_proxy
+docker exec mood_proxy caddy reload --config /etc/caddy/Caddyfile
+
+# Ver logs en vivo de los slots Blue-Green y del proxy Caddy
+docker logs -f --tail 100 mood_app_blue
+docker logs -f --tail 100 mood_app_green
+docker logs -f --tail 100 mood_proxy
+
+# Limpiar imágenes huérfanas y caché viejo (> 7 días) conservando tags de rollback
+docker image prune -f && docker builder prune -f --filter "until=168h"
+```
+
+---
+
+## 3. Tailscale y verificación de puertos/servicios
+
+```bash
+# Ver nodos conectados en tu tailnet e IP Tailscale
+tailscale status && tailscale ip -4
+
+# Ver rutas HTTPS activas publicadas por Tailscale Serve
+tailscale serve status
+
+# Exponer el balanceador Caddy local por HTTPS privado (NO ejecutar tailscale serve reset en servidor compartido)
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
+
+# Verificar que 3001, 3002, 3306 y 8080 escuchan únicamente en 127.0.0.1 (nunca 0.0.0.0)
+sudo ss -tulpn | grep -E ':3001|:3002|:3306|:8080'
+
+# Auditoría integral [1/10] a [10/10] de hardware, Docker, TLS, Drive y seguridad
+./scripts/verify-ubuntu-local.sh
+
+# Verificar firewall UFW, Fail2ban, servicios del sistema y reglas auditd
+sudo ufw status verbose && sudo fail2ban-client status sshd && sudo systemctl is-active docker tailscaled fail2ban auditd
+```
+
+---
+
+## 4. MySQL, Backups y `rclone` (Google Drive)
+
+```bash
+# Generar respaldo completo + historico_completo.json.gz y validar subida en Google Drive
+./scripts/backup.sh --require-drive
+
+# Restaurar desde Drive únicamente si la BD está vacía (usando vault en RAM)
+./scripts/env-vault.sh restore --if-empty
+
+# Restaurar manualmente en servidor sellado sin crear .env en disco
+rclone copyto "gdrive:RespaldosApp/respaldo_mood_tracker.sql.gz" /dev/shm/restore_manual.sql.gz && gunzip -c /dev/shm/restore_manual.sql.gz | docker exec -i mood_db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root "$MYSQL_DATABASE"' && rm -f /dev/shm/restore_manual.sql.gz
+
+# Verificar remotos rclone, listar archivos en Drive y ver logs de backup cron
+rclone listremotes && rclone lsf "gdrive:RespaldosApp" --max-depth 2 && tail -n 30 ~/projects/respaldos/backup.log
+
+# Exportar rclone.conf en Base64 de una sola línea para GitHub Secrets (RCLONE_CONF_B64)
+base64 -w 0 ~/.config/rclone/rclone.conf && echo ""
+
+# Consultar conteo rápido de registros y SyncRevisions en mood_db
+docker exec mood_db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root "$MYSQL_DATABASE" -e "SELECT scope, revision FROM SyncRevisions; SELECT (SELECT COUNT(*) FROM RegistrosMood) AS mood, (SELECT COUNT(*) FROM RegistrosSleep) AS sleep, (SELECT COUNT(*) FROM RegistrosCrisis) AS crisis, (SELECT COUNT(*) FROM RegistrosAgenda) AS agenda;"'
+```
+
+---
+
+## 5. Bóveda `.env.enc` (PC y Servidor)
+
+```bash
+# --- En Windows / Git Bash (local-vault.js) ---
+# Ver si .env está sellado o expuesto en disco
+node scripts/local-vault.js status
+
+# Descifrar .env temporalmente para editarlo (en mintty anteponer winpty)
+node scripts/local-vault.js decrypt
+
+# Cifrar cambios a .env.enc y sobrescribir/borrar .env plano
+node scripts/local-vault.js encrypt
+
+# Destruir .env plano sin cambios manteniendo .env.enc intacto
+node scripts/local-vault.js lock
+
+# Ejecutar proceso cargando .env.enc únicamente en memoria RAM
+node scripts/local-vault.js run node server.js
+
+# --- En Ubuntu Server (env-vault.sh) ---
+# Ver estado de bóveda en servidor Linux
+./scripts/env-vault.sh status
+
+# Cifrar .env -> .env.enc y destruir .env con shred
+./scripts/env-vault.sh encrypt
+
+# Descifrar temporalmente .env en servidor / re-sellar sin cambios
+./scripts/env-vault.sh decrypt
+./scripts/env-vault.sh lock
+
+# Levantar contenedores o respaldar descifrando solo en /dev/shm (RAM)
+./scripts/env-vault.sh up && ./scripts/env-vault.sh backup --require-drive
+```
+
+---
+
+## 6. Diagnóstico rápido de RAM, CPU, Disco, Procesos y Logs (Linux / WSL)
+
+```bash
+# Ver uso de RAM y Swap
+free -h
+
+# Ver espacio libre en particiones y carpeta del proyecto
+df -h / ~/projects/mood-tracker
+
+# Consumo CPU/RAM en vivo de los 4 contenedores Docker
+docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" mood_db mood_app_blue mood_app_green mood_proxy
+
+# Top 15 procesos que más memoria física (RSS) consumen en el host
+ps -eo pid,user,%mem,rss,cmd --sort=-rss | head -n 15
+
+# Instantánea CPU + carga promedio del sistema
+top -b -n 1 | head -n 20
+
+# Verificar zona horaria del host y tareas cron configuradas
+timedatectl && crontab -l && cat /etc/cron.d/dailyhub-sys-update 2>/dev/null || true
+
+# Ver últimas líneas de logs persistentes en host de cada slot Blue-Green
+tail -n 50 logs/blue/*.log logs/green/*.log 2>/dev/null || true
+```
+
+---
+
+## 7. Sincronizador local Python / `yt-dlp` en Windows
+
+```bash
+# Configurar, probar o quitar autoinicio Windows DPAPI sin .env plano en disco
+python sincronitation/sincronizador.py --configurar-autoinicio
+python sincronitation/sincronizador.py --probar-autoinicio
+python sincronitation/sincronizador.py --quitar-autoinicio
+
+# Consolidar estructura del Diario Word local y ver log en vivo
+python sincronitation/sincronizador.py --consolidar-word && tail -n 30 sincronitation/historial.log
+
+# Detener instancias previas y reiniciar sincronizador.py en segundo plano oculto (Git Bash -> PowerShell)
+powershell.exe -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*sincronizador.py*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-Process -FilePath pythonw.exe -WorkingDirectory (Get-Location).Path -ArgumentList "sincronitation\sincronizador.py" -WindowStyle Hidden'
+
+# Verificar o cerrar procesos huérfanos de Microsoft Word en Windows
+tasklist /FI "IMAGENAME eq WINWORD.EXE"
+taskkill /F /IM WINWORD.EXE
+
+# Validar yt-dlp local (PATH o GitHub Variable YT_DLP_PATH) y extraer subtítulos limpios al portapapeles
+python sincronitation/yt_lyrics_helper.py --check-yt-dlp --refresh-github-var
+python sincronitation/yt_lyrics_helper.py "https://www.youtube.com/watch?v=VIDEO_ID" --all-langs --langs ko,en,es --clip
+python sincronitation/yt_lyrics_helper.py --clean-file subtitulos.vtt --out letra.txt
 ```

@@ -1,123 +1,104 @@
 # 📖 Manual de Usuario — Personal Daily Hub
 
-> **Guía rápida visual (sin bloques largos de texto).** Todo viaja cifrado (`X25519 + AES-256-CTR`) y tus notas privadas de Word usan cifrado de extremo a extremo (`E2EE AES-256-CBC`).
-
-## Índice
-1. [1. Inicio Rápido y Acceso](#1-inicio-rápido-y-acceso)
-2. [2. Registros Diarios (Ánimo, Sueño y Crisis)](#2-registros-diarios-ánimo-sueño-y-crisis)
-3. [3. Diario Personal y Estudio de Idiomas (Word + IA + Música)](#3-diario-personal-y-estudio-de-idiomas-word--ia--música)
-4. [4. Agenda Semanal, Horario ITS, Residencias y Trabajo](#4-agenda-semanal-horario-its-residencias-y-trabajo)
-5. [5. Vista Clínica del Médico y Archivo Histórico en Google Drive](#5-vista-clínica-del-médico-y-archivo-histórico-en-google-drive)
-6. [6. Ajustes, Notificaciones Push (ntfy) y Respaldos](#6-ajustes-notificaciones-push-ntfy-y-respaldos)
-7. [7. Atajos de Teclado](#7-atajos-de-teclado)
+> **Guía rápida operativa (en modo oscuro permanente).** Tus datos viajan bajo HTTPS + túnel cifrado (`X25519 + AES-256-CTR`), las entradas del Diario usan cifrado `pdh-j2` con salt, y el estado entre PC y celular se sincroniza en tiempo real mediante **SSE**.
 
 ---
 
-## 1. Inicio Rápido y Acceso
+## 📑 Índice
 
-| Rol | Qué puede hacer | Expiración de sesión |
+1. [Inicio Rápido, Sincronización en Tiempo Real y Navegación](#1-inicio-rápido-sincronización-en-tiempo-real-y-navegación)
+2. [Registros Diarios (Ánimo, Sueño/Siestas y Crisis)](#2-registros-diarios-ánimo-sueñosiestas-y-crisis)
+3. [Diario Personal E2EE, Descarga Word Cifrada y Estudio de Idiomas](#3-diario-personal-e2ee-descarga-word-cifrada-y-estudio-de-idiomas)
+4. [Agenda Semanal, Horario ITS, CRUD Campus/Salones y Alertas Maps](#4-agenda-semanal-horario-its-crud-campussalones-y-alertas-maps)
+5. [Resumen Semanal (Lunes–Domingo), Vista Médica y Drive en RAM](#5-resumen-semanal-lunesdomingo-vista-médica-y-drive-en-ram)
+6. [Ajustes (`Settings`), Notificaciones `ntfy` (`OK`) y Atajos](#6-ajustes-settings-notificaciones-ntfy-ok-y-atajos)
+
+---
+
+## 1. Inicio Rápido, Sincronización en Tiempo Real y Navegación
+
+| Rol | Qué puede hacer | Caducidad de sesión |
 | :--- | :--- | :--- |
-| **Propietario (Admin)** | Control total de todos los módulos, IA, Word y Ajustes. | Automática cada **Domingo 00:00**. |
+| **Propietario (`admin`)** | Control total de todos los módulos, Word, Planner, IA y Ajustes. | Automática cada **Domingo 00:00**. |
 | **Psiquiatra / Médico** | **Solo lectura** en `📈 Resumen Semanal` (Ánimo, Sueño/Desvelos y Crisis). | Automática cada **Domingo 00:00**. |
 
-* **Cambiar idioma (EN / ES):** Botón `🌐 EN / ES` arriba a la derecha o en el menú lateral.
-* **Llave E2EE (32 caracteres):** Pulsa `🔑 E2EE Key` una sola vez en tu navegador para activar el envío cifrado a tus archivos Word.
-* **Límite de Sesiones y Pestaña Única:** Cada cuenta conserva máximo **3 sesiones activas** (ej. PC + Celular; las más antiguas se limpian automáticamente) y el navegador permite **1 sola pestaña activa a la vez** (`#singleTabGuardModal`) con opción de transferir el control en 1 clic (**`Usar aquí`**) para cuidar la memoria RAM.
+* **Sync en tiempo real (PC ↔ Celular):** Los cambios que guardes en un dispositivo se reflejan automáticamente en tus sesiones abiertas vía **SSE** (`SyncRevisions`). Si la pestaña pasa a segundo plano, pausa la conexión para ahorrar batería y re-sincroniza al regresar.
+* **Idioma EN / ES:** Cambia al instante entre Inglés y Español con `🌐 EN / ES` (cabecera o barra lateral).
+* **Navegación fluida en móvil y PC:**
+  * Desliza con el dedo hacia la izquierda sobre el menú lateral para cerrarlo (*swipe-to-close*).
+  * El botón **Atrás** del navegador/celular navega entre vistas (`history.pushState`) y recargar la página regresa siempre limpio a **Inicio**.
+  * Los modales y el traductor flotante bloquean el scroll del fondo automáticamente.
+* **Pestaña única y límite de sesiones:** Máximo **3 sesiones activas** por cuenta; si abres una segunda pestaña en el mismo navegador, puedes transferir el control en 1 clic (**`Usar aquí`**).
 
 ---
 
-## 2. Registros Diarios (Ánimo, Sueño y Crisis)
+## 2. Registros Diarios (Ánimo, Sueño/Siestas y Crisis)
 
-### 🧠 Mood Tracker (`#mood`)
-1. Elige **Fecha** y **Bloque del día** (*Madrugada, Mañana, Mediodía, Tarde, Noche*).
-2. Toca tu **Emoción** (16 colores disponibles).
-3. Pulsa **Guardar** (puedes actualizar el bloque actual mientras siga abierto).
+### 🧠 Mood Tracker (`#view-mood`)
+1. Elige **Fecha** y **Bloque del día** (*Madrugada 00:00–05:59, Morning, Noon, Afternoon, Night*).
+2. Toca tu **Emoción** (16 opciones con color) y pulsa **Guardar**.
 
-### 🌙 Sleep & Desvelo Tracker (`#sueno`)
-1. Elige el modo: **🌙 Sesión Normal**, **🦉 Desvelo / Dormir Tarde (ej. 3 AM)** o **⚡ Desvelo Total (0 hrs)**.
-2. Si te vas a dormir de madrugada, marca **"⏳ Me voy a dormir ahora"** y completa la hora de despertar al levantarte.
-3. Selecciona la calidad (**🟢 Reparador**, **🟡 Regular**, **🔴 Pesado**) y guarda.
+### 🌙 Sueño Nocturno, Siestas y Desvelo (`#view-sueno`)
+* **🛌 Sueño nocturno (con despertar pendiente):** Al irte a dormir puedes registrar solo la hora de acostarte dejando pendiente la hora de despertar; al despertar, edita ese registro en un toque para calcular automáticamente las horas dormidas.
+* **😴 Siesta (`siesta`):** Registra siestas diurnas aparte sin sobrescribir ni alterar la clasificación de tu sueño nocturno.
+* **🦉 Desvelo automático y total:** Si duermes menos del mínimo configurado (`< 7h` por defecto) o te acuestas de madrugada (`>= 01:00`), se marca como **desvelo** (`desvelo_tarde`), o puedes registrar **Desvelo Total (`0 hrs`)** con motivo opcional.
 
-### ⚠️ Bitácora de Crisis (`#crisis`)
-1. Pulsa `⏱️ Now` para poner fecha y hora actual.
-2. Elige el **Tipo de episodio** (si eliges `📝 Otro`, escribe qué emoción sentiste) y la **Intensidad (1 a 5)**.
-3. *(Opcional)* Escribe el detonante en español (**máx. 250 caracteres**) y presiona `Ctrl + Enter`.
-
----
-
-## 3. Diario Personal y Estudio de Idiomas (Word + IA + Música)
-
-### 🖋️ Journal Notes (`#journal`)
-* **Privacidad total:** Lo que escribes se cifra en tu navegador y se guarda únicamente en tu `Journal.docx` local con contraseña (jamás se guarda en MySQL ni se sube a Google Drive).
-* **Uso en 3 pasos:** `1. Elige etiqueta o título` → `2. Escribe tu nota en inglés (revisión ortográfica en vivo)` → `3. Pulsa Encrypt E2EE & Send to Word`.
-
-### 📖 Language Studio: Inglés (1°) y Coreano (2°) (`#english`)
-* **Prioridad de idioma:**
-  * `🇺🇸 1° Inglés (EN → ES)`: Explicaciones y traducciones de Inglés a Español.
-  * `🇰🇷 2° Coreano (KO → EN)`: Hangul + Romanización automática traducida de Coreano a Inglés.
-  * `🎵 K-Pop (EN + KR)`: Modo mixto para canciones.
-* **🎯 Curso Práctico (15 min) y Pronunciación:**
-  1. Pulsa `▶️ Iniciar / Pausar Curso (15 min)` para activar recordatorios sin fecha límite.
-  2. Abre `📚 Ver Lecciones Secuenciales`: completa la práctica en tu Word para desbloquear la siguiente lección.
-  3. Pulsa `🎤 Practicar Pronunciación` para hablar al micrófono y recibir puntaje fonético.
-
-### 🎵 Learn with Music + Carpetas Estilo Windows 11
-* **Explorador por Carpetas:**
-  1. Haz clic en la **Carpeta amarilla del Artista** para ver sus álbumes.
-  2. Haz clic en la **Carpeta amarilla del Álbum** para desplegar sus canciones.
-  3. Pulsa `Estudiar -> Word` en cualquier canción.
-* **Visor de Letras (Solo Lectura y Sin Cortes):**
-  * `📄 Extraer Letra`: Verifica en tiempo real (`< 150 ms`) si tu PC está encendida y carga la letra completa en **solo lectura**, dividida por bloques de idioma (`🇺🇸 Inglés`, `🇰🇷 Coreano + Romanización`, `🇪🇸 Español`).
-  * `🇪🇸 Traducir Canción a Español`: Traduce la letra completa con IA, la muestra al final del visor y la guarda automáticamente en tu Word.
-  * `✨ Analizar Estrofas con IA`: Divide la canción por estrofas (*Intro, Verso, Pre-Coro, Coro, Rap*) con vocabulario y fonética.
-* **Respaldo automático del Word de Idiomas:** Tu `English_Learning_Notebook.docx` se respalda automáticamente en tu Google Drive bajo la carpeta **`NotasIdiomas`** (`gdrive:NotasIdiomas/English_Learning_Notebook.docx`).
+### ⚠️ Bitácora de Crisis (`#view-crisis`)
+1. Pulsa `⏱️ Now` para capturar fecha y hora actual (`HH:MM`).
+2. Elige el **Tipo de episodio** e **Intensidad (`1` a `5`)**. Si eliges `📝 Otro`, escribe tu categoría libre: se guardará limpia **sin corchetes** alrededor del texto.
+3. Escribe el detonante en español (**máx. 250 caracteres**) y presiona `Ctrl + Enter`.
 
 ---
 
-## 4. Agenda Semanal, Horario ITS, Residencias y Trabajo
+## 3. Diario Personal E2EE, Descarga Word Cifrada y Estudio de Idiomas
 
-### 🗓️ Weekly Agenda (`#agenda`)
-* **Crear actividad:** Pulsa `+ New Activity` o el botón `+ Add` dentro de cualquier bloque (*Mañana, Escuela, Tarde, Noche*).
-* **Alcance especial:**
-  * `📌 Actividad Estándar`: Eventos o tareas normales con estado Jira (`To Do`, `In Progress`, `Done`).
-  * `📚 Proyecto / Tarea Larga (Universidad)`: Permite recordatorios de **6h, 1 día, 3 días o 1 semana antes**.
-  * `🗣️ Lección de Idiomas`: Se asigna automáticamente a tu agenda **Personal** (recordatorio 15 min antes).
-* **Repetición:** Usa `🔁 Repetir cada X días` para programar sesiones recurrentes de una sola vez.
+### 🖋️ Diario E2EE (`#view-journal`) y Descarga Segura en `.docx`
+* **Privacidad estricta:** Tu diario nunca se guarda en MySQL ni se sube a Google Drive; reside cifrado en `Diario.docx` (`WORD_PASSWORD`).
+* **Guardar entrada:** Pulsa `🔑 E2EE Key` (llave de 32 caracteres) la primera vez, redacta tu nota y envíala cifrada con salto criptográfico `pdh-j2`.
+* **⬇️ Descargar Word del Diario (Cifrado E2EE en Tránsito):**
+  1. Presiona **Descargar Word** dentro de **Notas de Diario (`#view-journal`)**.
+  2. Si ya configuraste una **contraseña propia de descarga (8–128 caracteres)** en `⚙️ Settings`, la descarga inicia de inmediato; de lo contrario, ingrésala en el modal que aparece.
+  3. El servidor descifra en RAM, re-cifra los bytes en tránsito (`pdh-j2`) y tu navegador descifra el archivo en tu propio dispositivo entregando un `Diario.docx` normal listo para abrir en Microsoft Word (PC o celular). *(También sigue disponible la descarga del `.docx` OLE2 en crudo).*
 
-### 🎓 Horario ITS, Residencias, Trabajo y Tráfico (`#horario`)
-1. **Semestre ITS y Croquis:** Escribe tu salón (`R02`, `R11`, `N21`, `A10`, `S15`) y el sistema detecta automáticamente el campus (**Principal CTO-002**, **Miravalle CTO-003** o **Boillot/Sistemas CTO-004**) con coordenadas exactas sobre bulevar.
-2. **Vacaciones:** Registra periodos vacacionales para pausar alertas de clases automáticamente.
-3. **Residencias (500 hrs) y Trabajo:** Registra horario y ubicación de la empresa para calcular ruta con tráfico.
-4. **Sincronizar:** Pulsa `🗓️ Sync Week to Agenda` para volcar tus clases y turnos en la Agenda Semanal.
-
----
-
-## 5. Vista Clínica del Médico y Archivo Histórico en Google Drive
-
-### 📈 Resumen Semanal (`#resumen`)
-* **Calendario Interactivo:** Elige cualquier día en `📅 Elegir día o semana en Calendario` (o usa `◀ Semana Ant.` / `Semana Sig. ▶`) para cargar esa semana completa de domingo a sábado.
-* **Retención inteligente (1 Mes Local + Drive en RAM):**
-  * La base de datos MySQL local guarda solo los **últimos 30 días** para no llenar la instancia EC2.
-  * Para consultar los **últimos 3, 6 o 12 meses**, selecciónalo en `☁️ Drive` y pulsa **`☁️ Extraer Historial de Drive (RAM)`**: los datos se leen temporalmente en memoria RAM sin ocupar disco.
+### 📖 Language Studio y Visor Simplificado (`#view-english`)
+* **Idiomas:** `🇺🇸 Inglés (EN → ES)`, `🇰🇷 Coreano (KO → EN)` con Romanización Hangul automática y `🎵 K-Pop (EN + KR)`.
+* **Visor del Cuaderno Simplificado:** Consulta rápidamente `English_Learning_Notebook.docx` usando únicamente el **selector de sección**, el **buscador de texto** y el botón de actualización (ícono circular), sin filtros redundantes.
+* **🌐 Traductor Flotante (`Alt + T`) y Ventana Independiente (`/translator-popup.html`):** Arrastra la barra superior (`⋮⋮`) a cualquier parte de la pantalla o ábrelo en ventana aparte.
+* **🎵 Learn with Music:** Navegación por carpetas estilo Windows 11 (`Artista → Álbum → Canción`), visor de letras por idioma en solo lectura y extracción/respaldo sin saturar la base de datos.
 
 ---
 
-## 6. Ajustes, Notificaciones Push (`ntfy`) y Respaldos
+## 4. Agenda Semanal, Horario ITS, CRUD Campus/Salones y Alertas Maps
 
-1. **Notificaciones en el celular (`ntfy`):**
-   * Instala la app **ntfy** en tu teléfono y suscríbete al tópico generado en `⚙️ Settings`.
-   * Desde la notificación en tu barra de Android puedes tocar **`Open App`**, **`Snooze 15m`** o **`Snooze 30m`** directamente.
-   * Si ya tienes una pestaña abierta de Personal Daily Hub al tocar **`Open App`**, la aplicación transfiere la vista/recordatorio directo a esa pestaña activa sin acumular pestañas repetidas.
-2. **IA Google Gemini:** Pega tu `GEMINI_API_KEY` y pulsa `🧪 Test AI Connection` (el selector muestra únicamente los modelos activos en tu cuenta).
-3. **Carpeta `NotasIdiomas` en Drive:** En `⚙️ Settings` puedes activar/desactivar el respaldo automático de `English_Learning_Notebook.docx` y personalizar el nombre de la carpeta (`NotasIdiomas`).
+### 🗓️ Agenda Semanal (`#view-agenda`)
+* Crea **Eventos** o **Tareas** divididos en **🎓 Universidad** y **👤 Personal** con flujo tipo Jira (**To Do**, **In Progress**, **Done**, **Skipped**), tareas repetitivas (`🔁 Repetir cada X días`) y recordatorios anticipados hasta de 1 semana en proyectos largos.
+
+### 🎓 Horario ITS, CRUD de Campus/Salones y Alertas Inteligentes (`#view-horario`)
+* **CRUD de Campus y Salones:** Además de los 3 campus base del TecNM Saltillo (**Principal CTO-002**, **Miravalle CTO-003**, **Boillot/Sistemas CTO-004**), puedes crear, editar o eliminar **campus y códigos de salón** personalizados con sus coordenadas sobre Maps.
+* **Alertas inteligentes por zona GPS (`computeCommuteAlertMilestones`):**
+  * **En Casa:** avisos escalonados en `[T+20, T+10, T, 10]` min antes (siendo `T` el tiempo estimado en auto).
+  * **Lejos:** aviso anticipado en `[T+10]` min antes.
+  * **Cerca del campus/destino:** recordatorios finales a los `20` y `15` min antes del inicio.
+* **Confirmación rápida (`OK`):** Tocar **`OK`** en la notificación móvil silencia avisos restantes de esa clase/turno hoy y limpia alertas previas equivalentes.
 
 ---
 
-## 7. Atajos de Teclado
+## 5. Resumen Semanal (Lunes–Domingo), Vista Médica y Drive en RAM
 
-| Atajo | Acción inmediata |
+* **Semana fija Lunes–Domingo (`#view-resumen`):** Selecciona cualquier fecha en el calendario o navega con `◀ Semana Ant.` / `Semana Sig. ▶` para visualizar siempre el bloque exacto de **Lunes a Domingo**.
+* **Consulta histórica Drive en RAM:** Si archivaste historial en Google Drive, selecciona el rango (`3`, `6` o `12` meses) para combinar temporalmente en memoria RAM `historico_completo.json.gz` con tu base local MySQL (la cual conserva por defecto historial ilimitado cuando `DB_RETENTION_DAYS=0`).
+
+---
+
+## 6. Ajustes (`Settings`), Notificaciones `ntfy` (`OK`) y Atajos
+
+* **Bloqueo anti-autofill:** Todos los campos de llaves/contraseñas sensibles en **Settings** bloquean el autocompletado del navegador para evitar que gestores de contraseñas sobreescriban tus claves.
+* **Contraseña de descarga del Diario:** Configura, reemplaza o limpia tu contraseña propia (8–128 chars) para descargas E2EE de `Diario.docx` desde **Settings** (nunca regresa visible en respuestas del servidor).
+* **Push móvil con `ntfy`:** Genera tu tópico privado en **Settings**, suscríbete en la app **ntfy** (Android/iOS) y usa las acciones **`Open App`**, **`Snooze 15m`**, **`Snooze 30m`** o **`OK`** directamente desde la barra de notificaciones.
+
+| Atajo | Acción rápida |
 | :--- | :--- |
-| `Alt + T` | Abrir / cerrar el **Traductor Rápido Flotante** en cualquier pestaña (toma el texto que tengas seleccionado). |
-| `Ctrl + Enter` | Guardar inmediatamente en **Bitácora de Crisis**, **Nota de Desvelo** o ejecutar **Desglose de Letra con IA**. |
-| `Enter` | Enviar pregunta al **Tutor de IA** (`Shift + Enter` inserta salto de línea) o buscar canción en YouTube. |
-| `Esc` | Cerrar cualquier ventana modal, traductor flotante o menú móvil. |
+| `Alt + T` | Abrir / cerrar el **Traductor Flotante**. |
+| `Ctrl + Enter` | Guardar al instante en **Crisis**, **Desvelo** o **Análisis de Letras IA**. |
+| `Enter` | Enviar consulta al Tutor IA (`Shift + Enter` = nueva línea). |
+| `Esc` | Cerrar cualquier modal, menú lateral o traductor abierto. |
