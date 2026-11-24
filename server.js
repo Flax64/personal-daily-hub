@@ -11644,6 +11644,7 @@ app.patch('/api/language/lessons/:id/complete', apiWriteLimiter.middleware, requ
         );
         bumpSyncRevision('music');
 
+        bumpSyncRevision('music');
         res.json({ ok: true, id: lesson.id, completed: true });
     } catch (err) {
         console.error('[LANGUAGE_LESSON_COMPLETE_ERROR]', err);
@@ -12000,6 +12001,7 @@ httpServer.keepAliveTimeout = 15000;
 httpServer.headersTimeout = 20000;
 httpServer.requestTimeout = 90000;
 httpServer.maxHeadersCount = 64;
+httpServer.on('close', closeAllSseClients);
 
 // Capturar errores imprevistos para saber por qué se cayó
 process.on('uncaughtException', (err) => {
