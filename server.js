@@ -12,6 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
+const { EventEmitter } = require('node:events');
 const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const {
@@ -226,7 +227,7 @@ app.use((err, req, res, next) => {
     return next(err);
 });
 app.use('/api', (req, res, next) => {
-    if (req.path === '/transport/handshake') {
+    if (req.path === '/transport/handshake' || req.path === '/sync/stream') {
         return next();
     }
 
@@ -462,6 +463,11 @@ function inicializarTablasSeguridad() {
             UNIQUE KEY uniq_usuario_leccion (usuario_id, codigo_leccion),
             INDEX idx_leccion_orden (usuario_id, idioma, orden_secuencia),
             FOREIGN KEY (usuario_id) REFERENCES Usuarios(id) ON DELETE CASCADE
+        )`,
+        `CREATE TABLE IF NOT EXISTS SyncRevisions (
+            scope VARCHAR(40) PRIMARY KEY,
+            revision BIGINT NOT NULL DEFAULT 1,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )`
     ];
     tablasSql.forEach(sql => {
@@ -2021,6 +2027,7 @@ app.post('/api/insert-mood', apiWriteLimiter.middleware, requireAdmin, requireNo
                         return res.status(500).send('Error updating record.');
                     }
                     res.send('Record updated successfully\nYou were still within the edit window.');
+                    bumpSyncRevision('mood');
                 });
             } else {
                 res.status(400).send('The time window to edit this time of day has already expired.');
@@ -2033,6 +2040,7 @@ app.post('/api/insert-mood', apiWriteLimiter.middleware, requireAdmin, requireNo
                     return res.status(500).send('Error saving to database.');
                 }
 
+                bumpSyncRevision('mood');
                 res.send('Mood saved successfully.');
             });
         }
@@ -2120,6 +2128,7 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
             console.error(err);
             return res.status(500).send('Error saving sleep record.');
         }
+        bumpSyncRevision('sleep');
         if (isAllNighter) {
             return res.send('All-nighter / desvelo log saved successfully (0 hrs · visible to psychiatrist).');
         }
@@ -2217,6 +2226,7 @@ app.patch('/api/update-sleep/:id', apiWriteLimiter.middleware, requireAdmin, req
             id
         ]);
 
+        bumpSyncRevision('sleep');
         res.json({
             ok: true,
             id,
@@ -2244,6 +2254,7 @@ app.delete('/api/delete-sleep/:id', apiWriteLimiter.middleware, requireAdmin, pr
         if (!result || Number(result.affectedRows) === 0) {
             return res.status(404).send('Sleep record not found.');
         }
+        bumpSyncRevision('sleep');
         res.json({ ok: true, id, message: 'Sleep record removed.' });
     });
 });
@@ -2493,6 +2504,7 @@ app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, require
             console.error(err);
             return res.status(500).send('Error saving crisis record.');
         }
+        bumpSyncRevision('crisis');
         res.json({
             ok: true,
             id: result?.insertId || null,
@@ -2592,6 +2604,7 @@ app.delete('/api/delete-crisis/:id', apiWriteLimiter.middleware, requireAdmin, p
         if (!result || result.affectedRows === 0) {
             return res.status(404).send('Crisis record not found.');
         }
+        bumpSyncRevision('crisis');
         res.json({ ok: true, id });
     });
 });
@@ -2879,6 +2892,7 @@ app.post('/api/send-to-pc', pcQueueWriteLimiter.middleware, requireAdmin, requir
                     if (writeRes.skipped) {
                         return res.send(`Today already has a journal entry (${writeRes.heading}); "Nothing to report." was skipped.`);
                     }
+                    bumpSyncRevision('journal');
                     return res.send(`Note encrypted with password and saved locally (${writeRes.heading}).`);
                 }
                 if (writeRes && writeRes.reason === 'WRONG_PASSWORD') {
@@ -2897,6 +2911,7 @@ app.post('/api/send-to-pc', pcQueueWriteLimiter.middleware, requireAdmin, requir
         }
     }
 
+    bumpSyncRevision('journal');
     return journalQueue.enqueue(req, res);
 });
 
@@ -3077,6 +3092,9 @@ app.post('/api/journal/verify-days', apiWriteLimiter.middleware, requireAdmin, p
             const message = filledCount > 0
                 ? `Filled ${filledCount} missing day(s) with "Nothing to report.".`
                 : 'All past days are already filled.';
+            if (filledCount > 0 || verifyRes.modified) {
+                bumpSyncRevision('journal');
+            }
             return res.json({
                 ok: true,
                 exists: true,
@@ -3157,6 +3175,9 @@ app.post('/api/journal/nothing-to-report', apiWriteLimiter.middleware, requireAd
             const message = writeRes.skipped
                 ? `Today already has a journal entry (${writeRes.heading}); "Nothing to report." was skipped.`
                 : `Marked "${writeRes.heading}" as "Nothing to report.".`;
+            if (!writeRes.skipped) {
+                bumpSyncRevision('journal');
+            }
             return res.json({
                 ok: true,
                 skipped: Boolean(writeRes.skipped),
@@ -3230,6 +3251,7 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
                         error: saveRes.error
                     });
                     scheduleStudyDriveRetry();
+                    bumpSyncRevision('music');
                     return res.send('Saved to local mirror; Google Drive upload scheduled for retry.');
                 }
                 _englishDriveRetryCount = 0;
@@ -3239,6 +3261,7 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
                     deduplicated: saveRes.deduplicated,
                     verified: saveRes.verified
                 });
+                bumpSyncRevision('music');
                 return res.send(
                     saveRes.mode === 'cloud_drive'
                         ? 'Saved directly to English Notebook on Google Drive.'
@@ -3256,6 +3279,7 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
         }
     }
 
+    bumpSyncRevision('music');
     return englishQueue.enqueue(req, res);
 });
 
@@ -3621,6 +3645,7 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
             }
         }
 
+        bumpSyncRevision('agenda');
         res.status(201).json({
             message: targetDates.length > 1
                 ? `Activity saved and scheduled for ${targetDates.length} dates.`
@@ -3704,6 +3729,7 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
         if (estado === 'done' || estado === 'skipped') {
             db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
         }
+        bumpSyncRevision('agenda');
         res.json({
             message: 'Activity updated successfully.',
             item: {
@@ -3766,10 +3792,12 @@ app.patch('/api/toggle-agenda/:id', apiWriteLimiter.middleware, requireAdmin, pr
             if (resolvedEstado === 'done' || resolvedEstado === 'skipped') {
                 db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
             }
+            bumpSyncRevision('agenda');
             return res.json({ message: 'Status updated.', id, completada: resolvedCompletada, estado: resolvedEstado });
         }
         db.query('SELECT completada, estado FROM RegistrosAgenda WHERE id = ? LIMIT 1', [id], (selErr, rows) => {
             if (selErr || !Array.isArray(rows) || rows.length === 0) {
+                bumpSyncRevision('agenda');
                 return res.json({ message: 'Status updated.', id, completada: resolvedCompletada, estado: resolvedEstado });
             }
             const toggledCompletada = rows[0].completada ? 1 : 0;
@@ -3777,6 +3805,7 @@ app.patch('/api/toggle-agenda/:id', apiWriteLimiter.middleware, requireAdmin, pr
             if (toggledEstado === 'done' || toggledEstado === 'skipped') {
                 db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
             }
+            bumpSyncRevision('agenda');
             res.json({ message: 'Status updated.', id, completada: toggledCompletada, estado: toggledEstado });
         });
     });
@@ -3850,6 +3879,7 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
             estado: nextEstado,
             completada: nextCompletada
         });
+        bumpSyncRevision('agenda');
         res.json({
             message: 'Activity postponed successfully.',
             id,
@@ -3879,6 +3909,7 @@ app.delete('/api/delete-agenda/:id', apiWriteLimiter.middleware, requireAdmin, p
             return res.status(404).send('Activity not found.');
         }
         db.query("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
+        bumpSyncRevision('agenda');
         res.json({ message: 'Activity deleted successfully.', id });
     });
 });
@@ -6051,6 +6082,7 @@ app.put('/api/settings', apiWriteLimiter.middleware, requireAdmin, requireNonEmp
             return res.status(400).send(result.error);
         }
         await saveUserSettings(req.user.id, result.settings);
+        bumpSyncRevision('settings');
         res.json({
             message: 'Settings saved successfully.',
             settings: sanitizeSettingsForClient(result.settings)
@@ -6243,6 +6275,7 @@ app.put('/api/planner', apiWriteLimiter.middleware, requireAdmin, requireNonEmpt
             academicPlanner: nextPlanner
         };
         await saveUserSettings(req.user.id, nextSettings);
+        bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
         res.json({
             message: 'Academic, Residencias & Work schedule saved.',
@@ -6429,6 +6462,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             };
             const nextSettings = { ...current, academicPlanner: planner };
             await saveUserSettings(req.user.id, nextSettings);
+            bumpSyncRevision('planner');
             const localNow = getLocalNowParts(nextSettings.timezone);
             const preview = buildLiveCommutePreview(planner, localNow);
             return res.json({
@@ -6467,6 +6501,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             }
             const nextSettings = { ...current, academicPlanner: planner };
             await saveUserSettings(req.user.id, nextSettings);
+            bumpSyncRevision('planner');
             const localNow = getLocalNowParts(nextSettings.timezone);
             const preview = buildLiveCommutePreview(planner, localNow);
             return res.json({
@@ -6590,6 +6625,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
 
         const nextSettings = { ...current, academicPlanner: planner };
         await saveUserSettings(req.user.id, nextSettings);
+        bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
         const preview = buildLiveCommutePreview(planner, localNow);
         res.json({
@@ -6642,6 +6678,7 @@ app.post('/api/planner/phone-gps-token/rotate', apiWriteLimiter.middleware, requ
         const nonce = crypto.randomBytes(16).toString('hex');
         planner.phoneGpsNonce = nonce;
         await saveUserSettings(req.user.id, { ...current, academicPlanner: planner });
+        bumpSyncRevision('planner');
 
         const token = signPhoneGpsToken({ userId: req.user.id, email: req.user.email, nonce });
         const baseUrl = buildPublicBaseUrlForUser(current, req);
@@ -6717,6 +6754,7 @@ async function handlePhoneLocationWebhook(req, res) {
 
         const nextSettings = { ...settings, academicPlanner: planner };
         await saveUserSettings(parsed.userId, nextSettings);
+        bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
         const preview = buildLiveCommutePreview(planner, localNow);
 
@@ -7442,6 +7480,9 @@ app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, p
             }
         }
 
+        if (insertedCount > 0) {
+            bumpSyncRevision('agenda');
+        }
         res.json({
             message: `Synced ${insertedCount} schedule item(s) to Weekly Agenda${skippedVacationDays ? ` (${skippedVacationDays} vacation day(s) skipped)` : ''}.`,
             inserted: insertedCount,
@@ -8807,6 +8848,7 @@ app.post('/api/english/music/songs', apiWriteLimiter.middleware, requireAdmin, r
                 await syncMusicaCancionArtistas(uid, cur.id, mainArtistId, mergedCollabs, true);
             }
 
+            bumpSyncRevision('music');
             return res.status(200).json({
                 ok: true,
                 deduplicated: true,
@@ -8833,6 +8875,7 @@ app.post('/api/english/music/songs', apiWriteLimiter.middleware, requireAdmin, r
         ]);
         const songId = insertedSong.insertId;
         await syncMusicaCancionArtistas(uid, songId, mainArtistId, d.collaborators, false);
+        bumpSyncRevision('music');
 
         res.status(201).json({
             message: 'Song registered in your English Music catalog.',
@@ -8900,6 +8943,7 @@ app.put('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAdmin
         });
 
         await syncMusicaCancionArtistas(uid, songId, mainArtistId, d.collaborators, true);
+        bumpSyncRevision('music');
 
         res.json({ message: 'Song metadata updated.' });
     } catch (err) {
@@ -8940,6 +8984,7 @@ app.patch('/api/english/music/songs/:id/status', apiWriteLimiter.middleware, req
              WHERE id = ? AND usuario_id = ?`,
             [nextState, nextWord, formatMySqlDateTime(new Date()), songId, uid]
         );
+        bumpSyncRevision('music');
 
         res.json({ message: 'Song study state updated.', estado_estudio: nextState, word_sincronizado: Boolean(nextWord) });
     } catch (err) {
@@ -9008,6 +9053,7 @@ app.delete('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAd
         );
         if (!result.affectedRows) return res.status(404).send('Song not found.');
 
+        bumpSyncRevision('music');
         res.json({ message: 'Song deleted from music catalog.' });
     } catch (err) {
         console.error(err);
@@ -10248,6 +10294,7 @@ app.patch('/api/english/music/artists/:id', apiWriteLimiter.middleware, requireA
             'UPDATE MusicaArtistas SET nombre = ?, nombre_normalizado = ?, tipo_artista = ?, notas_cortas = ? WHERE id = ? AND usuario_id = ?',
             [cleanName, norm, tipo, notasCortas, artistId, uid]
         );
+        bumpSyncRevision('music');
         res.json({ message: 'Artist updated successfully.', id: artistId, nombre: cleanName, tipo_artista: tipo, notas_cortas: notasCortas });
     } catch (err) {
         console.error(err);
@@ -10292,6 +10339,7 @@ app.patch('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireAd
             'UPDATE MusicaAlbumes SET titulo = ?, titulo_normalizado = ?, tipo_lanzamiento = ?, anio = ? WHERE id = ? AND usuario_id = ?',
             [cleanTitle, norm, tipo, anio, albumId, uid]
         );
+        bumpSyncRevision('music');
         res.json({ message: 'Album updated successfully.', id: albumId, titulo: cleanTitle, tipo_lanzamiento: tipo, anio });
     } catch (err) {
         console.error(err);
@@ -10347,6 +10395,7 @@ app.post('/api/english/music/albums', apiWriteLimiter.middleware, requireAdmin, 
             );
         }
 
+        bumpSyncRevision('music');
         res.status(201).json({
             message: 'Album / Mini Album saved to catalog.',
             album: {
@@ -10381,6 +10430,7 @@ app.delete('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireA
         );
         if (!del.affectedRows) return res.status(404).send('Album not found.');
 
+        bumpSyncRevision('music');
         res.json({ message: 'Album deleted successfully (its songs were preserved as standalone tracks).', id: albumId });
     } catch (err) {
         console.error(err);
@@ -10485,6 +10535,7 @@ app.post('/api/language/memory', apiWriteLimiter.middleware, requireAdmin, requi
             });
         }
         await saveUserSettings(req.user.id, settings);
+        bumpSyncRevision('settings');
         res.json({
             message: 'AI Learning Memory updated.',
             languageMemory: settings.languageMemory
@@ -11591,6 +11642,7 @@ app.patch('/api/language/lessons/:id/complete', apiWriteLimiter.middleware, requ
             [nowSql, nowSql, lesson.id, uid]
         );
 
+        bumpSyncRevision('music');
         res.json({ ok: true, id: lesson.id, completed: true });
     } catch (err) {
         console.error('[LANGUAGE_LESSON_COMPLETE_ERROR]', err);
@@ -11700,6 +11752,240 @@ app.get('/api/system/logs', apiReadLimiter.middleware, requireAdmin, (req, res) 
     });
 });
 
+// =========================================================================
+// SINCRONIZACIÓN EN TIEMPO REAL ENTRE SESIONES Y RÉPLICAS (SSE + SyncRevisions)
+// =========================================================================
+const SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
+const CLINICAL_SYNC_SCOPES = ['mood', 'sleep', 'crisis'];
+const SYNC_CACHE_TTL_MS = 1500;
+const SYNC_POLL_INTERVAL_MS = 3000;
+const SYNC_HEARTBEAT_INTERVAL_MS = 25000;
+const MAX_SSE_CLIENTS_PER_USER = 5;
+
+const syncBus = new EventEmitter();
+syncBus.setMaxListeners(100);
+
+const syncRevisionsSnapshot = {
+    mood: 1,
+    sleep: 1,
+    crisis: 1,
+    agenda: 1,
+    planner: 1,
+    settings: 1,
+    music: 1,
+    journal: 1
+};
+let syncRevisionsCacheAt = 0;
+
+const sseClients = new Set();
+const sseClientsByUser = new Map();
+let syncPollerTimer = null;
+let syncHeartbeatTimer = null;
+let syncPollerInFlight = false;
+
+const syncReadLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 180,
+    message: 'Too many sync requests. Please slow down briefly.'
+});
+
+function filterRevisionsForRole(revisions, role) {
+    if (role !== 'psiquiatra') {
+        return { ...revisions };
+    }
+    const filtered = {};
+    for (const s of CLINICAL_SYNC_SCOPES) {
+        filtered[s] = Number(revisions[s]) || 1;
+    }
+    return filtered;
+}
+
+async function fetchSyncRevisions({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && syncRevisionsCacheAt > 0 && (now - syncRevisionsCacheAt) < SYNC_CACHE_TTL_MS) {
+        return { ...syncRevisionsSnapshot };
+    }
+    try {
+        const rows = await dbQueryAsync('SELECT scope, revision FROM SyncRevisions');
+        if (Array.isArray(rows)) {
+            for (const row of rows) {
+                const scope = String(row?.scope || '').trim();
+                if (!SYNC_SCOPES.includes(scope)) continue;
+                const rev = Number(row.revision);
+                if (Number.isFinite(rev) && rev > syncRevisionsSnapshot[scope]) {
+                    syncRevisionsSnapshot[scope] = rev;
+                }
+            }
+        }
+        syncRevisionsCacheAt = Date.now();
+    } catch (_) {
+        // Keep last snapshot in RAM if DB temporarily unavailable
+    }
+    return { ...syncRevisionsSnapshot };
+}
+
+function bumpSyncRevision(scope) {
+    if (!SYNC_SCOPES.includes(scope)) return;
+    syncRevisionsSnapshot[scope] = (Number(syncRevisionsSnapshot[scope]) || 1) + 1;
+    syncRevisionsCacheAt = 0;
+    const snapshotCopy = { ...syncRevisionsSnapshot };
+    syncBus.emit('change', { scopes: [scope], revisions: snapshotCopy });
+
+    db.query(
+        'INSERT INTO SyncRevisions (scope, revision) VALUES (?, 2) ON DUPLICATE KEY UPDATE revision = revision + 1',
+        [scope],
+        (err) => {
+            if (err && !/ER_NO_SUCH_TABLE/i.test(err.message || '')) {
+                console.error(`[SYNC_BUMP_ERROR] (${scope}):`, err.message);
+            }
+        }
+    );
+}
+
+function writeSseEvent(client, eventName, payload) {
+    if (!client || client.closed || client.res.writableEnded) return;
+    try {
+        client.res.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+    } catch (_) {
+        unregisterSseClient(client);
+    }
+}
+
+function broadcastSseChange(changedScopes, revisions) {
+    if (!Array.isArray(changedScopes) || changedScopes.length === 0 || sseClients.size === 0) return;
+    for (const client of sseClients) {
+        const allowedScopes = client.role === 'psiquiatra'
+            ? changedScopes.filter((s) => CLINICAL_SYNC_SCOPES.includes(s))
+            : changedScopes;
+        if (allowedScopes.length === 0) continue;
+        writeSseEvent(client, 'sync', {
+            scopes: allowedScopes,
+            revisions: filterRevisionsForRole(revisions, client.role)
+        });
+    }
+}
+
+syncBus.on('change', ({ scopes, revisions }) => {
+    broadcastSseChange(scopes, revisions);
+});
+
+function stopSyncTimersIfIdle() {
+    if (sseClients.size > 0) return;
+    if (syncPollerTimer) {
+        clearInterval(syncPollerTimer);
+        syncPollerTimer = null;
+    }
+    if (syncHeartbeatTimer) {
+        clearInterval(syncHeartbeatTimer);
+        syncHeartbeatTimer = null;
+    }
+}
+
+function ensureSyncTimersStarted() {
+    if (sseClients.size === 0) return;
+    if (!syncPollerTimer) {
+        syncPollerTimer = setInterval(async () => {
+            if (sseClients.size === 0 || syncPollerInFlight) return;
+            syncPollerInFlight = true;
+            try {
+                const prev = { ...syncRevisionsSnapshot };
+                const next = await fetchSyncRevisions({ force: true });
+                const changedScopes = SYNC_SCOPES.filter((s) => Number(next[s]) > Number(prev[s]));
+                if (changedScopes.length > 0) {
+                    broadcastSseChange(changedScopes, next);
+                }
+            } finally {
+                syncPollerInFlight = false;
+            }
+        }, SYNC_POLL_INTERVAL_MS);
+        syncPollerTimer.unref?.();
+    }
+    if (!syncHeartbeatTimer) {
+        syncHeartbeatTimer = setInterval(() => {
+            if (sseClients.size === 0) return;
+            for (const client of sseClients) {
+                if (client.closed || client.res.writableEnded) continue;
+                try {
+                    client.res.write(': ping\n\n');
+                } catch (_) {
+                    unregisterSseClient(client);
+                }
+            }
+        }, SYNC_HEARTBEAT_INTERVAL_MS);
+        syncHeartbeatTimer.unref?.();
+    }
+}
+
+function unregisterSseClient(client) {
+    if (!client || client.closed) return;
+    client.closed = true;
+    sseClients.delete(client);
+    const userSet = sseClientsByUser.get(client.userId);
+    if (userSet) {
+        userSet.delete(client);
+        if (userSet.size === 0) sseClientsByUser.delete(client.userId);
+    }
+    try {
+        if (!client.res.writableEnded) client.res.end();
+    } catch (_) {}
+    stopSyncTimersIfIdle();
+}
+
+function closeAllSseClients() {
+    for (const client of Array.from(sseClients)) {
+        unregisterSseClient(client);
+    }
+    stopSyncTimersIfIdle();
+}
+
+app.get('/api/sync/revisions', syncReadLimiter.middleware, requireAuth, async (req, res) => {
+    const revisions = await fetchSyncRevisions();
+    res.json({
+        revisions: filterRevisionsForRole(revisions, req.user.rol)
+    });
+});
+
+app.get('/api/sync/stream', requireAuth, async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const userId = Number(req.user.id);
+    let userSet = sseClientsByUser.get(userId);
+    if (!userSet) {
+        userSet = new Set();
+        sseClientsByUser.set(userId, userSet);
+    }
+    while (userSet.size >= MAX_SSE_CLIENTS_PER_USER) {
+        const oldest = userSet.values().next().value;
+        if (!oldest) break;
+        unregisterSseClient(oldest);
+    }
+
+    const client = {
+        userId,
+        role: req.user.rol,
+        res,
+        closed: false
+    };
+    sseClients.add(client);
+    userSet.add(client);
+    ensureSyncTimersStarted();
+
+    req.on('close', () => {
+        unregisterSseClient(client);
+    });
+
+    const revisions = await fetchSyncRevisions();
+    if (!client.closed) {
+        writeSseEvent(client, 'ready', {
+            revisions: filterRevisionsForRole(revisions, client.role)
+        });
+    }
+});
+
 // Manejo controlado de rutas inexistentes y errores inesperados en API (sin filtrar stack traces)
 app.use('/api', (req, res) => {
     res.status(404).send('API endpoint not found.');
@@ -11742,6 +12028,7 @@ httpServer.keepAliveTimeout = 15000;
 httpServer.headersTimeout = 20000;
 httpServer.requestTimeout = 90000;
 httpServer.maxHeadersCount = 64;
+httpServer.on('close', closeAllSseClients);
 
 // Capturar errores imprevistos para saber por qué se cayó
 process.on('uncaughtException', (err) => {

@@ -54,6 +54,16 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
     const sleepInserts = [];
     const crisisInserts = [];
     const agendaInserts = [];
+    const syncRevisions = {
+        mood: 1,
+        sleep: 1,
+        crisis: 1,
+        agenda: 1,
+        planner: 1,
+        settings: 1,
+        music: 1,
+        journal: 1
+    };
     const userSettingsMap = new Map();
     const reminderStatesMap = new Map();
     const musicArtists = [];
@@ -94,6 +104,19 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                 const finish = (err, rows = []) => {
                     if (cb) process.nextTick(() => cb(err, rows));
                 };
+
+                if (normalized.startsWith('INSERT INTO SyncRevisions')) {
+                    const sc = String(params[0] || '').trim();
+                    if (Object.prototype.hasOwnProperty.call(syncRevisions, sc)) {
+                        syncRevisions[sc] = (Number(syncRevisions[sc]) || 1) + 1;
+                    }
+                    return finish(null, { affectedRows: 1 });
+                }
+
+                if (normalized.includes('FROM SyncRevisions')) {
+                    const rows = Object.entries(syncRevisions).map(([scope, revision]) => ({ scope, revision }));
+                    return finish(null, rows);
+                }
 
                 if (normalized.startsWith('SELECT s.id AS sesion_id')) {
                     const [tokenHash, nowSql] = params;
@@ -6030,5 +6053,59 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             if (origAllow === undefined) delete process.env.ALLOW_TEST_MAP_TILES;
             else process.env.ALLOW_TEST_MAP_TILES = origAllow;
         }
+    });
+
+    it('expone /api/sync/revisions y /api/sync/stream autenticados e incrementa revisiones tras mutaciones', async () => {
+        const unauthRevs = await request({ port, reqPath: '/api/sync/revisions' });
+        assert.strictEqual(unauthRevs.status, 401);
+
+        const unauthStream = await request({ port, reqPath: '/api/sync/stream' });
+        assert.strictEqual(unauthStream.status, 401);
+
+        const adminBeforeRes = await request({ port, reqPath: '/api/sync/revisions', headers: { Cookie: adminCookie } });
+        assert.strictEqual(adminBeforeRes.status, 200);
+        const adminBefore = JSON.parse(adminBeforeRes.body).revisions;
+        assert.ok(adminBefore && typeof adminBefore.mood === 'number' && typeof adminBefore.agenda === 'number');
+
+        const psychRevsRes = await request({ port, reqPath: '/api/sync/revisions', headers: { Cookie: medicoCookie } });
+        assert.strictEqual(psychRevsRes.status, 200);
+        const psychRevs = JSON.parse(psychRevsRes.body).revisions;
+        assert.ok(typeof psychRevs.mood === 'number' && typeof psychRevs.sleep === 'number' && typeof psychRevs.crisis === 'number');
+        assert.strictEqual(psychRevs.agenda, undefined);
+        assert.strictEqual(psychRevs.journal, undefined);
+
+        const moodRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-mood',
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: '2026-11-23',
+                momento_dia: 'Night',
+                estado_animo: 'Tranquilo',
+                color_hex: '#4caf50'
+            }
+        });
+        assert.strictEqual(moodRes.status, 200);
+
+        const agendaRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: '2026-11-23',
+                bloque: 'noche',
+                hora: '21:00',
+                actividad: 'Sync revision test'
+            }
+        });
+        assert.strictEqual(agendaRes.status, 201);
+
+        const adminAfterRes = await request({ port, reqPath: '/api/sync/revisions', headers: { Cookie: adminCookie } });
+        assert.strictEqual(adminAfterRes.status, 200);
+        const adminAfter = JSON.parse(adminAfterRes.body).revisions;
+        assert.ok(adminAfter.mood > adminBefore.mood, 'La revisión de mood debe incrementar tras POST /api/insert-mood');
+        assert.ok(adminAfter.agenda > adminBefore.agenda, 'La revisión de agenda debe incrementar tras POST /api/insert-agenda');
     });
 });

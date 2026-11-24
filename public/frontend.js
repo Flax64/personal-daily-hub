@@ -61,8 +61,6 @@ function updateTransportStatusBadges() {
     const authPill = document.getElementById('authTunnelPill');
     const mobilePill = document.getElementById('mobileTunnelPill');
     const sidebarBadge = document.getElementById('sidebarTunnelBadge');
-    const diagKid = document.getElementById('transportDiagKid');
-    const diagStats = document.getElementById('transportDiagStats');
 
     const setSidebarBadge = (iconText, labelText) => {
         if (!sidebarBadge) return;
@@ -89,8 +87,6 @@ function updateTransportStatusBadges() {
     }
 
     const diag = clientTransportTunnel.getDiagnostics();
-    const totalBytes = (diag.metrics.totalBytesEncrypted || 0) + (diag.metrics.totalBytesDecrypted || 0);
-    const totalReqs = Math.max(diag.metrics.encryptedRequests || 0, diag.metrics.decryptedResponses || 0);
 
     if (diag.ready && diag.kid) {
         if (authPill) {
@@ -102,20 +98,12 @@ function updateTransportStatusBadges() {
             mobilePill.classList.remove('is-pending');
         }
         setSidebarBadge('🔐', tUi('Encryption: Active', 'Cifrado: Activo'));
-        if (diagKid) diagKid.textContent = `${diag.kid.slice(0, 12)}… (${diag.metrics.lastHandshakeMs} ms)`;
-        if (diagStats) {
-            diagStats.textContent = tUi(
-                `${totalReqs} protected msgs · ${formatCompactBytes(totalBytes)}`,
-                `${totalReqs} mensajes protegidos · ${formatCompactBytes(totalBytes)}`
-            );
-        }
     } else {
         if (authPill) {
             authPill.textContent = tUi('🔐 Securing Connection...', '🔐 Protegiendo Conexión...');
             authPill.classList.add('is-pending');
         }
         setSidebarBadge('🔐', tUi('Encryption: Connecting...', 'Cifrado: Conectando...'));
-        if (diagKid) diagKid.textContent = tUi('Establishing private key...', 'Preparando sesión segura...');
     }
 }
 
@@ -147,6 +135,11 @@ if (rawBrowserFetch && clientTransportTunnel) {
         } catch (hsErr) {
             // Do not crash app UI if transient network issue happens during handshake
             return rawBrowserFetch(input, { ...init, headers });
+        }
+
+        const methodUpper = String(init.method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
+            markLocalSyncMutation(inferSyncScopeFromUrl(urlStr));
         }
 
         const originalBody = typeof init.body === 'string' ? init.body : null;
@@ -230,6 +223,10 @@ if (rawBrowserFetch && clientTransportTunnel) {
         const headers = new Headers(init.headers || {});
         if (!headers.has('X-UI-Lang')) {
             headers.set('X-UI-Lang', i18nGetLang());
+        }
+        const methodUpper = String(init.method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
+            markLocalSyncMutation(inferSyncScopeFromUrl(urlStr));
         }
         return rawBrowserFetch(input, { ...init, headers });
     };
@@ -791,6 +788,10 @@ async function submitMutationRequest({
         if (bodyObj !== null && bodyObj !== undefined) {
             headers['Content-Type'] = 'application/json';
             fetchOpts.body = JSON.stringify(bodyObj);
+        }
+
+        if (typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
+            markLocalSyncMutation(inferSyncScopeFromUrl(url));
         }
 
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
@@ -1364,9 +1365,106 @@ const mobileViewTitle = document.getElementById('mobileViewTitle');
 function setMobileMenuOpen(isOpen) {
     if (!appShell) return;
     appShell.classList.toggle('mobile-menu-open', isOpen);
+    if (sidebar) {
+        sidebar.classList.remove('is-swiping');
+        sidebar.style.transform = '';
+    }
+    if (sidebarBackdrop) {
+        sidebarBackdrop.style.opacity = '';
+    }
     if (mobileMenuBtn) {
         mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
     }
+}
+
+function initSidebarSwipeGesture() {
+    if (!appShell || !sidebar || sidebar.dataset.swipeWired === '1') return;
+    sidebar.dataset.swipeWired = '1';
+
+    let swipeState = null;
+
+    const resetVisualDrag = () => {
+        sidebar.classList.remove('is-swiping');
+        sidebar.style.transform = '';
+        if (sidebarBackdrop) {
+            sidebarBackdrop.style.opacity = '';
+        }
+    };
+
+    const onTouchStart = (e) => {
+        if (!appShell.classList.contains('mobile-menu-open')) return;
+        if (!e.touches || e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        swipeState = {
+            startX: touch.clientX,
+            startY: touch.clientY,
+            lastX: touch.clientX,
+            lastTime: Date.now(),
+            directionLocked: null
+        };
+    };
+
+    const onTouchMove = (e) => {
+        if (!swipeState || !appShell.classList.contains('mobile-menu-open')) return;
+        if (!e.touches || e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        const deltaX = touch.clientX - swipeState.startX;
+        const deltaY = touch.clientY - swipeState.startY;
+
+        if (!swipeState.directionLocked) {
+            if (Math.abs(deltaX) < 8 && Math.abs(deltaY) < 8) return;
+            if (deltaX < 0 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+                swipeState.directionLocked = 'horizontal';
+                sidebar.classList.add('is-swiping');
+            } else {
+                swipeState.directionLocked = 'vertical';
+                return;
+            }
+        }
+
+        if (swipeState.directionLocked !== 'horizontal') return;
+        const clampedX = Math.min(0, deltaX);
+        swipeState.lastX = touch.clientX;
+        swipeState.lastTime = Date.now();
+        sidebar.style.transform = `translateX(${clampedX}px)`;
+
+        if (sidebarBackdrop) {
+            const width = sidebar.offsetWidth || 275;
+            const ratio = Math.max(0, Math.min(1, 1 + clampedX / width));
+            sidebarBackdrop.style.opacity = String(ratio);
+        }
+    };
+
+    const onTouchEnd = (e) => {
+        if (!swipeState) return;
+        const wasHorizontal = swipeState.directionLocked === 'horizontal';
+        const changedTouch = e.changedTouches && e.changedTouches[0];
+        const endX = changedTouch ? changedTouch.clientX : swipeState.lastX;
+        const deltaX = endX - swipeState.startX;
+        const elapsedMs = Math.max(1, Date.now() - swipeState.lastTime);
+        const velocityX = (endX - swipeState.lastX) / elapsedMs;
+        swipeState = null;
+
+        resetVisualDrag();
+        if (!wasHorizontal) return;
+        if (deltaX <= -65 || (deltaX <= -28 && velocityX <= -0.45)) {
+            setMobileMenuOpen(false);
+        }
+    };
+
+    const onTouchCancel = () => {
+        if (!swipeState) return;
+        swipeState = null;
+        resetVisualDrag();
+    };
+
+    [sidebar, sidebarBackdrop].forEach((target) => {
+        if (!target || typeof target.addEventListener !== 'function') return;
+        target.addEventListener('touchstart', onTouchStart, { passive: true });
+        target.addEventListener('touchmove', onTouchMove, { passive: true });
+        target.addEventListener('touchend', onTouchEnd, { passive: true });
+        target.addEventListener('touchcancel', onTouchCancel, { passive: true });
+    });
 }
 
 function updateDesktopSidebarState(collapsed) {
@@ -1746,6 +1844,8 @@ if (appShell) {
     if (sidebarBackdrop) {
         sidebarBackdrop.addEventListener('click', () => setMobileMenuOpen(false));
     }
+
+    initSidebarSwipeGesture();
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
@@ -12873,6 +12973,9 @@ function showAuthScreen(defaultForm = 'authLoginForm') {
         clearInterval(reminderPollInterval);
         reminderPollInterval = null;
     }
+    if (typeof stopRealtimeSessionSync === 'function') {
+        stopRealtimeSessionSync({ resetRevisions: true });
+    }
     currentSettings = null;
     lastDesktopNotifiedKeys.clear();
     const trayEl = document.getElementById('reminderTray');
@@ -13015,6 +13118,9 @@ function enterAppSession(user) {
                 const startView = VALID_VIEWS.has(initialHash) ? initialHash : 'inicio';
                 showView(startView, false);
             }
+        }
+        if (typeof startRealtimeSessionSync === 'function') {
+            startRealtimeSessionSync();
         }
     } catch (bootErr) {
         console.error('[SESSION_INIT_WARN]', bootErr);
@@ -14327,125 +14433,6 @@ function initSettingsHandlers() {
                     showToast('err', diag.message || 'Gemini test failed.');
                 }
             }, { loadingText: 'Testing Gemini...' });
-        });
-    }
-
-    const btnRotateTransport = document.getElementById('btnTransportRotateKey');
-    if (btnRotateTransport) {
-        btnRotateTransport.addEventListener('click', () => {
-            if (!clientTransportTunnel || !rawBrowserFetch) {
-                showToast('err', 'Encrypted transport tunnel is unavailable.');
-                return;
-            }
-            runWithButtonLock(btnRotateTransport, async () => {
-                clientTransportTunnel.resetSession();
-                await clientTransportTunnel.establishSession(rawBrowserFetch, true);
-                updateTransportStatusBadges();
-                const diag = clientTransportTunnel.getDiagnostics();
-                showToast('ok', tUi('Private session key renewed cleanly.', 'Llave de sesión privada renovada correctamente.'));
-            }, { loadingText: tUi('Renewing...', 'Renovando...') });
-        });
-    }
-
-    const btnInspectWire = document.getElementById('btnTransportInspectPacket');
-    const transportResultBox = document.getElementById('transportBenchmarkResult');
-    if (btnInspectWire && transportResultBox) {
-        btnInspectWire.addEventListener('click', () => {
-            transportResultBox.hidden = false;
-            transportResultBox.replaceChildren();
-            const heading = document.createElement('strong');
-            heading.textContent = tUi(
-                '🔍 Encrypted Transmission Verification (Everything travels protected):',
-                '🔍 Verificación de Transmisión Cifrada (Tu información viaja protegida):'
-            );
-            transportResultBox.appendChild(heading);
-
-            if (!lastCapturedWirePacket) {
-                const p = document.createElement('p');
-                p.className = 'muted-text';
-                p.textContent = tUi(
-                    'No encrypted packet captured yet — save any form or run a speed check first.',
-                    'Aún no se captura actividad reciente — guarda cualquier formulario o ejecuta la prueba de velocidad.'
-                );
-                transportResultBox.appendChild(p);
-                return;
-            }
-
-            const meta = document.createElement('p');
-            meta.className = 'muted-text';
-            meta.textContent = `${lastCapturedWirePacket.direction} · ${lastCapturedWirePacket.capturedAt}`;
-            const pre = document.createElement('pre');
-            pre.className = 'transport-wire-preview';
-            pre.textContent = JSON.stringify(lastCapturedWirePacket.wireEnvelope, null, 2);
-            transportResultBox.append(meta, pre);
-        });
-    }
-
-    const btnBenchTransport = document.getElementById('btnTransportBenchmark');
-    if (btnBenchTransport && transportResultBox) {
-        btnBenchTransport.addEventListener('click', () => {
-            if (!clientTransportTunnel) {
-                showToast('err', 'Encrypted session is inactive.');
-                return;
-            }
-            runWithButtonLock(btnBenchTransport, async () => {
-                try {
-                    const sizesKb = [1, 64, 192];
-                    const results = [];
-                    for (const kb of sizesKb) {
-                        const targetBytes = kb * 1024;
-                        const samplePayload = 'STUDY-PRIVACY-CHECK-'.repeat(Math.ceil(targetBytes / 20)).slice(0, targetBytes);
-                        const tStart = performance.now();
-                        const res = await fetch('/api/transport/benchmark', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ samplePayload, echo: false })
-                        });
-                        if (!res.ok) throw new Error(await res.text() || 'Benchmark failed');
-                        const data = await res.json();
-                        const rttMs = Number((performance.now() - tStart).toFixed(2));
-                        const diag = clientTransportTunnel.getDiagnostics();
-                        results.push({
-                            kb,
-                            payloadBytes: data.payloadBytes,
-                            rttMs,
-                            clientEncryptMs: diag.metrics.lastEncryptMs,
-                            serverDecryptMs: data.serverDecryptMs,
-                            sha256Prefix: data.sha256Prefix,
-                            encryptedIn: data.encryptedIn
-                        });
-                    }
-                    updateTransportStatusBadges();
-
-                    transportResultBox.hidden = false;
-                    transportResultBox.replaceChildren();
-                    const title = document.createElement('strong');
-                    title.textContent = tUi(
-                        '⚡ Privacy Speed Verification Results:',
-                        '⚡ Resultados de Velocidad de Protección:'
-                    );
-                    transportResultBox.appendChild(title);
-
-                    const explain = document.createElement('p');
-                    explain.className = 'muted-text';
-                    explain.textContent = tUi(
-                        'Verified end-to-end encryption latency across small and large notes.',
-                        'Se verificó la velocidad de cifrado de extremo a extremo para notas cortas y extensas.'
-                    );
-                    transportResultBox.appendChild(explain);
-
-                    results.forEach(r => {
-                        const line = document.createElement('div');
-                        const throughputMBs = r.clientEncryptMs > 0
-                            ? ((r.payloadBytes / (1024 * 1024)) / (r.clientEncryptMs / 1000)).toFixed(2)
-                            : '∞';
-                        line.textContent = `• ${r.kb} KB: Verified=${r.encryptedIn} | ${r.clientEncryptMs} ms (~${throughputMBs} MB/s) | RTT=${r.rttMs} ms`;
-                        transportResultBox.appendChild(line);
-                    });
-                } catch (err) {
-                    showToast('err', err.message || 'Benchmark error.');
-                }
-            }, { loadingText: 'Benchmarking...' });
         });
     }
 
@@ -17691,41 +17678,6 @@ function initAcademicPlannerHandlers() {
             }, { loadingText: tUi('Saving...', 'Guardando...') });
         });
     }
-
-    const btnSyncWeek = document.getElementById('btnSyncScheduleToAgenda');
-    if (btnSyncWeek) {
-        btnSyncWeek.addEventListener('click', () => {
-            const payload = collectPlannerStateFromDOM();
-            runWithButtonLock(btnSyncWeek, async () => {
-                try {
-                    if (payload) {
-                        await submitMutationRequest({
-                            url: '/api/planner',
-                            method: 'PUT',
-                            scopeKey: 'planner-save-before-sync',
-                            signature: JSON.stringify(payload),
-                            buildBody: () => payload,
-                            parseJson: true
-                        });
-                    }
-                    const syncRes = await submitMutationRequest({
-                        url: '/api/planner/sync-agenda',
-                        method: 'POST',
-                        scopeKey: 'planner-sync-agenda',
-                        signature: String(Date.now()),
-                        buildBody: () => ({ weekStartDate: getMonday(new Date()) ? formatLocalDate(getMonday(new Date())) : formatLocalDate(new Date()) }),
-                        parseJson: true
-                    });
-                    const syncMsg = tServer(syncRes.message) || tUi('Synced classes, Residencias & work to Weekly Agenda!', '¡Clases, Residencias y trabajo sincronizados con tu Agenda Semanal!');
-                    setPlannerBanner('ok', syncMsg);
-                    showToast('ok', syncMsg);
-                } catch (err) {
-                    setPlannerBanner('err', `${tUi('Failed to sync to Agenda', 'Error al sincronizar a la Agenda')}: ${tServer(err.message)}`);
-                    showToast('err', err.message);
-                }
-            }, { loadingText: tUi('Syncing...', 'Sincronizando...') });
-        });
-    }
 }
 
 // ==========================================
@@ -18442,6 +18394,257 @@ function applyDeepLinkParamsFromUrl(searchStr = '', hashStr = '') {
     return false;
 }
 
+// ==========================================
+// REAL-TIME CROSS-SESSION SYNC (SSE + /api/sync/revisions)
+// ==========================================
+const REALTIME_SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
+const lastAppliedSyncRevisions = {};
+const localSyncWriteTimestamps = {};
+const pendingSyncScopes = new Set();
+let syncEventSource = null;
+let syncReconnectTimer = null;
+let syncDebounceTimer = null;
+let syncReconnectAttempt = 0;
+let realtimeSyncInitialized = false;
+
+function inferSyncScopeFromUrl(urlStr = '') {
+    const clean = String(urlStr || '');
+    if (/\/api\/(insert-mood)/i.test(clean)) return 'mood';
+    if (/\/api\/(insert-sleep|update-sleep|delete-sleep)/i.test(clean)) return 'sleep';
+    if (/\/api\/(insert-crisis|delete-crisis)/i.test(clean)) return 'crisis';
+    if (/\/api\/(insert-agenda|update-agenda|toggle-agenda|postpone-agenda|delete-agenda|planner\/sync-agenda)/i.test(clean)) return 'agenda';
+    if (/\/api\/planner/i.test(clean)) return 'planner';
+    if (/\/api\/(settings|language\/memory)/i.test(clean)) return 'settings';
+    if (/\/api\/(english\/music|send-english|language\/lessons)/i.test(clean)) return 'music';
+    if (/\/api\/(send-to-pc|journal\/)/i.test(clean)) return 'journal';
+    return '';
+}
+
+function markLocalSyncMutation(scope) {
+    if (!scope) return;
+    localSyncWriteTimestamps[scope] = Date.now();
+}
+
+function isUserEditingActiveViewOrModal() {
+    if (typeof document === 'undefined') return false;
+    const openModal = document.querySelector('.modal-overlay:not([hidden])');
+    if (openModal) return true;
+
+    const activeView = document.querySelector('.app-view.active');
+    const activeEl = document.activeElement;
+    if (activeView && activeEl && activeView.contains(activeEl)) {
+        const tag = String(activeEl.tagName || '').toUpperCase();
+        if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (tag === 'INPUT') {
+            const type = String(activeEl.type || 'text').toLowerCase();
+            if (!['button', 'submit', 'reset', 'checkbox', 'radio'].includes(type)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function applySyncScopesToActiveView(scopesToApply) {
+    if (!currentUser || isCurrentTabSuspended || !scopesToApply.length) return;
+    const scopeSet = new Set(scopesToApply);
+    const activeViewId = document.querySelector('.app-view.active')?.id || '';
+
+    if (scopeSet.has('settings') && activeViewId !== 'view-settings' && currentUser.rol === 'admin') {
+        fetch('/api/settings', { cache: 'no-store' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+                if (data && data.settings && typeof aplicarSettingsEnEstado === 'function') {
+                    aplicarSettingsEnEstado(data.settings);
+                }
+            })
+            .catch(() => { });
+    }
+
+    if (activeViewId === 'view-inicio' && (scopeSet.has('mood') || scopeSet.has('sleep') || scopeSet.has('agenda'))) {
+        if (typeof cargarInicioResumen === 'function') cargarInicioResumen();
+    } else if (activeViewId === 'view-mood' && scopeSet.has('mood')) {
+        if (typeof cargarMoodsHoy === 'function') cargarMoodsHoy();
+    } else if (activeViewId === 'view-sueno' && scopeSet.has('sleep')) {
+        if (typeof cargarSuenoHoy === 'function') cargarSuenoHoy();
+    } else if (activeViewId === 'view-crisis' && scopeSet.has('crisis')) {
+        if (typeof cargarCrisisRecientes === 'function') cargarCrisisRecientes();
+    } else if (activeViewId === 'view-agenda' && scopeSet.has('agenda')) {
+        if (typeof cargarAgendaSemana === 'function') cargarAgendaSemana();
+    } else if (activeViewId === 'view-horario' && scopeSet.has('planner')) {
+        if (typeof cargarPlannerVista === 'function') cargarPlannerVista();
+    } else if (activeViewId === 'view-settings' && scopeSet.has('settings')) {
+        if (typeof cargarSettingsVista === 'function') cargarSettingsVista();
+    } else if (activeViewId === 'view-english' && scopeSet.has('music')) {
+        if (typeof cargarCatalogoMusical === 'function') cargarCatalogoMusical();
+    } else if (activeViewId === 'view-journal' && scopeSet.has('journal')) {
+        if (typeof cargarEstadoDiarioJournal === 'function') cargarEstadoDiarioJournal({ silent: true });
+    } else if (activeViewId === 'view-resumen' && (scopeSet.has('mood') || scopeSet.has('sleep') || scopeSet.has('crisis'))) {
+        if (typeof cargarResumenSemanalActual === 'function') cargarResumenSemanalActual();
+    }
+}
+
+function flushPendingSyncScopes() {
+    if (syncDebounceTimer) {
+        clearTimeout(syncDebounceTimer);
+        syncDebounceTimer = null;
+    }
+    if (pendingSyncScopes.size === 0 || !currentUser || isCurrentTabSuspended) return;
+    if (isUserEditingActiveViewOrModal()) return;
+    const scopes = Array.from(pendingSyncScopes);
+    pendingSyncScopes.clear();
+    applySyncScopesToActiveView(scopes);
+}
+
+function schedulePendingSyncFlush() {
+    if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = setTimeout(flushPendingSyncScopes, 400);
+}
+
+function handleIncomingSyncRevisions(nextRevisions = {}, { candidateScopes = null, initialBaseline = false } = {}) {
+    if (!nextRevisions || typeof nextRevisions !== 'object') return;
+    const now = Date.now();
+    const changed = [];
+
+    for (const scope of REALTIME_SYNC_SCOPES) {
+        if (nextRevisions[scope] === undefined) continue;
+        const incomingRev = Number(nextRevisions[scope]) || 0;
+        const prevRev = Number(lastAppliedSyncRevisions[scope]) || 0;
+        if (initialBaseline && prevRev === 0) {
+            lastAppliedSyncRevisions[scope] = incomingRev;
+            continue;
+        }
+        if (incomingRev > prevRev) {
+            lastAppliedSyncRevisions[scope] = incomingRev;
+            const isExplicitCandidate = !Array.isArray(candidateScopes) || candidateScopes.includes(scope);
+            const recentLocalAt = Number(localSyncWriteTimestamps[scope]) || 0;
+            const isSelfEcho = recentLocalAt > 0 && (now - recentLocalAt) < 2200;
+            if (isExplicitCandidate && !isSelfEcho) {
+                changed.push(scope);
+            }
+        }
+    }
+
+    if (changed.length > 0) {
+        changed.forEach((s) => pendingSyncScopes.add(s));
+        schedulePendingSyncFlush();
+    }
+}
+
+function stopRealtimeSessionSync({ resetRevisions = false } = {}) {
+    if (syncReconnectTimer) {
+        clearTimeout(syncReconnectTimer);
+        syncReconnectTimer = null;
+    }
+    if (syncDebounceTimer) {
+        clearTimeout(syncDebounceTimer);
+        syncDebounceTimer = null;
+    }
+    if (syncEventSource) {
+        try { syncEventSource.close(); } catch (_) { }
+        syncEventSource = null;
+    }
+    if (resetRevisions) {
+        pendingSyncScopes.clear();
+        for (const k of Object.keys(lastAppliedSyncRevisions)) {
+            delete lastAppliedSyncRevisions[k];
+        }
+        syncReconnectAttempt = 0;
+    }
+}
+
+function fetchLatestSyncRevisionsCatchup() {
+    if (!currentUser || isCurrentTabSuspended) return Promise.resolve();
+    return fetch('/api/sync/revisions', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+            if (data && data.revisions) {
+                handleIncomingSyncRevisions(data.revisions, { initialBaseline: false });
+            }
+        })
+        .catch(() => { });
+}
+
+function startRealtimeSessionSync() {
+    if (typeof EventSource !== 'function' || typeof document === 'undefined') return;
+    if (!currentUser || isCurrentTabSuspended || document.visibilityState !== 'visible') return;
+    if (syncEventSource) return;
+
+    if (syncReconnectTimer) {
+        clearTimeout(syncReconnectTimer);
+        syncReconnectTimer = null;
+    }
+
+    try {
+        const es = new EventSource('/api/sync/stream');
+        syncEventSource = es;
+
+        es.addEventListener('ready', (ev) => {
+            syncReconnectAttempt = 0;
+            try {
+                const payload = JSON.parse(ev.data || '{}');
+                handleIncomingSyncRevisions(payload.revisions, { initialBaseline: true });
+            } catch (_) { }
+        });
+
+        es.addEventListener('sync', (ev) => {
+            syncReconnectAttempt = 0;
+            try {
+                const payload = JSON.parse(ev.data || '{}');
+                handleIncomingSyncRevisions(payload.revisions, {
+                    candidateScopes: Array.isArray(payload.scopes) ? payload.scopes : null,
+                    initialBaseline: false
+                });
+            } catch (_) { }
+        });
+
+        es.onerror = () => {
+            if (syncEventSource === es) {
+                try { es.close(); } catch (_) { }
+                syncEventSource = null;
+            }
+            if (!currentUser || isCurrentTabSuspended || document.visibilityState !== 'visible') return;
+            const delayMs = Math.min(30000, 2000 * (2 ** syncReconnectAttempt));
+            syncReconnectAttempt = Math.min(4, syncReconnectAttempt + 1);
+            if (!syncReconnectTimer) {
+                syncReconnectTimer = setTimeout(() => {
+                    syncReconnectTimer = null;
+                    if (currentUser && !isCurrentTabSuspended && document.visibilityState === 'visible') {
+                        fetchLatestSyncRevisionsCatchup().finally(() => startRealtimeSessionSync());
+                    }
+                }, delayMs);
+            }
+        };
+    } catch (_) {
+        syncEventSource = null;
+    }
+}
+
+function initRealtimeSessionSync() {
+    if (realtimeSyncInitialized || typeof document === 'undefined') return;
+    realtimeSyncInitialized = true;
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            stopRealtimeSessionSync({ resetRevisions: false });
+        } else if (document.visibilityState === 'visible' && currentUser && !isCurrentTabSuspended) {
+            fetchLatestSyncRevisionsCatchup().finally(() => startRealtimeSessionSync());
+        }
+    });
+
+    document.addEventListener('focusout', () => {
+        if (pendingSyncScopes.size > 0) {
+            setTimeout(flushPendingSyncScopes, 150);
+        }
+    });
+
+    document.addEventListener('click', () => {
+        if (pendingSyncScopes.size > 0 && !isUserEditingActiveViewOrModal()) {
+            setTimeout(flushPendingSyncScopes, 150);
+        }
+    });
+}
+
 function initSingleTabAndNtfyHandover() {
     if (typeof window === 'undefined' || typeof BroadcastChannel !== 'function') return;
 
@@ -18463,6 +18666,7 @@ function initSingleTabAndNtfyHandover() {
             clearInterval(sundayWatcherInterval);
             sundayWatcherInterval = null;
         }
+        stopRealtimeSessionSync({ resetRevisions: false });
         if (titleEl && customTitle) titleEl.textContent = customTitle;
         if (msgEl && customMsg) msgEl.textContent = customMsg;
         if (modal) modal.hidden = false;
@@ -18482,6 +18686,9 @@ function initSingleTabAndNtfyHandover() {
                     cargarRecordatoriosActivos();
                 }
             }, 60 * 1000);
+        }
+        if (currentUser) {
+            fetchLatestSyncRevisionsCatchup().finally(() => startRealtimeSessionSync());
         }
     };
 
@@ -18575,6 +18782,7 @@ function initApp() {
     actualizarCabecerasDeFecha();
     initPasswordToggles();
     initSingleTabAndNtfyHandover();
+    initRealtimeSessionSync();
     initAuthHandlers();
     initSettingsHandlers();
     initLanguageAiStudio();
