@@ -222,7 +222,7 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         }
     });
 
-    it('define las 13 tablas requeridas (incluyendo música/inglés/crisis) en init.sql', () => {
+    it('define las 14 tablas requeridas (incluyendo música/inglés/crisis/sync) en init.sql', () => {
         const sql = readText('init.sql');
         for (const table of [
             'RegistrosMood',
@@ -237,7 +237,8 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'MusicaArtistas',
             'MusicaAlbumes',
             'MusicaCanciones',
-            'MusicaCancionArtistas'
+            'MusicaCancionArtistas',
+            'SyncRevisions'
         ]) {
             assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`), `Falta tabla ${table}`);
         }
@@ -317,8 +318,6 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'id="btnStartMicPronunciation"',
             'id="languageAiPanel"',
             'id="btnAskLangAi"',
-            'id="transportSecurityCard"',
-            'id="btnTransportBenchmark"',
             'id="setGeminiModel"',
             'id="view-crisis"',
             'id="crisisForm"',
@@ -380,6 +379,9 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             assert.ok(indexHtml.includes(requiredId), `public/index.html debe incluir ${requiredId}`);
         }
         for (const removedId of [
+            'id="transportSecurityCard"',
+            'id="btnTransportBenchmark"',
+            'id="btnSyncScheduleToAgenda"',
             'id="semanaSeleccionada"',
             'id="musicRepertoireNavigator"',
             'id="btnMusicSaveLyrics"',
@@ -418,6 +420,17 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'public/index.html no debe incluir translatorInput obsoleto'
         );
         assert.match(indexHtml, /<script[^>]+src=["']transport-crypto\.js["']/i);
+        assert.ok(fs.existsSync(path.join(ROOT, 'public/transport-crypto.js')));
+
+        const styleCssText = readText('public/style.css');
+        assert.ok(frontendSrcCheck.includes('initSidebarSwipeGesture') && frontendSrcCheck.includes('touchstart') && frontendSrcCheck.includes('touchmove') && frontendSrcCheck.includes('touchend'));
+        assert.ok(frontendSrcCheck.includes('is-swiping') && styleCssText.includes('.sidebar.is-swiping'));
+        assert.ok(frontendSrcCheck.includes('initRealtimeSessionSync') && frontendSrcCheck.includes('/api/sync/stream') && frontendSrcCheck.includes('/api/sync/revisions'));
+
+        const serverSrcCheck = readText('server.js');
+        assert.ok(serverSrcCheck.includes("app.get('/api/sync/revisions'") && serverSrcCheck.includes("app.get('/api/sync/stream'"));
+        assert.match(serverSrcCheck, /script-src 'self'/);
+        assert.match(serverSrcCheck, /connect-src 'self'/);
 
         const dockerfileText = readText('Dockerfile');
         assert.ok(dockerfileText.includes('COPY lib ./lib'), 'Dockerfile debe copiar carpeta lib/');
