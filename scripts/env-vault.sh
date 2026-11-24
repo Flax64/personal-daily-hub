@@ -222,6 +222,9 @@ cmd_up() {
 
     echo "Iniciando contenedores desde memoria RAM (sin escribir .env en disco)..."
     cd "$PROJECT_DIR"
+    if [ -x "$PROJECT_DIR/scripts/blue-green.sh" ]; then
+        "$PROJECT_DIR/scripts/blue-green.sh" init-state
+    fi
     $docker_cmd compose --env-file "$_VAULT_RAM_TMP" up -d --build
     cleanup_vault_temps
     echo "Contenedores activos. Archivo temporal en RAM destruido."

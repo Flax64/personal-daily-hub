@@ -187,7 +187,7 @@ describe('Sintaxis de código (JS, HTML, CSS, Python, Bash)', () => {
     });
 
     it('valida formato Unix (LF), cabecera e higiene de los scripts bash', () => {
-        const scripts = ['scripts/backup.sh', 'scripts/env-vault.sh', 'scripts/restore.sh', 'scripts/verify-ubuntu-local.sh'];
+        const scripts = ['scripts/backup.sh', 'scripts/blue-green.sh', 'scripts/env-vault.sh', 'scripts/restore.sh', 'scripts/verify-ubuntu-local.sh'];
         for (const rel of scripts) {
             const full = path.join(ROOT, rel);
             const content = fs.readFileSync(full, 'utf8');
@@ -606,8 +606,9 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         assert.match(compose, /--innodb-redo-log-capacity=64M/);
         assert.match(compose, /mysqladmin",\s*"ping",\s*"-h",\s*"127\.0\.0\.1"/);
         assert.match(compose, /user:\s*"\$\{APP_UID:-1000\}:\$\{APP_GID:-1000\}"/);
-        assert.match(compose, /"127\.0\.0\.1:\$\{PORT:-3000\}:\$\{PORT:-3000\}"/);
-        assert.equal(/^\s*-\s*"\$\{PORT:-3000\}:\$\{PORT:-3000\}"/m.test(compose), false, 'app port no debe exponerse en 0.0.0.0');
+        assert.match(compose, /"127\.0\.0\.1:\$\{BLUE_PORT:-3001\}:\$\{PORT:-3000\}"/);
+        assert.match(compose, /"127\.0\.0\.1:\$\{GREEN_PORT:-3002\}:\$\{PORT:-3000\}"/);
+        assert.equal(/^\s*-\s*"(?:\$\{?(?:PORT|BLUE_PORT|GREEN_PORT)[^"]*|\d+:3000)"/m.test(compose), false, 'Ningún slot Blue/Green debe exponer puertos en 0.0.0.0');
         assert.match(compose, /DB_RETENTION_DAYS=\$\{DB_RETENTION_DAYS:-0\}/);
         assert.match(compose, /ENABLE_LOGIN_MFA=\$\{ENABLE_LOGIN_MFA:-false\}/);
         assert.match(compose, /YOUTUBE_API_KEY=\$\{YOUTUBE_API_KEY:-\}/);
@@ -738,7 +739,8 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         assert.match(deploy, /SECRET_REQUIRE_PC_BRIDGE_AUTH/);
         assert.match(deploy, /SECRET_CORS_ALLOWED_ORIGINS/);
         assert.match(deploy, /APP_UID=/);
-        assert.match(deploy, /docker exec -u 0 mood_app yt-dlp -U/);
+        assert.match(deploy, /docker exec -u 0 mood_app_blue yt-dlp -U/);
+        assert.match(deploy, /docker exec -u 0 mood_app_green yt-dlp -U/);
         assert.match(deploy, /printf 'DB_RETENTION_DAYS=%s\\n' "\$FINAL_DB_RETENTION_DAYS"/);
 
         assert.match(deploy, /cleanup_deploy_env/);
@@ -1081,7 +1083,7 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
         }
 
         const caddyfile = readText('Caddyfile');
-        assert.match(caddyfile, /reverse_proxy\s+app:/);
+        assert.match(caddyfile, /import\s+\/etc\/caddy\/state\/upstream\.caddy/);
         assert.match(caddyfile, /tls internal/);
         assert.match(caddyfile, /max_size\s+16MB/);
         assert.match(caddyfile, /header -Server/);
@@ -1568,30 +1570,39 @@ describe('Traductor Global por Selección e Integridad Bilingüe EN/ES', () => {
     });
 });
 
-describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musicSongModal)', () => {
-    it('configura Caddy sticky-session load balancer, réplica app2 sin puertos públicos y locks en docker-compose', () => {
+describe('Arquitectura Blue-Green Caddy + Rollback y Modal de Canción (#musicSongModal)', () => {
+    it('configura slots simétricos app_blue/app_green en loopback, Caddy dinámico y blue-green.sh', () => {
         const caddyfile = readText('Caddyfile');
         assert.match(caddyfile, /trusted_proxies\s+static\s+private_ranges/);
-        assert.match(caddyfile, /reverse_proxy\s+app:\{\$PORT:3000\}\s+app2:\{\$PORT:3000\}/);
-        assert.match(caddyfile, /lb_policy\s+cookie\s+pdh_lb/);
-        assert.match(caddyfile, /health_uri\s+\/healthz/);
-        assert.match(caddyfile, /fail_duration/);
+        assert.match(caddyfile, /import\s+\/etc\/caddy\/state\/upstream\.caddy/);
+        assert.equal(/reverse_proxy\s+app:\{\$PORT:3000\}\s+app2:/m.test(caddyfile), false, 'Caddyfile ya no debe apuntar al pool fijo app/app2');
 
         const compose = readText('docker-compose.yml');
-        assert.match(compose, /^\s{2}app2:/m);
-        assert.match(compose, /container_name:\s*mood_app2/);
-        assert.match(compose, /REPLICA_ID=app2/);
-        assert.match(compose, /DISABLE_REMINDER_SCHEDULER=true/);
-        assert.match(compose, /DISABLE_CLEANUP_SCHEDULER=true/);
-        assert.match(compose, /LOG_DIR=\$\{LOG_DIR:-\/app\/logs\}\/app2/);
-        const app2BlockMatch = compose.match(/^\s{2}app2:[\s\S]*?(?=^\s{2}proxy:)/m);
-        assert.ok(app2BlockMatch, 'Debe existir sección app2 antes de proxy en docker-compose.yml');
-        assert.equal(/^\s+ports:/m.test(app2BlockMatch[0]), false, 'app2 no debe exponer puertos en el host');
+        assert.match(compose, /^\s{2}app_blue:/m);
+        assert.match(compose, /^\s{2}app_green:/m);
+        assert.match(compose, /container_name:\s*mood_app_blue/);
+        assert.match(compose, /container_name:\s*mood_app_green/);
+        assert.match(compose, /REPLICA_ID=blue/);
+        assert.match(compose, /REPLICA_ID=green/);
+        assert.match(compose, /APP_SLOT=blue/);
+        assert.match(compose, /APP_SLOT=green/);
+        assert.match(compose, /APP_SLOT_STATE_FILE=\/app\/deploy-state\/active-slot/);
+        assert.match(compose, /LOG_DIR=\$\{LOG_DIR:-\/app\/logs\}\/blue/);
+        assert.match(compose, /LOG_DIR=\$\{LOG_DIR:-\/app\/logs\}\/green/);
+        assert.match(compose, /\.\/data\/deploy-state:\/app\/deploy-state:ro/);
+        assert.match(compose, /\.\/data\/deploy-state:\/etc\/caddy\/state:ro/);
+
+        const proxyBlockMatch = compose.match(/^\s{2}proxy:[\s\S]*?(?=^volumes:)/m);
+        assert.ok(proxyBlockMatch, 'Debe existir servicio proxy en docker-compose.yml');
+        assert.equal(/depends_on:/m.test(proxyBlockMatch[0]), false, 'proxy no debe tener depends_on rígido sobre ambos slots');
+
+        const bgScript = readText('scripts/blue-green.sh');
+        for (const token of ['init-state)', 'status)', 'switch)', 'rollback)', 'caddy reload --config /etc/caddy/Caddyfile --force', 'atomic_write_file', 'state.json']) {
+            assert.ok(bgScript.includes(token), `scripts/blue-green.sh debe incluir ${token}`);
+        }
 
         const ubuntuGuide = readText('guides/GUIA_INSTALACION_UBUNTU_SERVER_26.md');
-        assert.match(ubuntuGuide, /mood_app2/);
         assert.match(ubuntuGuide, /127\.0\.0\.1:8080/);
-        assert.match(ubuntuGuide, /pdh_lb/);
         assert.match(ubuntuGuide, /\[1\/10\]/);
         assert.match(ubuntuGuide, /\[10\/10\]/);
     });
@@ -1756,25 +1767,51 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
         assert.ok(apkIdx > -1 && msoffIdx > apkIdx, 'Dockerfile debe instalar paquetes Alpine y msoffcrypto-tool');
         assert.ok(copyPkgIdx > msoffIdx && npmCiIdx > copyPkgIdx, 'Dockerfile debe ejecutar apk add y msoffcrypto-tool antes de COPY package*.json ./ y npm ci --omit=dev');
 
-        // 2. docker-compose.yml: build único en app, compartido vía image: personal-daily-hub-app:latest y APP_VERSION en app/app2
+        // 2. docker-compose.yml: build único en app_blue, compartido por app_green y APP_VERSION en ambos slots
         const buildMatches = compose.match(/^\s*build:\s*\.\s*$/gm) || [];
-        assert.equal(buildMatches.length, 1, 'docker-compose.yml solo debe definir build: . una vez (en el servicio app)');
-        const appBlockMatch = compose.match(/^\s{2}app:\r?\n([\s\S]*?)\r?\n\s{2}app2:/m);
-        const app2BlockMatch = compose.match(/^\s{2}app2:\r?\n([\s\S]*?)\r?\n\s{2}proxy:/m);
-        assert.ok(appBlockMatch && app2BlockMatch, 'docker-compose.yml debe definir servicios app y app2');
-        assert.match(appBlockMatch[1], /^\s*build:\s*\.\s*$/m, 'El servicio app debe definir build: .');
-        assert.equal(/^\s*build:\s*\./m.test(app2BlockMatch[1]), false, 'El servicio app2 no debe duplicar build: .');
-        assert.match(appBlockMatch[1], /image:\s*personal-daily-hub-app:latest/);
-        assert.match(app2BlockMatch[1], /image:\s*personal-daily-hub-app:latest/);
-        assert.match(appBlockMatch[1], /APP_VERSION=\$\{APP_VERSION:-\}/);
-        assert.match(app2BlockMatch[1], /APP_VERSION=\$\{APP_VERSION:-\}/);
+        assert.equal(buildMatches.length, 1, 'docker-compose.yml solo debe definir build: . una vez (en el servicio app_blue)');
+        const blueBlockMatch = compose.match(/^\s{2}app_blue:\r?\n([\s\S]*?)\r?\n\s{2}app_green:/m);
+        const greenBlockMatch = compose.match(/^\s{2}app_green:\r?\n([\s\S]*?)\r?\n\s{2}proxy:/m);
+        assert.ok(blueBlockMatch && greenBlockMatch, 'docker-compose.yml debe definir servicios app_blue y app_green');
+        assert.match(blueBlockMatch[1], /^\s*build:\s*\.\s*$/m, 'El servicio app_blue debe definir build: .');
+        assert.equal(/^\s*build:\s*\./m.test(greenBlockMatch[1]), false, 'El servicio app_green no debe duplicar build: .');
+        assert.match(blueBlockMatch[1], /image:\s*personal-daily-hub-app:\$\{BLUE_IMAGE_TAG:-blue\}/);
+        assert.match(greenBlockMatch[1], /image:\s*personal-daily-hub-app:\$\{GREEN_IMAGE_TAG:-green\}/);
+        assert.match(blueBlockMatch[1], /APP_VERSION=\$\{APP_VERSION:-\}/);
+        assert.match(greenBlockMatch[1], /APP_VERSION=\$\{APP_VERSION:-\}/);
 
-        // 3. server.js: respaldo con process.env.APP_VERSION sin depender de mutar package.json en disco
+        // 3. server.js: respaldo con process.env.APP_VERSION, /healthz enriquecido y guardia de slot activo
         const versionFnMatch = serverJs.match(/function loadVersionMetadata\(\)\s*\{[\s\S]*?\r?\n\}/);
         assert.ok(versionFnMatch, 'server.js debe definir loadVersionMetadata()');
         assert.ok(versionFnMatch[0].includes('process.env.APP_VERSION'), 'loadVersionMetadata() debe usar process.env.APP_VERSION como respaldo');
+        assert.ok(serverJs.includes('function isActiveBlueGreenSlot('), 'server.js debe definir isActiveBlueGreenSlot()');
+        assert.match(serverJs, /res\.setHeader\('X-App-Version'/);
+        assert.match(serverJs, /app\.get\('\/healthz'[\s\S]*?slot[\s\S]*?replicaId[\s\S]*?version/);
 
-        // 4. deploy.yml: tag directo sobre main protegido, sin checkout en deploy, build único e idempotencia
+        // Validar comportamiento real de isActiveBlueGreenSlot() ante cambios de archivo active-slot
+        const bgSlotFnMatch = serverJs.match(/function isActiveBlueGreenSlot\(\)\s*\{[\s\S]*?\r?\n\}/);
+        assert.ok(bgSlotFnMatch, 'No se pudo extraer isActiveBlueGreenSlot() para prueba unitaria');
+        const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-bg-slot-'));
+        try {
+            const stateFilePath = path.join(tmpStateDir, 'active-slot');
+            const makeChecker = (slotEnv, fileEnv) => {
+                const sb = { fs, process: { env: { APP_SLOT: slotEnv, APP_SLOT_STATE_FILE: fileEnv } }, APP_SLOT_NAME: String(slotEnv || '').toLowerCase(), APP_SLOT_STATE_FILE: fileEnv };
+                vm.runInNewContext(bgSlotFnMatch[0], sb);
+                return sb.isActiveBlueGreenSlot();
+            };
+            assert.equal(makeChecker('', stateFilePath), true, 'Sin APP_SLOT configurado debe operar como slot activo (local/tests)');
+            assert.equal(makeChecker('blue', stateFilePath), true, 'Sin archivo active-slot previo debe permitir arranque inicial');
+            fs.writeFileSync(stateFilePath, 'blue\n', 'utf8');
+            assert.equal(makeChecker('blue', stateFilePath), true);
+            assert.equal(makeChecker('green', stateFilePath), false);
+            fs.writeFileSync(stateFilePath, 'green\n', 'utf8');
+            assert.equal(makeChecker('green', stateFilePath), true);
+            assert.equal(makeChecker('blue', stateFilePath), false);
+        } finally {
+            fs.rmSync(tmpStateDir, { recursive: true, force: true });
+        }
+
+        // 4. deploy.yml: tag directo sobre main protegido, sin checkout en deploy, build único Blue-Green e idempotencia
         assert.ok(deploy.includes("vars.RELEASE_PUSH_TO_MAIN || 'false'"), 'El job release debe soportar vars.RELEASE_PUSH_TO_MAIN con default false');
         assert.equal(deploy.includes('Direct push to main skipped'), false, 'deploy.yml ya no debe emitir la advertencia GH013 de push directo a main');
 
@@ -1784,10 +1821,28 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
 
         assert.equal(/fs\.writeFileSync\(['"]package\.json['"]/.test(deploy) || /open\(['"]package\.json['"],\s*['"]w['"]/.test(deploy), false, 'deploy.yml no debe mutar package.json en disco antes de build');
         assert.ok(deploy.includes("printf 'APP_VERSION=%s\\n'"), 'deploy.yml debe incluir APP_VERSION en DEPLOY_ENV_FILE');
-        assert.ok(deploy.includes('compose --env-file "$DEPLOY_ENV_FILE" build app'), 'deploy.yml debe construir la imagen una sola vez con compose build app');
-        assert.ok(deploy.includes('compose --env-file "$DEPLOY_ENV_FILE" up -d --no-build'), 'deploy.yml debe levantar servicios con up -d --no-build');
+        assert.ok(deploy.includes('compose --env-file "$DEPLOY_ENV_FILE" build app_blue'), 'deploy.yml debe construir la imagen una sola vez con compose build app_blue');
+        assert.ok(deploy.includes('up -d --no-deps --no-build "app_${TARGET_SLOT}"'), 'deploy.yml debe levantar solo el slot inactivo antes de cortar tráfico');
+        assert.ok(deploy.includes('./scripts/blue-green.sh switch "${TARGET_SLOT}"'), 'deploy.yml debe ejecutar blue-green.sh switch tras validar smoke test');
         assert.equal(deploy.includes('up -d --build'), false, 'deploy.yml no debe usar up -d --build');
         assert.ok(deploy.includes('--filter "until=168h"'), 'deploy.yml debe conservar caché de builder durante 168h');
+
+        // 5. rollback.yml: workflow_dispatch con instant-switch y specific-tag, concurrency deploy-main y env/envs sincronizados
+        const rollbackYml = readText('.github/workflows/rollback.yml');
+        assert.match(rollbackYml, /workflow_dispatch:/);
+        assert.match(rollbackYml, /instant-switch/);
+        assert.match(rollbackYml, /specific-tag/);
+        assert.match(rollbackYml, /concurrency:\r?\n\s+group:\s*deploy-main\r?\n\s+cancel-in-progress:\s*false/);
+        assert.equal(/if:\s*[^\r\n]*\bsecrets\./.test(rollbackYml), false, 'rollback.yml no debe evaluar secrets.* dentro de expresiones if:');
+        assert.ok(rollbackYml.includes('./scripts/blue-green.sh rollback') && rollbackYml.includes('./scripts/blue-green.sh switch'));
+        const rbEnvSection = rollbackYml.match(/uses:\s*appleboy\/ssh-action@[^\r\n]+\r?\n\s+env:\r?\n([\s\S]*?)\r?\n\s+with:/);
+        const rbEnvsLine = rollbackYml.match(/\benvs:\s*([^\r\n]+)/);
+        assert.ok(rbEnvSection && rbEnvsLine, 'rollback.yml debe definir env y envs en ssh-action');
+        const rbEnvKeys = [...rbEnvSection[1].matchAll(/^\s+([A-Z0-9_]+):/gm)].map((m) => m[1]);
+        const rbForwardedKeys = rbEnvsLine[1].split(',').map((s) => s.trim()).filter(Boolean);
+        for (const k of rbEnvKeys) {
+            assert.ok(rbForwardedKeys.includes(k), `rollback.yml env '${k}' falta en envs:`);
+        }
 
         for (const guardToken of [
             'systemctl is-enabled sleep.target',
@@ -1804,6 +1859,7 @@ describe('Balanceador de cargas Caddy + Réplica app2 y Modal de Canción (#musi
     it('mantiene scripts/*.sh ejecutables en Git (100755) y evita dirty git status en deploy.yml', () => {
         const scripts = [
             'scripts/backup.sh',
+            'scripts/blue-green.sh',
             'scripts/env-vault.sh',
             'scripts/restore.sh',
             'scripts/verify-ubuntu-local.sh'
