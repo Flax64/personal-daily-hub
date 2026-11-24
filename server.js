@@ -1889,17 +1889,102 @@ app.delete('/api/auth/medicos/:id', apiWriteLimiter.middleware, requireAdmin, pr
 // ==========================================
 const MOMENTOS_VALIDOS = new Set(['Madrugada', 'Morning', 'Noon', 'Afternoon', 'Night']);
 const CALIDADES_SUENO_VALIDAS = new Set(['Good', 'Regular', 'Bad']);
-const SLEEP_TIPOS_VALIDOS = new Set(['normal', 'desvelo_tarde', 'desvelo_total']);
+const SLEEP_TIPOS_VALIDOS = new Set(['normal', 'siesta', 'desvelo_tarde', 'desvelo_total']);
 const FECHA_ISO_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const HEX_COLOR_REGEX = /^#[0-9A-Fa-f]{6}$/;
 const HORA_24H_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-function isLateBedtimeHHMM(hhmm = '') {
+function isLateBedtimeHHMM(hhmm = '', cutoffHHMM = '01:00') {
     if (!HORA_24H_REGEX.test(hhmm)) return false;
     const [h, m] = hhmm.split(':').map(Number);
     const totalMin = h * 60 + m;
-    // 01:00 to 05:59 counts as late-night bedtime ("madrugada / desvelo")
+    const safeCutoff = HORA_24H_REGEX.test(String(cutoffHHMM || '').trim())
+        ? String(cutoffHHMM).trim()
+        : '01:00';
+    const [ch, cm] = safeCutoff.split(':').map(Number);
+    const cutoffMin = ch * 60 + cm;
+
+    if (cutoffMin >= 18 * 60) {
+        return totalMin >= cutoffMin || totalMin < 360;
+    }
+    if (cutoffMin < 360) {
+        return totalMin >= cutoffMin && totalMin < 360;
+    }
     return totalMin >= 60 && totalMin < 360;
+}
+
+function evaluateSleepClassification({
+    tipoRegistro = 'normal',
+    horaDormir = '',
+    horas = 0,
+    isPendingWakeup = false,
+    explicitEsDesvelo = false,
+    hasExplicitDesvelo = false,
+    settings = {}
+} = {}) {
+    if (tipoRegistro === 'siesta') {
+        return {
+            tipoRegistro: 'siesta',
+            esDesvelo: false,
+            horas: Number(horas) || 0,
+            lateBedtime: false,
+            shortSleep: false
+        };
+    }
+
+    if (tipoRegistro === 'desvelo_total') {
+        return {
+            tipoRegistro: 'desvelo_total',
+            esDesvelo: true,
+            horas: 0,
+            lateBedtime: false,
+            shortSleep: false
+        };
+    }
+
+    const cutoffHHMM = HORA_24H_REGEX.test(String(settings?.sleepDesveloBedtimeTime || '').trim())
+        ? String(settings.sleepDesveloBedtimeTime).trim()
+        : '01:00';
+    const rawMinHours = Number(settings?.sleepMinNormalHours);
+    const minNormalHours = Number.isFinite(rawMinHours) && rawMinHours >= 3 && rawMinHours <= 12
+        ? rawMinHours
+        : 7;
+
+    const lateBedtime = horaDormir ? isLateBedtimeHHMM(horaDormir, cutoffHHMM) : false;
+
+    if (isPendingWakeup) {
+        const esDesvelo = tipoRegistro === 'desvelo_tarde'
+            || lateBedtime
+            || (hasExplicitDesvelo && Boolean(explicitEsDesvelo));
+        return {
+            tipoRegistro: esDesvelo ? 'desvelo_tarde' : 'normal',
+            esDesvelo,
+            horas: 0,
+            lateBedtime,
+            shortSleep: false
+        };
+    }
+
+    const horasNum = Number(horas);
+    const shortSleep = Number.isFinite(horasNum) && horasNum > 0 ? horasNum < minNormalHours : false;
+    const autoDesvelo = lateBedtime || shortSleep;
+
+    let esDesvelo;
+    if (hasExplicitDesvelo) {
+        esDesvelo = Boolean(explicitEsDesvelo);
+    } else if (tipoRegistro === 'desvelo_tarde') {
+        esDesvelo = true;
+    } else {
+        esDesvelo = autoDesvelo;
+    }
+
+    return {
+        tipoRegistro: esDesvelo ? 'desvelo_tarde' : 'normal',
+        esDesvelo,
+        horas: Number.isFinite(horasNum) ? horasNum : 0,
+        lateBedtime,
+        shortSleep
+    };
 }
 
 // Guardar el estado de ánimo (SOLO ADMIN)
@@ -1955,7 +2040,7 @@ app.post('/api/insert-mood', apiWriteLimiter.middleware, requireAdmin, requireNo
 });
 
 // Dar de alta un nuevo registro de sueño o desvelo (SOLO ADMIN)
-app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 15000 }), (req, res) => {
+app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 15000 }), async (req, res) => {
     const fecha = String(req.body.fecha || '').trim();
     const rawHoraDormir = String(req.body.horaDormir ?? req.body.hora_dormir ?? '').trim();
     const rawHoraDespertar = String(req.body.horaDespertar ?? req.body.hora_despertar ?? '').trim();
@@ -1985,15 +2070,11 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
         return res.status(400).send('Invalid sleep quality.');
     }
 
-    const lateAuto = rawHoraDormir ? isLateBedtimeHHMM(rawHoraDormir) : false;
-    let tipoRegistro = rawTipo;
-    let esDesvelo = rawTipo !== 'normal' || rawEsDesvelo || (lateAuto && (!hasExplicitDesvelo || rawEsDesvelo));
-    if (tipoRegistro === 'normal' && esDesvelo) {
-        tipoRegistro = 'desvelo_tarde';
-    }
-
-    const isAllNighter = tipoRegistro === 'desvelo_total';
-    const isPendingWakeup = tipoRegistro === 'desvelo_tarde' && Boolean(rawHoraDormir) && !rawHoraDespertar && (rawHoras === undefined || rawHoras === '' || Number(rawHoras) === 0);
+    const isAllNighter = rawTipo === 'desvelo_total';
+    const isPendingWakeup = (rawTipo === 'normal' || rawTipo === 'desvelo_tarde')
+        && Boolean(rawHoraDormir)
+        && !rawHoraDespertar
+        && (rawHoras === undefined || rawHoras === '' || Number(rawHoras) === 0);
 
     let horasNum = rawHoras === undefined || rawHoras === '' ? 0 : Number(rawHoras);
     if (isAllNighter) {
@@ -2001,13 +2082,22 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
             return res.status(400).send('Sleep hours must be between 0 and 24 for an all-nighter.');
         }
         horasNum = 0;
-        esDesvelo = true;
     } else if (isPendingWakeup) {
         horasNum = 0;
-        esDesvelo = true;
     } else if (!Number.isFinite(horasNum) || horasNum <= 0 || horasNum > 24) {
         return res.status(400).send('Sleep hours must be a number between 0.1 and 24.');
     }
+
+    const settings = await loadUserSettings(req.user.id).catch(() => getDefaultUserSettings());
+    const classified = evaluateSleepClassification({
+        tipoRegistro: rawTipo,
+        horaDormir: rawHoraDormir,
+        horas: horasNum,
+        isPendingWakeup,
+        explicitEsDesvelo: rawEsDesvelo,
+        hasExplicitDesvelo,
+        settings
+    });
 
     const sql = `
         INSERT INTO RegistrosSleep
@@ -2016,12 +2106,12 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
     `;
     const params = [
         fecha,
-        horasNum,
+        classified.horas,
         rawCalidad,
         rawHoraDormir || null,
         rawHoraDespertar || null,
-        esDesvelo ? 1 : 0,
-        tipoRegistro,
+        classified.esDesvelo ? 1 : 0,
+        classified.tipoRegistro,
         rawMotivo || null
     ];
 
@@ -2033,10 +2123,17 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
         if (isAllNighter) {
             return res.send('All-nighter / desvelo log saved successfully (0 hrs · visible to psychiatrist).');
         }
-        if (isPendingWakeup) {
-            return res.send(`Late bedtime (${rawHoraDormir}) saved! Complete your wake-up time when you get up.`);
+        if (classified.tipoRegistro === 'siesta') {
+            return res.send('Nap / siesta saved successfully.');
         }
-        if (esDesvelo) {
+        if (isPendingWakeup) {
+            const reminderTime = settings.sleepReminderTime || '08:30';
+            if (classified.esDesvelo) {
+                return res.send(`Late bedtime (${rawHoraDormir}) saved! We will remind you at ${reminderTime} to log your wake-up time.`);
+            }
+            return res.send(`Bedtime (${rawHoraDormir}) saved! We will remind you at ${reminderTime} to log your wake-up time.`);
+        }
+        if (classified.esDesvelo) {
             return res.send('Sleep & desvelo record saved successfully (visible to psychiatrist).');
         }
         return res.send('Sleep record saved successfully.');
@@ -2044,88 +2141,93 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
 });
 
 // Completar hora de despertar o actualizar registro de sueño (SOLO ADMIN)
-app.patch('/api/update-sleep/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
+app.patch('/api/update-sleep/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const id = parsePositiveInt(req.params.id);
     if (!id) {
         return res.status(400).send('Invalid sleep record ID.');
     }
 
-    db.query(
-        'SELECT id, fecha, horas, calidad, hora_dormir, hora_despertar, es_desvelo, tipo_registro, motivo_desvelo FROM RegistrosSleep WHERE id = ? LIMIT 1',
-        [id],
-        (errFind, rows) => {
-            if (errFind) {
-                console.error(errFind);
-                return res.status(500).send('Database query error.');
-            }
-            if (!Array.isArray(rows) || rows.length === 0) {
-                return res.status(404).send('Sleep record not found.');
-            }
-
-            const existing = rows[0];
-            const horaDormir = req.body.horaDormir !== undefined || req.body.hora_dormir !== undefined
-                ? String(req.body.horaDormir ?? req.body.hora_dormir ?? '').trim()
-                : String(existing.hora_dormir || '').trim();
-            const horaDespertar = req.body.horaDespertar !== undefined || req.body.hora_despertar !== undefined
-                ? String(req.body.horaDespertar ?? req.body.hora_despertar ?? '').trim()
-                : String(existing.hora_despertar || '').trim();
-            const calidad = String(req.body.calidad ?? existing.calidad ?? 'Regular').trim();
-            const tipoRegistro = String(req.body.tipoRegistro ?? req.body.tipo_registro ?? existing.tipo_registro ?? 'normal').trim();
-            const motivoRaw = req.body.motivoDesvelo !== undefined || req.body.motivo_desvelo !== undefined
-                ? String(req.body.motivoDesvelo ?? req.body.motivo_desvelo ?? '').trim()
-                : String(existing.motivo_desvelo || '').trim();
-            const horasNum = Number(req.body.horas ?? existing.horas ?? 0);
-
-            if (horaDormir && !HORA_24H_REGEX.test(horaDormir)) {
-                return res.status(400).send('Invalid bedtime format (expected HH:MM).');
-            }
-            if (horaDespertar && !HORA_24H_REGEX.test(horaDespertar)) {
-                return res.status(400).send('Invalid wake-up time format (expected HH:MM).');
-            }
-            if (!CALIDADES_SUENO_VALIDAS.has(calidad) || !SLEEP_TIPOS_VALIDOS.has(tipoRegistro)) {
-                return res.status(400).send('Invalid sleep quality or entry type.');
-            }
-            if (motivoRaw.length > 500) {
-                return res.status(400).send('Desvelo reason note cannot exceed 500 characters.');
-            }
-            if (!Number.isFinite(horasNum) || horasNum <= 0 || horasNum > 24) {
-                if (tipoRegistro !== 'desvelo_total') {
-                    return res.status(400).send('Sleep hours must be a number between 0.1 and 24.');
-                }
-            }
-
-            const esDesveloFlag = req.body.esDesvelo !== undefined || req.body.es_desvelo !== undefined
-                ? Boolean(req.body.esDesvelo ?? req.body.es_desvelo)
-                : Boolean(Number(existing.es_desvelo) === 1 || tipoRegistro !== 'normal' || isLateBedtimeHHMM(horaDormir));
-            const finalTipo = tipoRegistro === 'normal' && esDesveloFlag ? 'desvelo_tarde' : tipoRegistro;
-
-            const sqlUpdate = `
-                UPDATE RegistrosSleep
-                SET hora_dormir = ?, hora_despertar = ?, horas = ?, calidad = ?, es_desvelo = ?, tipo_registro = ?, motivo_desvelo = ?
-                WHERE id = ?
-            `;
-            db.query(
-                sqlUpdate,
-                [
-                    horaDormir || null,
-                    horaDespertar || null,
-                    tipoRegistro === 'desvelo_total' ? 0 : horasNum,
-                    calidad,
-                    esDesveloFlag ? 1 : 0,
-                    finalTipo,
-                    motivoRaw || null,
-                    id
-                ],
-                (errUpd) => {
-                    if (errUpd) {
-                        console.error(errUpd);
-                        return res.status(500).send('Error updating sleep record.');
-                    }
-                    res.json({ ok: true, id, message: 'Sleep session updated successfully.' });
-                }
-            );
+    try {
+        const rows = await dbQueryAsync(
+            'SELECT id, fecha, horas, calidad, hora_dormir, hora_despertar, es_desvelo, tipo_registro, motivo_desvelo FROM RegistrosSleep WHERE id = ? LIMIT 1',
+            [id]
+        );
+        if (!Array.isArray(rows) || rows.length === 0) {
+            return res.status(404).send('Sleep record not found.');
         }
-    );
+
+        const existing = rows[0];
+        const horaDormir = req.body.horaDormir !== undefined || req.body.hora_dormir !== undefined
+            ? String(req.body.horaDormir ?? req.body.hora_dormir ?? '').trim()
+            : String(existing.hora_dormir || '').trim();
+        const horaDespertar = req.body.horaDespertar !== undefined || req.body.hora_despertar !== undefined
+            ? String(req.body.horaDespertar ?? req.body.hora_despertar ?? '').trim()
+            : String(existing.hora_despertar || '').trim();
+        const calidad = String(req.body.calidad ?? existing.calidad ?? 'Regular').trim();
+        const rawTipo = String(req.body.tipoRegistro ?? req.body.tipo_registro ?? existing.tipo_registro ?? 'normal').trim();
+        const motivoRaw = req.body.motivoDesvelo !== undefined || req.body.motivo_desvelo !== undefined
+            ? String(req.body.motivoDesvelo ?? req.body.motivo_desvelo ?? '').trim()
+            : String(existing.motivo_desvelo || '').trim();
+        const horasNum = Number(req.body.horas ?? existing.horas ?? 0);
+
+        if (horaDormir && !HORA_24H_REGEX.test(horaDormir)) {
+            return res.status(400).send('Invalid bedtime format (expected HH:MM).');
+        }
+        if (horaDespertar && !HORA_24H_REGEX.test(horaDespertar)) {
+            return res.status(400).send('Invalid wake-up time format (expected HH:MM).');
+        }
+        if (!CALIDADES_SUENO_VALIDAS.has(calidad) || !SLEEP_TIPOS_VALIDOS.has(rawTipo)) {
+            return res.status(400).send('Invalid sleep quality or entry type.');
+        }
+        if (motivoRaw.length > 500) {
+            return res.status(400).send('Desvelo reason note cannot exceed 500 characters.');
+        }
+        if (!Number.isFinite(horasNum) || horasNum <= 0 || horasNum > 24) {
+            if (rawTipo !== 'desvelo_total') {
+                return res.status(400).send('Sleep hours must be a number between 0.1 and 24.');
+            }
+        }
+
+        const hasExplicitDesvelo = req.body.esDesvelo !== undefined || req.body.es_desvelo !== undefined;
+        const explicitEsDesvelo = Boolean(req.body.esDesvelo ?? req.body.es_desvelo);
+        const settings = await loadUserSettings(req.user.id).catch(() => getDefaultUserSettings());
+        const classified = evaluateSleepClassification({
+            tipoRegistro: rawTipo,
+            horaDormir,
+            horas: rawTipo === 'desvelo_total' ? 0 : horasNum,
+            isPendingWakeup: false,
+            explicitEsDesvelo,
+            hasExplicitDesvelo,
+            settings
+        });
+
+        const sqlUpdate = `
+            UPDATE RegistrosSleep
+            SET hora_dormir = ?, hora_despertar = ?, horas = ?, calidad = ?, es_desvelo = ?, tipo_registro = ?, motivo_desvelo = ?
+            WHERE id = ?
+        `;
+        await dbQueryAsync(sqlUpdate, [
+            horaDormir || null,
+            horaDespertar || null,
+            classified.horas,
+            calidad,
+            classified.esDesvelo ? 1 : 0,
+            classified.tipoRegistro,
+            motivoRaw || null,
+            id
+        ]);
+
+        res.json({
+            ok: true,
+            id,
+            esDesvelo: classified.esDesvelo,
+            tipoRegistro: classified.tipoRegistro,
+            message: 'Sleep session updated successfully.'
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error updating sleep record.');
+    }
 });
 
 // Eliminar un registro de sueño (SOLO ADMIN)
@@ -4711,6 +4813,8 @@ function getDefaultUserSettings() {
         moodIncludeLateNight: false,
         sleepReminderEnabled: true,
         sleepReminderTime: '08:30',
+        sleepDesveloBedtimeTime: '01:00',
+        sleepMinNormalHours: 7,
         agendaRemindersEnabled: true,
         agendaNotifyEvents: true,
         agendaNotifyTasks: true,
@@ -4895,7 +4999,7 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
         next.ntfyPriority = prio;
     }
 
-    const timeKeys = ['sleepReminderTime', 'wordEodReminderTime', 'englishReminderTime'];
+    const timeKeys = ['sleepReminderTime', 'sleepDesveloBedtimeTime', 'wordEodReminderTime', 'englishReminderTime'];
     for (const tKey of timeKeys) {
         if (input[tKey] !== undefined) {
             const tVal = String(input[tKey] || '').trim();
@@ -4904,6 +5008,17 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
             }
             next[tKey] = tVal;
         }
+    }
+
+    if (input.sleepMinNormalHours !== undefined) {
+        const rawMin = input.sleepMinNormalHours;
+        const minHrs = typeof rawMin === 'boolean' || rawMin === null || String(rawMin).trim() === ''
+            ? NaN
+            : Number(rawMin);
+        if (!Number.isFinite(minHrs) || minHrs < 3 || minHrs > 12) {
+            return { error: 'Minimum normal sleep hours must be between 3 and 12.' };
+        }
+        next.sleepMinNormalHours = Math.round(minHrs * 2) / 2;
     }
 
     if (input.agendaLeadMinutes !== undefined) {
@@ -5136,30 +5251,52 @@ function computeCandidateReminders({
     // 2. Sleep Tracker morning reminder (with Postpone/Snooze + Pending Wake-up support)
     if (settings.sleepReminderEnabled) {
         const sleepStartMin = hhmmToMinutes(settings.sleepReminderTime);
-        const hasCompletedOrAllNighter = sleepLogsToday.some(r =>
+        const allSleepRows = Array.isArray(sleepLogsToday) ? sleepLogsToday : [];
+        const todayRows = allSleepRows.filter(r => !r.fecha || String(r.fecha).slice(0, 10) === dateStr);
+        const todayNonNapRows = todayRows.filter(r => r.tipo_registro !== 'siesta');
+
+        const isPendingRow = (r) => Boolean(r && r.hora_dormir)
+            && !r.hora_despertar
+            && (Number(r.horas) || 0) === 0
+            && r.tipo_registro !== 'desvelo_total'
+            && r.tipo_registro !== 'siesta';
+
+        const hasCompletedOrAllNighter = todayNonNapRows.some(r =>
             Number(r.horas) > 0 ||
             Boolean(r.hora_despertar) ||
             r.tipo_registro === 'desvelo_total' ||
             (r.id && r.horas === undefined && r.tipo_registro === undefined)
         );
+
+        const sortedSleepRows = [...allSleepRows].sort((a, b) => {
+            const fa = String(a?.fecha || dateStr).slice(0, 10);
+            const fb = String(b?.fecha || dateStr).slice(0, 10);
+            if (fa !== fb) return fb.localeCompare(fa);
+            return (Number(b?.id) || 0) - (Number(a?.id) || 0);
+        });
+
         const pendingBedtimeRow = !hasCompletedOrAllNighter
-            ? sleepLogsToday.find(r => r.hora_dormir && !r.hora_despertar)
+            ? sortedSleepRows.find(isPendingRow)
             : null;
 
         if (minutesOfDay >= sleepStartMin && minutesOfDay < 14 * 60) {
             if (pendingBedtimeRow) {
+                const isDesveloPending = Number(pendingBedtimeRow.es_desvelo) === 1 || pendingBedtimeRow.tipo_registro === 'desvelo_tarde';
+                const targetDateVal = pendingBedtimeRow.fecha ? String(pendingBedtimeRow.fecha).slice(0, 10) : dateStr;
                 candidates.push({
                     key: `sleep-wakeup:${dateStr}`,
                     type: 'sleep',
                     refId: pendingBedtimeRow.id || null,
                     title: 'Finish Morning Sleep Log',
-                    message: `You logged bedtime at ${pendingBedtimeRow.hora_dormir} (Desvelo). Tap to record when you woke up.`,
+                    message: isDesveloPending
+                        ? `You logged bedtime at ${pendingBedtimeRow.hora_dormir} (Desvelo). Tap to record when you woke up.`
+                        : `You logged bedtime at ${pendingBedtimeRow.hora_dormir}. Tap to record when you woke up.`,
                     targetView: 'sueno',
-                    targetDate: dateStr,
+                    targetDate: targetDateVal,
                     canSnooze: true,
                     canComplete: false
                 });
-            } else if (sleepLogsToday.length === 0) {
+            } else if (todayNonNapRows.length === 0) {
                 candidates.push({
                     key: `sleep:${dateStr}`,
                     type: 'sleep',
@@ -5695,10 +5832,16 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
     const localNow = getLocalNowParts(settings.timezone);
     const baseUrl = buildPublicBaseUrlForUser(settings, req);
     const sevenDaysAgoStr = getDateStrDaysAgo(localNow.dateStr, 7);
+    const yesterdayStr = getDateStrDaysAgo(localNow.dateStr, 1);
 
     const [moodRows, sleepRows, agendaRows, weekAgendaRows, stateRows] = await Promise.all([
         dbQueryAsync('SELECT momento_dia FROM RegistrosMood WHERE fecha = ?', [localNow.dateStr]),
-        dbQueryAsync('SELECT id, horas, hora_dormir, hora_despertar, tipo_registro FROM RegistrosSleep WHERE fecha = ?', [localNow.dateStr]),
+        dbQueryAsync(
+            `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, horas, hora_dormir, hora_despertar, es_desvelo, tipo_registro
+             FROM RegistrosSleep
+             WHERE fecha IN (?, ?)`,
+            [yesterdayStr, localNow.dateStr]
+        ),
         dbQueryAsync(
             `SELECT id, TIME_FORMAT(hora, '%H:%i') AS hora, actividad,
                     COALESCE(tipo, 'evento') AS tipo,

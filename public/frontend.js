@@ -1401,11 +1401,92 @@ function formatClockTime12h(hhmm) {
     return `${h12}:${String(m).padStart(2, '0')} ${period}`;
 }
 
-function isLateBedtimeClock(hhmm) {
+function getSleepDesveloBedtimeCutoff() {
+    const raw = String(currentSettings?.sleepDesveloBedtimeTime || '').trim();
+    return /^\d{2}:\d{2}$/.test(raw) ? raw : '01:00';
+}
+
+function getSleepMinNormalHours() {
+    const parsed = Number(currentSettings?.sleepMinNormalHours);
+    return Number.isFinite(parsed) && parsed >= 3 && parsed <= 12 ? parsed : 7;
+}
+
+function getSleepMorningReminderTime() {
+    const raw = String(currentSettings?.sleepReminderTime || '').trim();
+    return /^\d{2}:\d{2}$/.test(raw) ? raw : '08:30';
+}
+
+function isLateBedtimeClock(hhmm, cutoffOverride = '') {
     if (!hhmm || !/^\d{2}:\d{2}/.test(String(hhmm))) return false;
     const [hStr, mStr] = String(hhmm).slice(0, 5).split(':');
     const totalMin = Number(hStr) * 60 + Number(mStr);
-    return Number.isFinite(totalMin) && totalMin >= 60 && totalMin < 360;
+    if (!Number.isFinite(totalMin)) return false;
+
+    const cutoff = /^\d{2}:\d{2}/.test(String(cutoffOverride || ''))
+        ? String(cutoffOverride).slice(0, 5)
+        : getSleepDesveloBedtimeCutoff();
+    const [chStr, cmStr] = cutoff.split(':');
+    const cutoffMin = Number(chStr) * 60 + Number(cmStr);
+
+    if (cutoffMin >= 18 * 60) {
+        return totalMin >= cutoffMin || totalMin < 360;
+    }
+    if (cutoffMin < 360) {
+        return totalMin >= cutoffMin && totalMin < 360;
+    }
+    return totalMin >= 60 && totalMin < 360;
+}
+
+function updateSleepRulesTipBox() {
+    const box = document.getElementById('sleepRulesTipBox');
+    if (!box) return;
+    const cutoff12 = formatClockTime12h(getSleepDesveloBedtimeCutoff());
+    const minHrs = getSleepMinNormalHours();
+    const minHrsStr = Number.isInteger(minHrs) ? String(minHrs) : String(minHrs);
+    const rem12 = formatClockTime12h(getSleepMorningReminderTime());
+    const isEs = window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function'
+        ? window.DailyHubI18n.getLang() === 'es'
+        : false;
+
+    box.textContent = '';
+    const strongTip = document.createElement('strong');
+    strongTip.textContent = isEs ? 'Reglas activas:' : 'Active rules:';
+    const strongCutoff = document.createElement('strong');
+    strongCutoff.textContent = isEs ? `${cutoff12} a 5:59 AM` : `${cutoff12} to 5:59 AM`;
+    const strongHrs = document.createElement('strong');
+    strongHrs.textContent = `${minHrsStr} hrs`;
+    const strongDesvelo = document.createElement('strong');
+    strongDesvelo.textContent = 'Desvelo';
+    const strongRem = document.createElement('strong');
+    strongRem.textContent = rem12;
+
+    if (isEs) {
+        box.append(
+            strongTip,
+            ' acostarse de ',
+            strongCutoff,
+            ' o dormir menos de ',
+            strongHrs,
+            ' marca automáticamente ',
+            strongDesvelo,
+            ' (las Siestas nunca se marcan como desvelo). Si registras solo tu hora de dormir en la noche, te avisaremos a las ',
+            strongRem,
+            ' para completar tu despertar.'
+        );
+    } else {
+        box.append(
+            strongTip,
+            ' bedtimes from ',
+            strongCutoff,
+            ' or sleeping under ',
+            strongHrs,
+            ' automatically mark ',
+            strongDesvelo,
+            ' (Naps / Siestas are never marked as desvelo). If you log bedtime at night, we will remind you at ',
+            strongRem,
+            ' to record your wake-up time.'
+        );
+    }
 }
 
 function parseIsoDateToDayIndex(rawFecha) {
@@ -1573,12 +1654,15 @@ function openReminderTarget(reminder = {}) {
         const sleepDateEl = document.getElementById('sleepDate');
         if (sleepDateEl && targetDate) sleepDateEl.value = targetDate;
         showView('sueno', true, { preserveTarget: true });
+        if (typeof cargarSuenoHoy === 'function') {
+            cargarSuenoHoy(targetDate, { autoCompleteId: reminder.refId ? Number(reminder.refId) : null });
+        }
         setInlineBanner(
             'sleepStatusBanner',
             'info',
             tUi(
-                `Selected ${targetDate} sleep check-in — enter bedtime (auto-detects late desvelo like 3:00 AM), wake-up time, and rest quality.`,
-                `Seleccionado registro de sueño ${targetDate} — ingresa tu hora de dormir (detecta desvelos como 3:00 AM), hora de despertar y calidad de descanso.`
+                `Selected ${targetDate} sleep check-in — enter bedtime, wake-up time, and rest quality.`,
+                `Seleccionado registro de sueño ${targetDate} — ingresa tu hora de dormir, hora de despertar y calidad de descanso.`
             )
         );
         const sleepInput = document.getElementById('sleepTime');
@@ -1806,7 +1890,7 @@ function cargarInicioResumen() {
                 return;
             }
             const totalH = registros.reduce((acc, r) => acc + (parseFloat(r.horas) || 0), 0);
-            const desveloRows = registros.filter(r => Number(r.es_desvelo) === 1 || (r.tipo_registro && r.tipo_registro !== 'normal'));
+            const desveloRows = registros.filter(r => r.tipo_registro !== 'siesta' && (Number(r.es_desvelo) === 1 || (r.tipo_registro && r.tipo_registro !== 'normal')));
             const hasAllNighter = desveloRows.some(r => r.tipo_registro === 'desvelo_total');
             const p = document.createElement('p');
             p.style.margin = '0';
@@ -2347,9 +2431,10 @@ function cargarResumenSemanalActual() {
                 const nombreDia = diasSemanaEn[dayIdx];
 
                 const horasRegistro = parseFloat(registro.horas) || 0;
-                const isDesvelo = Number(registro.es_desvelo) === 1 || (registro.tipo_registro && registro.tipo_registro !== 'normal');
-                const isTotal = registro.tipo_registro === 'desvelo_total';
-                const isPending = registro.tipo_registro === 'desvelo_tarde' && registro.hora_dormir && !registro.hora_despertar && horasRegistro === 0;
+                const tipoReg = registro.tipo_registro || 'normal';
+                const isDesvelo = tipoReg !== 'siesta' && (Number(registro.es_desvelo) === 1 || (registro.tipo_registro && tipoReg !== 'normal'));
+                const isTotal = tipoReg === 'desvelo_total';
+                const isPending = (tipoReg === 'normal' || tipoReg === 'desvelo_tarde') && registro.hora_dormir && !registro.hora_despertar && horasRegistro === 0;
 
                 sumatoriaSueno[nombreDia].horas += horasRegistro;
                 sumatoriaSueno[nombreDia].calidades.push(registro.calidad);
@@ -2454,7 +2539,7 @@ function cargarResumenSemanalActual() {
             }
 
             if (sleepResumenCount) {
-                const totalDesvelos = list.filter(r => Number(r.es_desvelo) === 1 || (r.tipo_registro && r.tipo_registro !== 'normal')).length;
+                const totalDesvelos = list.filter(r => r.tipo_registro !== 'siesta' && (Number(r.es_desvelo) === 1 || (r.tipo_registro && r.tipo_registro !== 'normal'))).length;
                 const sessLbl = list.length === 1 ? tUi('session', 'sesión') : tUi('sessions', 'sesiones');
                 const desvLbl = totalDesvelos === 1 ? tUi('late night', 'desvelo') : tUi('late nights', 'desvelos');
                 sleepResumenCount.textContent = list.length === 0
@@ -2624,10 +2709,11 @@ function renderSleepDetailCards(container, rows = []) {
     list.forEach(item => {
         const tipo = item.tipo_registro || 'normal';
         const isTotal = tipo === 'desvelo_total';
-        const isDesvelo = Number(item.es_desvelo) === 1 || tipo !== 'normal';
+        const isNap = tipo === 'siesta';
+        const isDesvelo = !isNap && (Number(item.es_desvelo) === 1 || tipo !== 'normal');
 
         const card = document.createElement('div');
-        card.className = `sleep-detail-card${isTotal ? ' is-total' : (isDesvelo ? ' is-desvelo' : '')}`;
+        card.className = `sleep-detail-card${isTotal ? ' is-total' : (isNap ? ' is-nap' : (isDesvelo ? ' is-desvelo' : ''))}`;
 
         const head = document.createElement('div');
         head.className = 'sleep-detail-head';
@@ -2639,9 +2725,11 @@ function renderSleepDetailCards(container, rows = []) {
         badges.className = 'sleep-detail-badges';
 
         const typeBadge = document.createElement('span');
-        typeBadge.className = `sleep-desvelo-badge${isTotal ? ' is-total' : (isDesvelo ? '' : ' is-normal')}`;
+        typeBadge.className = `sleep-desvelo-badge${isTotal ? ' is-total' : (isNap ? ' is-nap' : (isDesvelo ? '' : ' is-normal'))}`;
         if (isTotal) {
             typeBadge.textContent = tUi('⚡ All-Nighter (No sleep)', '⚡ Desvelo Total (Sin dormir)');
+        } else if (isNap) {
+            typeBadge.textContent = tUi('🛋️ Nap / Siesta', '🛋️ Siesta');
         } else if (isDesvelo) {
             typeBadge.textContent = item.hora_dormir
                 ? tUi(`🦉 Late Sleep · Bed ${formatClockTime12h(item.hora_dormir)}`, `🦉 Desvelo · Dormido ${formatClockTime12h(item.hora_dormir)}`)
@@ -2672,14 +2760,113 @@ function renderSleepDetailCards(container, rows = []) {
     container.replaceChildren(fragment);
 }
 
-function renderSleepTodaySummary(rows = [], targetDate = '') {
+function buildSleepTodaySessionCard(r, labelPrefix) {
+    const tipo = r.tipo_registro || 'normal';
+    const isTotal = tipo === 'desvelo_total';
+    const isNap = tipo === 'siesta';
+    const isDesvelo = !isNap && (Number(r.es_desvelo) === 1 || tipo !== 'normal');
+    const isPendingWake = (tipo === 'normal' || tipo === 'desvelo_tarde')
+        && Boolean(r.hora_dormir)
+        && !r.hora_despertar
+        && (parseFloat(r.horas) || 0) === 0;
+
+    const card = document.createElement('div');
+    card.className = `sleep-today-card${isTotal ? ' is-total' : (isNap ? ' is-nap' : (isDesvelo ? ' is-desvelo' : ''))}`;
+
+    const head = document.createElement('div');
+    head.className = 'sleep-today-card-head';
+
+    const title = document.createElement('strong');
+    title.style.fontSize = '0.88rem';
+    const prefix = isTotal ? '⚡' : (isNap ? '🛋️' : (isDesvelo ? '🦉' : '🌙'));
+    title.textContent = `${prefix} ${labelPrefix}: ${formatSleepIntervalText(r)}`;
+
+    const qBadge = document.createElement('span');
+    qBadge.className = 'home-mood-chip';
+    qBadge.textContent = isNap
+        ? `${tUi('Nap', 'Siesta')} · ${formatSleepQualityBadge(r.calidad)}`
+        : formatSleepQualityBadge(r.calidad);
+
+    head.append(title, qBadge);
+    card.appendChild(head);
+
+    if (r.motivo_desvelo) {
+        const note = document.createElement('div');
+        note.className = 'muted-text';
+        note.style.fontSize = '0.82rem';
+        protectUserNode(note);
+        note.textContent = `📝 ${r.motivo_desvelo}`;
+        card.appendChild(note);
+    }
+
+    if (r.id) {
+        const actions = document.createElement('div');
+        actions.className = 'sleep-today-actions';
+        if (isPendingWake && typeof enterSleepWakeupCompletion === 'function') {
+            const completeBtn = document.createElement('button');
+            completeBtn.type = 'button';
+            completeBtn.className = 'agenda-chip-btn';
+            completeBtn.textContent = tUi('⏰ Complete Wake-Up Now', '⏰ Completar despertar ahora');
+            completeBtn.addEventListener('click', () => enterSleepWakeupCompletion(r));
+            actions.appendChild(completeBtn);
+        }
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn-secondary btn-small';
+        delBtn.textContent = tUi('Delete', 'Eliminar');
+        delBtn.addEventListener('click', async () => {
+            const ok = await openConfirmDialog({
+                title: tUi('Delete Sleep Log?', '¿Eliminar registro de sueño?'),
+                message: tUi('Remove this sleep / desvelo session from your records?', '¿Quitar esta sesión de sueño / desvelo de tus registros?'),
+                confirmText: tUi('Delete', 'Eliminar'),
+                danger: true
+            });
+            if (!ok) return;
+            runWithButtonLock(delBtn, async () => {
+                const res = await fetch(`/api/delete-sleep/${r.id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('ok', 'Sleep log removed.');
+                    cargarSuenoHoy();
+                } else {
+                    showToast('err', 'Could not delete sleep log.');
+                }
+            }, { loadingText: '...' });
+        });
+        actions.appendChild(delBtn);
+        card.appendChild(actions);
+    }
+
+    return card;
+}
+
+function renderSleepTodaySummary(rows = [], targetDate = '', pendingYesterdayRows = []) {
     const box = document.getElementById('sleepTodaySummary');
     if (!box) return;
     const list = Array.isArray(rows) ? rows : [];
+    const pendingPrevList = Array.isArray(pendingYesterdayRows) ? pendingYesterdayRows : [];
     const todayStr = formatLocalDate(new Date());
     const headingLabel = !targetDate || targetDate === todayStr
         ? tUi("Today's accumulated sleep", 'Sueño acumulado de hoy')
         : tUi(`Sleep on ${formatCrisisDateLabel(targetDate)}`, `Sueño del ${formatCrisisDateLabel(targetDate)}`);
+
+    const nodes = [];
+
+    if (pendingPrevList.length > 0) {
+        const pendingWrap = document.createElement('div');
+        pendingWrap.className = 'sleep-today-pending-yesterday';
+        const pendingTitle = document.createElement('div');
+        pendingTitle.className = 'sleep-today-pending-title';
+        pendingTitle.textContent = tUi(
+            '⏳ Pending wake-up logged last night:',
+            '⏳ Despertar pendiente registrado anoche:'
+        );
+        pendingWrap.appendChild(pendingTitle);
+        pendingPrevList.forEach((pr) => {
+            const dateLbl = formatCrisisDateLabel(pr.fecha);
+            pendingWrap.appendChild(buildSleepTodaySessionCard(pr, dateLbl));
+        });
+        nodes.push(pendingWrap);
+    }
 
     if (!list.length) {
         const p = document.createElement('p');
@@ -2687,7 +2874,8 @@ function renderSleepTodaySummary(rows = [], targetDate = '') {
         p.textContent = !targetDate || targetDate === todayStr
             ? tUi('No sleep or desvelo logged for today yet. Record your session on the left.', 'Aún no hay sueño ni desvelo registrado hoy. Registra tu sesión a la izquierda.')
             : tUi(`No sleep or desvelo recorded for ${targetDate}.`, `Sin registros de sueño ni desvelo para el ${targetDate}.`);
-        box.replaceChildren(p);
+        nodes.push(p);
+        box.replaceChildren(...nodes);
         return;
     }
 
@@ -2695,7 +2883,8 @@ function renderSleepTodaySummary(rows = [], targetDate = '') {
     let desveloCount = 0;
     list.forEach(r => {
         totalHours += parseFloat(r.horas) || 0;
-        if (Number(r.es_desvelo) === 1 || (r.tipo_registro && r.tipo_registro !== 'normal')) {
+        const tipo = r.tipo_registro || 'normal';
+        if (tipo !== 'siesta' && (Number(r.es_desvelo) === 1 || tipo !== 'normal')) {
             desveloCount += 1;
         }
     });
@@ -2709,6 +2898,7 @@ function renderSleepTodaySummary(rows = [], targetDate = '') {
     const strong = document.createElement('strong');
     strong.textContent = formatHoursMinutes(totalHours);
     metric.append(left, strong);
+    nodes.push(metric);
 
     const cardsWrap = document.createElement('div');
     cardsWrap.style.display = 'flex';
@@ -2716,96 +2906,65 @@ function renderSleepTodaySummary(rows = [], targetDate = '') {
     cardsWrap.style.gap = '8px';
 
     list.forEach((r, idx) => {
-        const tipo = r.tipo_registro || 'normal';
-        const isTotal = tipo === 'desvelo_total';
-        const isDesvelo = Number(r.es_desvelo) === 1 || tipo !== 'normal';
-        const isPendingWake = tipo === 'desvelo_tarde' && r.hora_dormir && !r.hora_despertar && (parseFloat(r.horas) || 0) === 0;
-
-        const card = document.createElement('div');
-        card.className = `sleep-today-card${isTotal ? ' is-total' : (isDesvelo ? ' is-desvelo' : '')}`;
-
-        const head = document.createElement('div');
-        head.className = 'sleep-today-card-head';
-
-        const title = document.createElement('strong');
-        title.style.fontSize = '0.88rem';
-        const prefix = isTotal ? '⚡' : (isDesvelo ? '🦉' : '🌙');
-        title.textContent = `${prefix} #${idx + 1}: ${formatSleepIntervalText(r)}`;
-
-        const qBadge = document.createElement('span');
-        qBadge.className = 'home-mood-chip';
-        qBadge.textContent = formatSleepQualityBadge(r.calidad);
-
-        head.append(title, qBadge);
-        card.appendChild(head);
-
-        if (r.motivo_desvelo) {
-            const note = document.createElement('div');
-            note.className = 'muted-text';
-            note.style.fontSize = '0.82rem';
-            protectUserNode(note);
-            note.textContent = `📝 ${r.motivo_desvelo}`;
-            card.appendChild(note);
-        }
-
-        if (r.id) {
-            const actions = document.createElement('div');
-            actions.className = 'sleep-today-actions';
-            if (isPendingWake && typeof enterSleepWakeupCompletion === 'function') {
-                const completeBtn = document.createElement('button');
-                completeBtn.type = 'button';
-                completeBtn.className = 'agenda-chip-btn';
-                completeBtn.textContent = tUi('⏰ Complete Wake-Up Now', '⏰ Completar despertar ahora');
-                completeBtn.addEventListener('click', () => enterSleepWakeupCompletion(r));
-                actions.appendChild(completeBtn);
-            }
-            const delBtn = document.createElement('button');
-            delBtn.type = 'button';
-            delBtn.className = 'btn-secondary btn-small';
-            delBtn.textContent = tUi('Delete', 'Eliminar');
-            delBtn.addEventListener('click', async () => {
-                const ok = await openConfirmDialog({
-                    title: tUi('Delete Sleep Log?', '¿Eliminar registro de sueño?'),
-                    message: tUi('Remove this sleep / desvelo session from your records?', '¿Quitar esta sesión de sueño / desvelo de tus registros?'),
-                    confirmText: tUi('Delete', 'Eliminar'),
-                    danger: true
-                });
-                if (!ok) return;
-                runWithButtonLock(delBtn, async () => {
-                    const res = await fetch(`/api/delete-sleep/${r.id}`, { method: 'DELETE' });
-                    if (res.ok) {
-                        showToast('ok', 'Sleep log removed.');
-                        cargarSuenoHoy();
-                    } else {
-                        showToast('err', 'Could not delete sleep log.');
-                    }
-                }, { loadingText: '...' });
-            });
-            actions.appendChild(delBtn);
-            card.appendChild(actions);
-        }
-
-        cardsWrap.appendChild(card);
+        cardsWrap.appendChild(buildSleepTodaySessionCard(r, `#${idx + 1}`));
     });
+    nodes.push(cardsWrap);
 
-    box.replaceChildren(metric, cardsWrap);
+    box.replaceChildren(...nodes);
 }
 
-function cargarSuenoHoy(explicitDate = '') {
+function cargarSuenoHoy(explicitDate = '', { autoCompleteId = null } = {}) {
     if (!currentUser || currentUser.rol !== 'admin') return;
     const sleepDateInput = document.getElementById('sleepDate');
-    const targetDate = explicitDate || (sleepDateInput && sleepDateInput.value) || formatLocalDate(new Date());
-    fetch(`/api/get-sleep?begin=${encodeURIComponent(targetDate)}&end=${encodeURIComponent(targetDate)}`, { cache: 'no-store' })
+    const todayStr = formatLocalDate(new Date());
+    const targetDate = explicitDate || (sleepDateInput && sleepDateInput.value) || todayStr;
+
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    const yesterdayStr = formatLocalDate(y);
+    const fetchBegin = targetDate === todayStr ? yesterdayStr : targetDate;
+
+    fetch(`/api/get-sleep?begin=${encodeURIComponent(fetchBegin)}&end=${encodeURIComponent(targetDate)}`, { cache: 'no-store' })
         .then(r => (r.ok ? r.json() : []))
-        .then(rows => renderSleepTodaySummary(rows, targetDate))
-        .catch(() => renderSleepTodaySummary([], targetDate));
+        .then(rows => {
+            const list = Array.isArray(rows) ? rows : [];
+            const isPendingRow = (r) => {
+                const tipo = r.tipo_registro || 'normal';
+                return (tipo === 'normal' || tipo === 'desvelo_tarde')
+                    && Boolean(r.hora_dormir)
+                    && !r.hora_despertar
+                    && (parseFloat(r.horas) || 0) === 0;
+            };
+
+            let targetRows = list;
+            let pendingYesterdayRows = [];
+            if (targetDate === todayStr) {
+                targetRows = list.filter(r => String(r.fecha || '').slice(0, 10) === todayStr);
+                pendingYesterdayRows = list.filter(r => String(r.fecha || '').slice(0, 10) === yesterdayStr && isPendingRow(r));
+            }
+
+            renderSleepTodaySummary(targetRows, targetDate, pendingYesterdayRows);
+
+            if (autoCompleteId && typeof enterSleepWakeupCompletion === 'function') {
+                const match = [...pendingYesterdayRows, ...targetRows].find(r => Number(r.id) === Number(autoCompleteId) && isPendingRow(r));
+                if (match) enterSleepWakeupCompletion(match);
+            }
+        })
+        .catch(() => renderSleepTodaySummary([], targetDate, []));
 }
 
 let initSleepViewDefaults = () => { };
 let enterSleepWakeupCompletion = () => { };
+let refreshSleepFormRulesUI = () => { };
 
 const formSleep = document.getElementById('sleepForm');
 if (formSleep) {
+    const btnSleepOpenSettings = document.getElementById('btnSleepOpenSettings');
+    if (btnSleepOpenSettings) {
+        btnSleepOpenSettings.addEventListener('click', () => {
+            if (typeof openSleepSettingsSection === 'function') openSleepSettingsSection();
+        });
+    }
     const tipoInput = document.getElementById('sleepTipoRegistro');
     const modePills = document.querySelectorAll('#sleepModePills [data-sleep-mode]');
     const dateInput = document.getElementById('sleepDate');
@@ -2819,6 +2978,7 @@ if (formSleep) {
     const stillAwakeRow = document.getElementById('sleepStillAwakeRow');
     const autoBanner = document.getElementById('sleepDesveloAutoBanner');
     const detectedText = document.getElementById('sleepDetectedBedtimeText');
+    const autoReasonText = document.getElementById('sleepDesveloAutoReason');
     const motivoGroup = document.getElementById('sleepMotivoGroup');
     const motivoInput = document.getElementById('sleepMotivoDesvelo');
     const durationLabel = document.getElementById('sleepDurationLabel');
@@ -2874,15 +3034,21 @@ if (formSleep) {
         });
 
         const isAllNighter = mode === 'desvelo_total';
+        const isNap = mode === 'siesta';
         const isLateMode = mode === 'desvelo_tarde';
         const sleepClock = sleepTimeInput?.value || '';
-        const lateDetected = isLateBedtimeClock(sleepClock);
+        const lateDetected = !isNap && !isAllNighter && isLateBedtimeClock(sleepClock);
+        const minNormalHours = getSleepMinNormalHours();
+        const minHrsLabel = Number.isInteger(minNormalHours) ? String(minNormalHours) : String(minNormalHours);
 
         if (isAllNighter) {
             if (sleepTimeLabel) sleepTimeLabel.textContent = 'Stayed awake / Desvelo time (optional):';
             if (sleepTimeInput) sleepTimeInput.required = false;
             if (wakeupGroup) wakeupGroup.hidden = true;
-            if (wakeupTimeInput) wakeupTimeInput.required = false;
+            if (wakeupTimeInput) {
+                wakeupTimeInput.required = false;
+                wakeupTimeInput.disabled = false;
+            }
             if (stillAwakeRow) stillAwakeRow.hidden = true;
             if (stillAwakeCheck) stillAwakeCheck.checked = false;
             if (esDesveloRow) esDesveloRow.hidden = true;
@@ -2893,13 +3059,28 @@ if (formSleep) {
                 qualitySelect.value = 'Bad';
                 syncQualityCards('Bad');
             }
-            if (submitBtn && !editingSleepSessionId) submitBtn.textContent = 'Log All-Nighter (0 hrs Desvelo)';
+            if (submitBtn && !editingSleepSessionId) submitBtn.textContent = tUi('Log All-Nighter (0 hrs Desvelo)', 'Registrar Desvelo Total (0 hrs)');
+        } else if (isNap) {
+            if (sleepTimeLabel) sleepTimeLabel.textContent = tUi('Nap started at:', 'Inicio de la siesta:');
+            if (sleepTimeInput) sleepTimeInput.required = true;
+            if (wakeupGroup) wakeupGroup.hidden = false;
+            if (wakeupTimeInput) {
+                wakeupTimeInput.required = true;
+                wakeupTimeInput.disabled = false;
+            }
+            if (stillAwakeRow) stillAwakeRow.hidden = true;
+            if (stillAwakeCheck) stillAwakeCheck.checked = false;
+            if (esDesveloRow) esDesveloRow.hidden = true;
+            if (esDesveloCheck) esDesveloCheck.checked = false;
+            if (autoBanner) autoBanner.hidden = true;
+            if (motivoGroup) motivoGroup.hidden = !Boolean(motivoInput?.value.trim());
+            if (submitBtn && !editingSleepSessionId) submitBtn.textContent = tUi('🛋️ Log Nap / Siesta', '🛋️ Guardar Siesta');
         } else {
             if (sleepTimeLabel) sleepTimeLabel.textContent = 'Fell asleep at:';
             if (sleepTimeInput) sleepTimeInput.required = true;
             if (esDesveloRow) esDesveloRow.hidden = false;
-            if (stillAwakeRow) stillAwakeRow.hidden = !(isLateMode || lateDetected);
-            if (!isLateMode && !lateDetected && stillAwakeCheck) {
+            if (stillAwakeRow) stillAwakeRow.hidden = Boolean(editingSleepSessionId);
+            if (editingSleepSessionId && stillAwakeCheck) {
                 stillAwakeCheck.checked = false;
             }
             const stillAwake = Boolean(stillAwakeCheck?.checked);
@@ -2908,39 +3089,71 @@ if (formSleep) {
                 wakeupTimeInput.required = !stillAwake;
                 wakeupTimeInput.disabled = stillAwake;
             }
+        }
+
+        calcularHoras();
+
+        if (!isAllNighter && !isNap) {
+            const stillAwake = Boolean(stillAwakeCheck?.checked);
+            const calcHours = parseFloat(inputSleep?.dataset?.decimal || '0') || 0;
+            const shortSleepDetected = !stillAwake && calcHours > 0 && calcHours < minNormalHours;
+            const autoDesvelo = lateDetected || (mode === 'normal' && shortSleepDetected);
+
             if (isLateMode) {
                 if (esDesveloCheck) esDesveloCheck.checked = true;
-            } else if (!preserveManualDesvelo) {
-                if (esDesveloCheck && lateDetected && !userManuallyToggledDesvelo) {
-                    esDesveloCheck.checked = true;
-                } else if (esDesveloCheck && !lateDetected && !userManuallyToggledDesvelo) {
-                    esDesveloCheck.checked = false;
-                }
+            } else if (!preserveManualDesvelo && !userManuallyToggledDesvelo && esDesveloCheck) {
+                esDesveloCheck.checked = stillAwake ? lateDetected : autoDesvelo;
             }
+
             if (autoBanner) {
-                autoBanner.hidden = !lateDetected;
-                if (lateDetected && detectedText) {
-                    detectedText.textContent = formatClockTime12h(sleepClock);
+                const showBanner = lateDetected || shortSleepDetected;
+                autoBanner.hidden = !showBanner;
+                if (showBanner && detectedText && autoReasonText) {
+                    const cutoff12 = formatClockTime12h(getSleepDesveloBedtimeCutoff());
+                    if (lateDetected && shortSleepDetected) {
+                        detectedText.textContent = `${formatClockTime12h(sleepClock)} · ${formatHoursMinutes(calcHours, { compact: true })}:`;
+                        autoReasonText.textContent = tUi(
+                            `bedtime from ${cutoff12} and under ${minHrsLabel} hrs — automatically marked as Desvelo for your psychiatrist's weekly report.`,
+                            `hora de dormir desde ${cutoff12} y menos de ${minHrsLabel} hrs — se marca automáticamente como Desvelo para tu psiquiatra.`
+                        );
+                    } else if (lateDetected) {
+                        detectedText.textContent = `${formatClockTime12h(sleepClock)}:`;
+                        autoReasonText.textContent = tUi(
+                            `late bedtime (from ${cutoff12}) — automatically marked as Desvelo for your psychiatrist's weekly report.`,
+                            `hora de dormir tardía (desde ${cutoff12}) — se marca automáticamente como Desvelo para tu psiquiatra.`
+                        );
+                    } else {
+                        detectedText.textContent = `${formatHoursMinutes(calcHours, { compact: true })}:`;
+                        autoReasonText.textContent = tUi(
+                            `under ${minHrsLabel} hrs minimum for Normal Sleep — automatically marked as Desvelo for your psychiatrist's weekly report.`,
+                            `menos del mínimo de ${minHrsLabel} hrs para Sueño Normal — se marca automáticamente como Desvelo para tu psiquiatra.`
+                        );
+                    }
                 }
             }
-            const showMotivo = isLateMode || lateDetected || Boolean(esDesveloCheck?.checked) || Boolean(motivoInput?.value.trim());
+
+            const showMotivo = isLateMode || lateDetected || shortSleepDetected || Boolean(esDesveloCheck?.checked) || Boolean(motivoInput?.value.trim());
             if (motivoGroup) motivoGroup.hidden = !showMotivo;
+
             if (submitBtn && !editingSleepSessionId) {
                 if (stillAwake) {
-                    submitBtn.textContent = 'Save Late Bedtime Now';
+                    submitBtn.textContent = esDesveloCheck?.checked
+                        ? tUi('Save Late Bedtime Now', 'Guardar Desvelo Ahora')
+                        : tUi('Save Bedtime (Remind in Morning)', 'Guardar Hora de Dormir (Aviso Matutino)');
                 } else if (esDesveloCheck?.checked) {
-                    submitBtn.textContent = 'Log Sleep & Desvelo';
+                    submitBtn.textContent = tUi('Log Sleep & Desvelo', 'Guardar Sueño / Desvelo');
                 } else {
-                    submitBtn.textContent = 'Log Sleep Session';
+                    submitBtn.textContent = tUi('Log Sleep Session', 'Guardar Sesión de Sueño');
                 }
             }
         }
 
         if (editingSleepSessionId && submitBtn) {
-            submitBtn.textContent = 'Complete Sleep Wake-Up';
+            submitBtn.textContent = tUi('Complete Sleep Wake-Up', 'Completar Hora de Despertar');
         }
-        calcularHoras();
+        updateSleepRulesTipBox();
     }
+    refreshSleepFormRulesUI = () => syncSleepModeUI({ preserveManualDesvelo: false });
 
     function calcularHoras() {
         const mode = tipoInput?.value || 'normal';
@@ -3026,35 +3239,39 @@ if (formSleep) {
             // ignore
         }
         syncSleepModeUI({ preserveManualDesvelo: true });
+        updateSleepRulesTipBox();
     };
 
     function SLEEP_TIPOS_LIST_SET_OK(val) {
-        return val === 'normal' || val === 'desvelo_tarde' || val === 'desvelo_total';
+        return val === 'normal' || val === 'siesta' || val === 'desvelo_tarde' || val === 'desvelo_total';
     }
 
     enterSleepWakeupCompletion = function enterSleepWakeupCompletionImpl(row) {
         if (!row || !row.id) return;
         editingSleepSessionId = Number(row.id);
+        userManuallyToggledDesvelo = false;
         const now = new Date();
         const nowHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         if (dateInput && row.fecha) dateInput.value = String(row.fecha).slice(0, 10);
-        if (tipoInput) tipoInput.value = row.tipo_registro || 'desvelo_tarde';
+        if (tipoInput) tipoInput.value = row.tipo_registro || 'normal';
         if (sleepTimeInput && row.hora_dormir) sleepTimeInput.value = String(row.hora_dormir).slice(0, 5);
         if (stillAwakeCheck) stillAwakeCheck.checked = false;
         if (wakeupTimeInput) wakeupTimeInput.value = nowHHMM;
-        if (esDesveloCheck) esDesveloCheck.checked = true;
+        if (esDesveloCheck) {
+            esDesveloCheck.checked = Number(row.es_desvelo) === 1 || row.tipo_registro === 'desvelo_tarde';
+        }
         if (motivoInput) motivoInput.value = row.motivo_desvelo || '';
         if (qualitySelect && row.calidad) {
             qualitySelect.value = row.calidad;
             syncQualityCards(row.calidad);
         }
-        syncSleepModeUI({ preserveManualDesvelo: true });
+        syncSleepModeUI({ preserveManualDesvelo: false });
         setInlineBanner(
             'sleepStatusBanner',
             'info',
             tUi(
                 `Completing wake-up for bedtime ${formatClockTime12h(row.hora_dormir)} — adjust wake-up time or quality if needed and click "Complete Sleep Wake-Up".`,
-                `Completando despertar para hora de dormir ${formatClockTime12h(row.hora_dormir)} — ajusta tu hora de despertar o calidad si hace falta y presiona "Completar Despertar".`
+                `Completando despertar para hora de dormir ${formatClockTime12h(row.hora_dormir)} — ajusta tu hora de despertar o calidad si hace falta y presiona "Completar Hora de Despertar".`
             )
         );
         formSleep.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -3139,7 +3356,10 @@ if (formSleep) {
     }
 
     if (wakeupTimeInput) {
-        wakeupTimeInput.addEventListener('change', () => calcularHoras());
+        wakeupTimeInput.addEventListener('change', () => {
+            userManuallyToggledDesvelo = false;
+            syncSleepModeUI();
+        });
     }
 
     if (motivoInput) {
@@ -3170,7 +3390,8 @@ if (formSleep) {
             const mm = String(now.getMinutes()).padStart(2, '0');
             if (wakeupTimeInput) wakeupTimeInput.value = `${hh}:${mm}`;
             if (stillAwakeCheck) stillAwakeCheck.checked = false;
-            syncSleepModeUI({ preserveManualDesvelo: true });
+            userManuallyToggledDesvelo = false;
+            syncSleepModeUI();
         });
     }
 
@@ -3181,11 +3402,17 @@ if (formSleep) {
 
         const fecha = (dateInput?.value || formatLocalDate(new Date())).trim();
         const tipoRegistro = tipoInput?.value || 'normal';
+        const isNap = tipoRegistro === 'siesta';
         const sleepTime = (sleepTimeInput?.value || '').trim();
-        const stillAwake = Boolean(stillAwakeCheck?.checked);
+        const stillAwake = !isNap && tipoRegistro !== 'desvelo_total' && Boolean(stillAwakeCheck?.checked);
         const wakeupTime = stillAwake || tipoRegistro === 'desvelo_total' ? '' : (wakeupTimeInput?.value || '').trim();
         const quality = qualitySelect ? qualitySelect.value : '';
-        const esDesvelo = Boolean(esDesveloCheck?.checked) || tipoRegistro !== 'normal' || isLateBedtimeClock(sleepTime);
+        const esDesvelo = isNap
+            ? false
+            : (tipoRegistro === 'desvelo_total'
+                || tipoRegistro === 'desvelo_tarde'
+                || Boolean(esDesveloCheck?.checked)
+                || isLateBedtimeClock(sleepTime));
         const motivoDesvelo = (motivoInput?.value || '').trim();
 
         if (!fecha) {
@@ -3211,6 +3438,10 @@ if (formSleep) {
             return;
         }
 
+        const finalTipoRegistro = isNap
+            ? 'siesta'
+            : (tipoRegistro === 'normal' && esDesvelo ? 'desvelo_tarde' : tipoRegistro);
+
         const datos = {
             fecha,
             horas,
@@ -3218,7 +3449,7 @@ if (formSleep) {
             horaDormir: sleepTime,
             horaDespertar: wakeupTime,
             esDesvelo,
-            tipoRegistro: tipoRegistro === 'normal' && esDesvelo ? 'desvelo_tarde' : tipoRegistro,
+            tipoRegistro: finalTipoRegistro,
             motivoDesvelo
         };
 
@@ -3282,6 +3513,11 @@ if (formSleep) {
     });
 
     initSleepViewDefaults();
+    if (window.DailyHubI18n && typeof window.DailyHubI18n.onChange === 'function') {
+        window.DailyHubI18n.onChange(() => {
+            syncSleepModeUI({ preserveManualDesvelo: true });
+        });
+    }
 }
 
 // ==========================================
@@ -6377,6 +6613,20 @@ function openAiSettingsSection() {
     }
     setTimeout(() => {
         document.getElementById('setGeminiApiKey')?.focus();
+    }, 250);
+}
+
+function openSleepSettingsSection() {
+    if (typeof showView === 'function') {
+        showView('settings', true);
+    }
+    const sleepBlock = document.getElementById('settingsSleepRulesBlock')
+        || document.getElementById('setSleepTime')?.closest('.reminder-rule-block');
+    if (sleepBlock && typeof sleepBlock.scrollIntoView === 'function') {
+        sleepBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setTimeout(() => {
+        document.getElementById('setSleepTime')?.focus();
     }, 250);
 }
 
@@ -13499,6 +13749,12 @@ function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false } = {}) 
     if (typeof updateYouTubePlatformUI === 'function') {
         updateYouTubePlatformUI();
     }
+    if (typeof updateSleepRulesTipBox === 'function') {
+        updateSleepRulesTipBox();
+    }
+    if (typeof refreshSleepFormRulesUI === 'function') {
+        refreshSleepFormRulesUI();
+    }
 
     if (syncAgendaDefaults) {
         if (settings.defaultAgendaCategory) {
@@ -13577,6 +13833,8 @@ function populateSettingsForm(settings = {}) {
     setCheck('setMoodLateNight', settings.moodIncludeLateNight === true);
     setCheck('setSleepEnabled', settings.sleepReminderEnabled !== false);
     setVal('setSleepTime', settings.sleepReminderTime || '08:30');
+    setVal('setSleepDesveloBedtimeTime', settings.sleepDesveloBedtimeTime || '01:00');
+    setVal('setSleepMinNormalHours', settings.sleepMinNormalHours ?? 7);
 
     setCheck('setAgendaRemEnabled', settings.agendaRemindersEnabled !== false);
     setCheck('setAgendaEvents', settings.agendaNotifyEvents !== false);
@@ -13669,6 +13927,8 @@ function collectSettingsFormPayload() {
         moodIncludeLateNight: Boolean(document.getElementById('setMoodLateNight')?.checked),
         sleepReminderEnabled: Boolean(document.getElementById('setSleepEnabled')?.checked),
         sleepReminderTime: String(document.getElementById('setSleepTime')?.value || '08:30').slice(0, 5),
+        sleepDesveloBedtimeTime: String(document.getElementById('setSleepDesveloBedtimeTime')?.value || '01:00').slice(0, 5),
+        sleepMinNormalHours: Number(document.getElementById('setSleepMinNormalHours')?.value ?? 7),
 
         agendaRemindersEnabled: Boolean(document.getElementById('setAgendaRemEnabled')?.checked),
         agendaNotifyEvents: Boolean(document.getElementById('setAgendaEvents')?.checked),
