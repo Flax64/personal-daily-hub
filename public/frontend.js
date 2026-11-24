@@ -11516,6 +11516,8 @@ function renderAgendaBoard() {
     // 1. Day View (mobile / focus mode)
     if (isDayLayout) {
         dayTabs.innerHTML = '';
+        dayTabs.style.setProperty('--agenda-cols', String(diasVisibles.length));
+        dayTabs.classList.toggle('cols-5', diasVisibles.length === 5);
         diasVisibles.forEach(dia => {
             const count = filteredItems.filter(i => i.fecha === dia.fecha).length;
             const dayShortLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaDayName === 'function')
@@ -14114,6 +14116,9 @@ function cargarRecordatoriosActivos() {
 function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false } = {}) {
     if (!settings) return;
     currentSettings = settings;
+    if (typeof window !== 'undefined') {
+        window.userSettings = currentSettings;
+    }
     if (settings.academicPlanner && !academicPlannerState) {
         academicPlannerState = settings.academicPlanner;
         if (typeof renderAgendaCourseFilterOptions === 'function') {
@@ -14129,6 +14134,9 @@ function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false } = {}) 
     }
     if (typeof refreshSleepFormRulesUI === 'function') {
         refreshSleepFormRulesUI();
+    }
+    if (typeof renderCrisisTypePills === 'function') {
+        renderCrisisTypePills();
     }
 
     if (syncAgendaDefaults) {
@@ -18181,11 +18189,394 @@ function cargarCrisisRecientes() {
         .catch(() => renderCrisisCards(container, [], { allowDelete: true }));
 }
 
+const DEFAULT_CRISIS_EPISODE_TYPES_UI = [
+    { id: 'estres', label: 'Estrés', icon: '😣' },
+    { id: 'ira_rabia', label: 'Ira / Rabia', icon: '😠' },
+    { id: 'ansiedad', label: 'Ansiedad', icon: '😰' },
+    { id: 'panico', label: 'Pánico', icon: '🫨' },
+    { id: 'llanto_sobrecarga', label: 'Llanto / Sobrecarga', icon: '😢' },
+    { id: 'bloqueo_saturacion', label: 'Bloqueo / Saturación', icon: '🧱' },
+    { id: 'insomnio_agitacion', label: 'Insomnio / Agitación', icon: '🌘' },
+    { id: 'tristeza_desanimo', label: 'Tristeza / Desánimo', icon: '😔' },
+    { id: 'frustracion_impotencia', label: 'Frustración / Impotencia', icon: '😤' },
+    { id: 'agotamiento_mental', label: 'Agotamiento Mental', icon: '🪫' }
+];
+
+const DEFAULT_CRISIS_TYPE_ICON_MAP = new Map(
+    DEFAULT_CRISIS_EPISODE_TYPES_UI.map((item) => [item.label, item.icon])
+);
+
+function getActiveCrisisEpisodeTypes() {
+    const raw = (currentSettings && Array.isArray(currentSettings.crisisEpisodeTypes) && currentSettings.crisisEpisodeTypes.length > 0)
+        ? currentSettings.crisisEpisodeTypes
+        : (window.userSettings && Array.isArray(window.userSettings.crisisEpisodeTypes) && window.userSettings.crisisEpisodeTypes.length > 0
+            ? window.userSettings.crisisEpisodeTypes
+            : DEFAULT_CRISIS_EPISODE_TYPES_UI);
+
+    const out = [];
+    const seen = new Set();
+    raw.forEach((item, idx) => {
+        const label = String(typeof item === 'string' ? item : (item?.label || '')).trim();
+        if (!label || /^(otro|other)$/i.test(label) || seen.has(label.toLowerCase())) return;
+        seen.add(label.toLowerCase());
+        out.push({
+            id: String(item?.id || `tipo_${idx + 1}`).trim() || `tipo_${idx + 1}`,
+            label,
+            icon: String(item?.icon ?? '').trim().slice(0, 12)
+        });
+    });
+    return out.length > 0 ? out : DEFAULT_CRISIS_EPISODE_TYPES_UI.map((item) => ({ ...item }));
+}
+
+function selectCrisisEpisodeType(val) {
+    const tipoHidden = document.getElementById('crisisTipo');
+    const pillsContainer = document.getElementById('crisisTipoPills');
+    const otroGroup = document.getElementById('crisisOtroSpecGroup');
+    const otroInput = document.getElementById('crisisOtroTexto');
+    const normalized = String(val || '').trim() || 'Otro';
+    if (tipoHidden) tipoHidden.value = normalized;
+    if (pillsContainer) {
+        pillsContainer.querySelectorAll('[data-crisis-type]').forEach((btn) => {
+            btn.classList.toggle('active', btn.getAttribute('data-crisis-type') === normalized);
+        });
+    }
+    if (otroGroup) {
+        otroGroup.hidden = normalized !== 'Otro';
+        if (normalized === 'Otro' && otroInput && !otroInput.disabled) {
+            otroInput.focus();
+        }
+    }
+}
+
+function renderCrisisTypePills() {
+    const pillsContainer = document.getElementById('crisisTipoPills');
+    const tipoHidden = document.getElementById('crisisTipo');
+    const otroGroup = document.getElementById('crisisOtroSpecGroup');
+    if (!pillsContainer) return;
+
+    const types = getActiveCrisisEpisodeTypes();
+    const currentVal = String(tipoHidden?.value || '').trim();
+    const validLabels = new Set(types.map((t) => t.label));
+    validLabels.add('Otro');
+    const nextSelected = validLabels.has(currentVal) ? currentVal : (types[0]?.label || 'Otro');
+
+    const frag = document.createDocumentFragment();
+    types.forEach((item) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'crisis-pill';
+        btn.setAttribute('data-crisis-type', item.label);
+        if (item.label === nextSelected) btn.classList.add('active');
+
+        const isDefaultIntact = DEFAULT_CRISIS_TYPE_ICON_MAP.get(item.label) === item.icon;
+        if (isDefaultIntact && window.DailyHubI18n && typeof window.DailyHubI18n.crisisTypeLabel === 'function') {
+            btn.textContent = window.DailyHubI18n.crisisTypeLabel(item.label, false);
+        } else {
+            protectUserNode(btn);
+            btn.textContent = item.icon ? `${item.icon} ${item.label}` : item.label;
+        }
+        frag.appendChild(btn);
+    });
+
+    const otroBtn = document.createElement('button');
+    otroBtn.type = 'button';
+    otroBtn.className = `crisis-pill${nextSelected === 'Otro' ? ' active' : ''}`;
+    otroBtn.setAttribute('data-crisis-type', 'Otro');
+    otroBtn.textContent = (window.DailyHubI18n && typeof window.DailyHubI18n.crisisTypeLabel === 'function')
+        ? window.DailyHubI18n.crisisTypeLabel('Otro', false)
+        : '📝 Otro';
+    frag.appendChild(otroBtn);
+
+    pillsContainer.replaceChildren(frag);
+    if (tipoHidden) tipoHidden.value = nextSelected;
+    if (otroGroup) otroGroup.hidden = nextSelected !== 'Otro';
+}
+
+function initCrisisTypesModal() {
+    const btnOpen = document.getElementById('btnManageCrisisTypes');
+    const modal = document.getElementById('crisisTypesModal');
+    const btnClose = document.getElementById('btnCloseCrisisTypesModal');
+    const btnDone = document.getElementById('btnDoneCrisisTypesModal');
+    const addForm = document.getElementById('crisisTypeAddForm');
+    const iconInput = document.getElementById('crisisNewTypeIcon');
+    const labelInput = document.getElementById('crisisNewTypeLabel');
+    const listContainer = document.getElementById('crisisTypesList');
+    const banner = document.getElementById('crisisTypesModalBanner');
+    if (!modal || !listContainer) return;
+
+    let editingIndex = -1;
+    let isSaving = false;
+
+    const setBanner = (type, msg) => {
+        if (!banner) return;
+        if (!msg) {
+            banner.hidden = true;
+            banner.textContent = '';
+            banner.className = 'inline-status-banner';
+            return;
+        }
+        banner.className = `inline-status-banner ${type === 'err' ? 'err' : (type === 'info' ? 'info' : 'ok')}`;
+        banner.textContent = tServer(msg);
+        banner.hidden = false;
+    };
+
+    const persistCrisisEpisodeTypes = async (nextTypes, successEn, successEs) => {
+        if (isSaving) return false;
+        isSaving = true;
+        setBanner('', '');
+        try {
+            const resData = await submitMutationRequest({
+                url: '/api/settings',
+                method: 'PUT',
+                scopeKey: 'crisis-types-settings',
+                signature: JSON.stringify(nextTypes),
+                buildBody: () => ({ crisisEpisodeTypes: nextTypes }),
+                parseJson: true
+            });
+            if (resData && resData.settings) {
+                aplicarSettingsEnEstado(resData.settings);
+            } else if (currentSettings) {
+                aplicarSettingsEnEstado({ ...currentSettings, crisisEpisodeTypes: nextTypes });
+            }
+            editingIndex = -1;
+            renderManageList();
+            renderCrisisTypePills();
+            const okText = tUi(successEn || 'Crisis episode types updated.', successEs || 'Tipos de episodio de crisis actualizados.');
+            setBanner('ok', okText);
+            showToast('ok', okText);
+            return true;
+        } catch (err) {
+            const errMsg = tServer(err.message || 'Could not update crisis episode types.');
+            setBanner('err', errMsg);
+            showToast('err', errMsg);
+            return false;
+        } finally {
+            isSaving = false;
+        }
+    };
+
+    const renderManageList = () => {
+        const types = getActiveCrisisEpisodeTypes();
+        const frag = document.createDocumentFragment();
+
+        types.forEach((item, idx) => {
+            const row = document.createElement('div');
+            row.className = 'crisis-type-manage-row';
+
+            if (editingIndex === idx) {
+                row.classList.add('is-editing');
+                const editIcon = document.createElement('input');
+                editIcon.type = 'text';
+                editIcon.className = 'crisis-type-icon-input';
+                editIcon.maxLength = 12;
+                editIcon.value = item.icon || '';
+                editIcon.placeholder = '😵';
+                editIcon.setAttribute('aria-label', tUi('Emoji or icon (optional)', 'Emoji o ícono (opcional)'));
+
+                const editLabel = document.createElement('input');
+                editLabel.type = 'text';
+                editLabel.className = 'crisis-type-label-input';
+                editLabel.minLength = 2;
+                editLabel.maxLength = 60;
+                editLabel.value = item.label;
+                editLabel.setAttribute('aria-label', tUi('Episode type name', 'Nombre del tipo de episodio'));
+
+                const actions = document.createElement('div');
+                actions.className = 'crisis-type-row-actions';
+
+                const btnSaveRow = document.createElement('button');
+                btnSaveRow.type = 'button';
+                btnSaveRow.className = 'btn-primary btn-small';
+                btnSaveRow.textContent = tUi('Save', 'Guardar');
+
+                const btnCancelRow = document.createElement('button');
+                btnCancelRow.type = 'button';
+                btnCancelRow.className = 'btn-secondary btn-small';
+                btnCancelRow.textContent = tUi('Cancel', 'Cancelar');
+
+                const commitEdit = async () => {
+                    const nextLabel = String(editLabel.value || '').replace(/\s+/g, ' ').trim();
+                    const nextIcon = String(editIcon.value || '').trim().slice(0, 12);
+                    if (nextLabel.length < 2 || nextLabel.length > 60) {
+                        setBanner('err', tUi('Episode type name must be 2 to 60 characters.', 'El nombre del tipo de episodio debe tener entre 2 y 60 caracteres.'));
+                        editLabel.focus();
+                        return;
+                    }
+                    if (/^(otro|other)$/i.test(nextLabel)) {
+                        setBanner('err', tUi('"Other" is already reserved at the end of the list.', '"Otro" ya está reservado al final de la lista.'));
+                        editLabel.focus();
+                        return;
+                    }
+                    const duplicate = types.some((other, oIdx) => oIdx !== idx && other.label.toLowerCase() === nextLabel.toLowerCase());
+                    if (duplicate) {
+                        setBanner('err', tUi('An episode type with that name already exists.', 'Ya existe un tipo de episodio con ese nombre.'));
+                        editLabel.focus();
+                        return;
+                    }
+                    const updated = types.map((entry, eIdx) => (eIdx === idx
+                        ? { ...entry, label: nextLabel, icon: nextIcon }
+                        : { ...entry }
+                    ));
+                    await persistCrisisEpisodeTypes(updated, 'Crisis episode types updated.', 'Tipos de episodio de crisis actualizados.');
+                };
+
+                btnSaveRow.addEventListener('click', commitEdit);
+                btnCancelRow.addEventListener('click', () => {
+                    editingIndex = -1;
+                    setBanner('', '');
+                    renderManageList();
+                });
+                [editIcon, editLabel].forEach((inp) => {
+                    inp.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter') {
+                            ev.preventDefault();
+                            commitEdit();
+                        } else if (ev.key === 'Escape') {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            editingIndex = -1;
+                            renderManageList();
+                        }
+                    });
+                });
+
+                actions.append(btnSaveRow, btnCancelRow);
+                row.append(editIcon, editLabel, actions);
+                frag.appendChild(row);
+                setTimeout(() => editLabel.focus(), 0);
+                return;
+            }
+
+            const info = document.createElement('div');
+            info.className = 'crisis-type-manage-info';
+
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'crisis-type-manage-icon';
+            protectUserNode(iconSpan);
+            iconSpan.textContent = item.icon || '🏷️';
+
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'crisis-type-manage-label';
+            protectUserNode(labelSpan);
+            labelSpan.textContent = item.label;
+
+            info.append(iconSpan, labelSpan);
+
+            const actions = document.createElement('div');
+            actions.className = 'crisis-type-row-actions';
+
+            const btnEdit = document.createElement('button');
+            btnEdit.type = 'button';
+            btnEdit.className = 'btn-secondary btn-small';
+            btnEdit.textContent = '✏️';
+            btnEdit.title = tUi('Edit', 'Editar');
+            btnEdit.setAttribute('aria-label', tUi(`Edit ${item.label}`, `Editar ${item.label}`));
+            btnEdit.addEventListener('click', () => {
+                editingIndex = idx;
+                setBanner('', '');
+                renderManageList();
+            });
+
+            const btnDelete = document.createElement('button');
+            btnDelete.type = 'button';
+            btnDelete.className = 'btn-danger-ghost btn-small';
+            btnDelete.textContent = '🗑️';
+            btnDelete.title = tUi('Delete', 'Eliminar');
+            btnDelete.setAttribute('aria-label', tUi(`Delete ${item.label}`, `Eliminar ${item.label}`));
+            btnDelete.disabled = types.length <= 1;
+            btnDelete.addEventListener('click', async () => {
+                if (types.length <= 1) {
+                    setBanner('err', tUi('At least 1 crisis episode type is required.', 'Se requiere al menos 1 tipo de episodio de crisis.'));
+                    return;
+                }
+                const updated = types.filter((_, fIdx) => fIdx !== idx);
+                await persistCrisisEpisodeTypes(updated, 'Crisis episode types updated.', 'Tipos de episodio de crisis actualizados.');
+            });
+
+            actions.append(btnEdit, btnDelete);
+            row.append(info, actions);
+            frag.appendChild(row);
+        });
+
+        listContainer.replaceChildren(frag);
+    };
+
+    const openModal = () => {
+        if (currentUser?.rol === 'psiquiatra') return;
+        editingIndex = -1;
+        setBanner('', '');
+        renderManageList();
+        modal.hidden = false;
+        syncModalScrollLock();
+        labelInput?.focus();
+    };
+
+    const closeModal = () => {
+        editingIndex = -1;
+        modal.hidden = true;
+        syncModalScrollLock();
+    };
+
+    if (btnOpen) btnOpen.addEventListener('click', openModal);
+    if (btnClose) btnClose.addEventListener('click', closeModal);
+    if (btnDone) btnDone.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.hidden) closeModal();
+    });
+
+    if (addForm) {
+        addForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const current = getActiveCrisisEpisodeTypes();
+            if (current.length >= 25) {
+                setBanner('err', tUi('Maximum 25 crisis episode types allowed.', 'Se permiten máximo 25 tipos de episodio de crisis.'));
+                return;
+            }
+            const nextLabel = String(labelInput?.value || '').replace(/\s+/g, ' ').trim();
+            const nextIcon = String(iconInput?.value || '').trim().slice(0, 12);
+            if (nextLabel.length < 2 || nextLabel.length > 60) {
+                setBanner('err', tUi('Episode type name must be 2 to 60 characters.', 'El nombre del tipo de episodio debe tener entre 2 y 60 caracteres.'));
+                labelInput?.focus();
+                return;
+            }
+            if (/^(otro|other)$/i.test(nextLabel)) {
+                setBanner('err', tUi('"Other" is already reserved at the end of the list.', '"Otro" ya está reservado al final de la lista.'));
+                labelInput?.focus();
+                return;
+            }
+            if (current.some((entry) => entry.label.toLowerCase() === nextLabel.toLowerCase())) {
+                setBanner('err', tUi('An episode type with that name already exists.', 'Ya existe un tipo de episodio con ese nombre.'));
+                labelInput?.focus();
+                return;
+            }
+            const slug = nextLabel
+                .toLowerCase()
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 36) || `tipo_${Date.now()}`;
+            const updated = [...current, { id: `${slug}_${Date.now().toString(36).slice(-4)}`, label: nextLabel, icon: nextIcon }];
+            const ok = await persistCrisisEpisodeTypes(updated, 'Crisis episode types updated.', 'Tipos de episodio de crisis actualizados.');
+            if (ok) {
+                if (labelInput) labelInput.value = '';
+                if (iconInput) iconInput.value = '';
+                selectCrisisEpisodeType(nextLabel);
+            }
+        });
+    }
+}
+
 function initCrisisHandlers() {
     const form = document.getElementById('crisisForm');
     if (!form) return;
 
     prefillCrisisCurrentTimestamp();
+    renderCrisisTypePills();
+    initCrisisTypesModal();
 
     const btnNow = document.getElementById('btnCrisisUseNow');
     if (btnNow) {
@@ -18195,8 +18586,6 @@ function initCrisisHandlers() {
         });
     }
 
-    const tipoHidden = document.getElementById('crisisTipo');
-    const otroGroup = document.getElementById('crisisOtroSpecGroup');
     const otroInput = document.getElementById('crisisOtroTexto');
     const motivoEl = document.getElementById('crisisMotivo');
     const counterEl = document.getElementById('crisisCharCounter');
@@ -18212,19 +18601,15 @@ function initCrisisHandlers() {
         updateCharCount();
     }
 
-    document.querySelectorAll('#crisisTipoPills [data-crisis-type]').forEach(btn => {
-        btn.addEventListener('click', () => {
+    const pillsContainer = document.getElementById('crisisTipoPills');
+    if (pillsContainer) {
+        pillsContainer.addEventListener('click', (e) => {
+            const btn = e.target?.closest?.('[data-crisis-type]');
+            if (!btn) return;
             const val = btn.getAttribute('data-crisis-type') || 'Estrés';
-            if (tipoHidden) tipoHidden.value = val;
-            document.querySelectorAll('#crisisTipoPills [data-crisis-type]').forEach(b =>
-                b.classList.toggle('active', b === btn)
-            );
-            if (otroGroup) {
-                otroGroup.hidden = val !== 'Otro';
-                if (val === 'Otro' && otroInput) otroInput.focus();
-            }
+            selectCrisisEpisodeType(val);
         });
-    });
+    }
 
     const intHidden = document.getElementById('crisisIntensidad');
     document.querySelectorAll('#crisisIntensityPills [data-crisis-intensity]').forEach(btn => {
@@ -18379,6 +18764,9 @@ function refreshDynamicLanguageViews() {
 
     if (typeof renderResumenVisualWeekStrip === 'function') {
         renderResumenVisualWeekStrip();
+    }
+    if (typeof renderCrisisTypePills === 'function') {
+        renderCrisisTypePills();
     }
 
     if (activeViewEl) {

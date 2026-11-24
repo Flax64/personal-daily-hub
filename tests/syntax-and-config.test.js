@@ -1888,4 +1888,50 @@ describe('Arquitectura Blue-Green Caddy + Rollback y Modal de Canción (#musicSo
         assert.ok(rmSyncIdx !== -1 && skipSyncIdx > rmSyncIdx, 'deploy.yml debe marcar sincronitation con --skip-worktree tras rm -rf');
         assert.ok(skipHistoryIdx !== -1, 'deploy.yml debe marcar version-history.json con --skip-worktree');
     });
+
+    it('unifica tokens de color principal, habilita edición de tipos de crisis y mejora simetría/scroll de Agenda', () => {
+        const styleCss = readText('public/style.css');
+        const indexHtml = readText('public/index.html');
+        const frontendJs = readText('public/frontend.js');
+
+        // 1. Tokens unificados de marca y remoción de acentos inconsistentes
+        for (const token of [
+            '--brand-primary:',
+            '--brand-primary-hover:',
+            '--brand-primary-active:',
+            '--brand-primary-soft:',
+            '--brand-primary-border:'
+        ]) {
+            assert.ok(styleCss.includes(token), `public/style.css debe definir ${token}`);
+        }
+        const crisisActiveMatch = styleCss.match(/\.crisis-pill\.active,\s*\.crisis-int-pill\.active\s*\{([^}]*)\}/);
+        assert.ok(crisisActiveMatch, 'Debe existir .crisis-pill.active, .crisis-int-pill.active en style.css');
+        assert.equal(/#ef4444|#dc2626/i.test(crisisActiveMatch[1]), false, '.crisis-pill.active no debe usar rojo intenso sino --brand-primary');
+        assert.match(crisisActiveMatch[1], /var\(--brand-primary\)/);
+
+        const sleepActiveMatch = styleCss.match(/\.sleep-mode-pill\.active\s*\{([^}]*)\}/);
+        assert.ok(sleepActiveMatch, 'Debe existir .sleep-mode-pill.active en style.css');
+        assert.equal(/linear-gradient|#7c3aed|#8b5cf6|#4f46e5/i.test(sleepActiveMatch[1]), false, '.sleep-mode-pill.active no debe usar gradiente morado');
+        assert.match(sleepActiveMatch[1], /var\(--brand-primary\)/);
+
+        // 2. Agenda: Vista Día simétrica, filtros en 2 filas y Vista Rejilla amplia con columna sticky
+        assert.match(styleCss, /\.agenda-day-tabs\s*\{[\s\S]*?display:\s*grid;[\s\S]*?minmax\(92px,\s*1fr\)/);
+        assert.match(styleCss, /\.agenda-day-tabs\s*\{[\s\S]*?minmax\(64px,\s*1fr\)/);
+        assert.match(styleCss, /\.agenda-table-scroll\s*\{[\s\S]*?overflow-x:\s*auto/);
+        assert.match(styleCss, /\.agenda-week-board\s*\{[\s\S]*?minmax\(220px,\s*1fr\)[\s\S]*?width:\s*max-content;[\s\S]*?min-width:\s*100%/);
+        assert.match(styleCss, /\.agenda-block-header\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?left:\s*0/);
+        assert.ok(styleCss.includes('minmax(205px, 1fr)') && styleCss.includes('minmax(195px, 1fr)'),
+            'style.css debe definir columnas amplias en tablet (>=205px) y celular (>=195px)');
+
+        const filterBarMatch = indexHtml.match(/<div class="agenda-filter-bar">([\s\S]*?)<\/div>\s*<div id="agendaLoadingBanner"/);
+        assert.ok(filterBarMatch, 'Debe existir .agenda-filter-bar en public/index.html');
+        assert.ok(filterBarMatch[1].includes('agenda-filter-row-primary') && filterBarMatch[1].includes('agenda-filter-row-secondary'),
+            '.agenda-filter-bar debe separar filtros en dos filas claras (.agenda-filter-row-primary y .agenda-filter-row-secondary)');
+
+        // 3. Controles y modal para administrar Tipos de Episodio de Crisis
+        assert.ok(indexHtml.includes('id="btnManageCrisisTypes"'), 'public/index.html debe incluir #btnManageCrisisTypes');
+        assert.ok(indexHtml.includes('id="crisisTypesModal"'), 'public/index.html debe incluir #crisisTypesModal');
+        assert.ok(frontendJs.includes('function renderCrisisTypePills(') && frontendJs.includes('function initCrisisTypesModal('),
+            'public/frontend.js debe definir renderCrisisTypePills() e initCrisisTypesModal()');
+    });
 });

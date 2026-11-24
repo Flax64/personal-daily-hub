@@ -3007,6 +3007,98 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(delCrisisRes.status, 200);
     });
 
+    it('permite configurar crisisEpisodeTypes vía PUT /api/settings, preserva tipos al guardar otros ajustes y los acepta en POST /api/insert-crisis', async () => {
+        const beforeRes = await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } });
+        assert.strictEqual(beforeRes.status, 200);
+        const prevSettings = JSON.parse(beforeRes.body).settings;
+        const originalTypes = Array.isArray(prevSettings.crisisEpisodeTypes) ? prevSettings.crisisEpisodeTypes : [];
+        assert.ok(originalTypes.length >= 10, 'Debe existir catálogo inicial predeterminado de crisisEpisodeTypes');
+
+        const customTypeLabel = 'Sobrecarga Sensorial Test';
+        const updatedTypes = [
+            ...originalTypes,
+            { id: 'sobrecarga_sensorial_test', label: customTypeLabel, icon: '😵' }
+        ];
+
+        const saveCustomRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/settings',
+            headers: { Cookie: adminCookie },
+            body: { crisisEpisodeTypes: updatedTypes }
+        });
+        assert.strictEqual(saveCustomRes.status, 200);
+        const savedSettings = JSON.parse(saveCustomRes.body).settings;
+        assert.ok(
+            Array.isArray(savedSettings.crisisEpisodeTypes) &&
+            savedSettings.crisisEpisodeTypes.some((t) => t.label === customTypeLabel && t.icon === '😵'),
+            'PUT /api/settings debe guardar el tipo de crisis personalizado'
+        );
+
+        // Guardar otro ajuste general sin enviar crisisEpisodeTypes no debe borrar el tipo personalizado
+        const partialSaveRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/settings',
+            headers: { Cookie: adminCookie },
+            body: { agendaShowWeekend: true }
+        });
+        assert.strictEqual(partialSaveRes.status, 200);
+        const partialSettings = JSON.parse(partialSaveRes.body).settings;
+        assert.ok(
+            partialSettings.crisisEpisodeTypes.some((t) => t.label === customTypeLabel),
+            'Guardar otros ajustes no debe sobrescribir crisisEpisodeTypes'
+        );
+
+        // Registrar episodio usando el nuevo tipo personalizado
+        const insertCustomRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-crisis',
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: '2026-11-15',
+                hora: '18:45',
+                tipoCrisis: customTypeLabel,
+                intensidad: 4,
+                motivo: 'Ruido intenso en entorno de prueba.'
+            }
+        });
+        assert.strictEqual(insertCustomRes.status, 200);
+        const insertedJson = JSON.parse(insertCustomRes.body);
+        assert.strictEqual(insertedJson.tipo_crisis, customTypeLabel);
+
+        const getCustomRes = await request({
+            port,
+            method: 'GET',
+            reqPath: '/api/get-crisis?begin=2026-11-15&end=2026-11-15',
+            headers: { Cookie: medicoCookie }
+        });
+        assert.strictEqual(getCustomRes.status, 200);
+        const listCustom = JSON.parse(getCustomRes.body);
+        assert.ok(
+            Array.isArray(listCustom) && listCustom.some((c) => c.tipo_crisis === customTypeLabel),
+            'GET /api/get-crisis debe incluir el episodio registrado con el tipo personalizado'
+        );
+
+        // Limpieza: borrar registro de prueba y restaurar tipos originales
+        if (insertedJson.id) {
+            await request({
+                port,
+                method: 'DELETE',
+                reqPath: `/api/delete-crisis/${insertedJson.id}`,
+                headers: { Cookie: adminCookie }
+            });
+        }
+        await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/settings',
+            headers: { Cookie: adminCookie },
+            body: { crisisEpisodeTypes: originalTypes }
+        });
+    });
+
     it('permite editar canciones existentes, artistas y álbumes en el catálogo musical con validación de duplicados', async () => {
         // 1. Crear canción con artista y álbum únicos para esta prueba
         const createFirst = await request({
