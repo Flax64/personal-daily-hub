@@ -286,20 +286,24 @@
 
         // --- Sleep & Desvelo Tracker ---
         ['Sleep & Desvelo Tracker', 'Registro de Sueño y Desvelos'],
+        ['⚙️ Sleep Rules & Alert', '⚙️ Reglas de Sueño y Aviso'],
         ['Log bedtime, wake-up time, late-night bedtimes (e.g. 3:00 AM), or all-nighters (Desvelo). Late-night patterns and notes are shared with your psychiatrist.', 'Registra hora de dormir, despertar, desvelos de madrugada (ej. 3:00 AM) o noches sin dormir. Los patrones de desvelo se comparten con tu psiquiatra.'],
         ['Entry Type:', 'Tipo de registro:'],
         ['Sleep or desvelo entry type', 'Tipo de registro de sueño o desvelo'],
         ['🌙 Sleep Session', '🌙 Sesión de Sueño'],
+        ['🛋️ Nap / Siesta', '🛋️ Siesta'],
         ['🦉 Desvelo / Late Bedtime (e.g. 3 AM)', '🦉 Desvelo / Dormido tarde (ej. 3 AM)'],
         ['⚡ All-Nighter / No Sleep (0 hrs)', '⚡ Desvelo Total / Sin dormir (0 hrs)'],
         ['Date of rest / wake-up:', 'Fecha de descanso / despertar:'],
         ['Yesterday', 'Ayer'],
         ['Today', 'Hoy'],
         ['Fell asleep at:', 'Me dormí a las:'],
+        ['Nap started at:', 'Inicio de la siesta:'],
         ['Stayed awake / Desvelo time (optional):', 'Hora aproximada de desvelo (opcional):'],
         ['Use current time', 'Usar hora actual'],
         ['Woke up at:', 'Desperté a las:'],
         ['⏳ Going to sleep just now (e.g. 3:00 AM) — log bedtime immediately and add wake-up time later', '⏳ Me voy durmiendo ahorita (ej. 3:00 AM) — guardar hora de dormir y completar al despertar'],
+        ['⏳ Going to sleep now (e.g. 10:30 PM or 2:00 AM) — log bedtime now and get a morning reminder to add your wake-up time', '⏳ Me voy durmiendo ahorita (ej. 10:30 PM o 2:00 AM) — guardar hora de dormir y recibir aviso matutino para completar despertar'],
         ['Calculated sleep duration', 'Duración total de sueño'],
         ['Total hours of sleep', 'Horas totales de sueño'],
         ['-- hrs -- min', '-- hrs -- min'],
@@ -313,12 +317,18 @@
         ['Desvelo Note / Reason (optional · visible to psychiatrist):', 'Motivo / Nota del desvelo (opcional · visible para el psiquiatra):'],
         ['e.g. Fell asleep at 3:00 AM due to insomnia, anxiety, or project work; or stayed awake all night...', 'Ej: Me dormí hasta las 3:00 AM por insomnio, ansiedad o proyecto; o pasé la noche en vela...'],
         ['Log Sleep Session', 'Guardar Sesión de Sueño'],
+        ['🛋️ Log Nap / Siesta', '🛋️ Guardar Siesta'],
         ['Log Sleep & Desvelo', 'Guardar Sueño / Desvelo'],
         ['Save Late Bedtime Now', 'Guardar Desvelo Ahora'],
+        ['Save Bedtime (Remind in Morning)', 'Guardar Hora de Dormir (Aviso Matutino)'],
         ['Log All-Nighter (0 hrs Desvelo)', 'Registrar Desvelo Total (0 hrs)'],
         ['Complete Sleep Wake-Up', 'Completar Hora de Despertar'],
         ["Today's Sleep Summary", 'Resumen de Sueño de Hoy'],
         ['Desvelo & Intermittent', 'Desvelos e Intermitente'],
+        ['Late bedtime cutoff for auto-Desvelo:', 'Hora límite para desvelo automático:'],
+        ['Late bedtime cutoff time', 'Hora límite de desvelo automático'],
+        ['Min. hours for Normal Sleep:', 'Mínimo de horas para Sueño Normal:'],
+        ['Minimum hours for normal sleep', 'Mínimo de horas para sueño normal'],
 
         // --- Journal Notes ---
         ['Write private thoughts in English and save them encrypted into your personal Word journal.', 'Escribe tus pensamientos privados en inglés y guárdalos cifrados en tu diario personal de Word.'],
@@ -1588,8 +1598,10 @@
         ['Sleep hours must be a number between 0.1 and 24.', 'Las horas de sueño deben ser un número entre 0.1 y 24.'],
         ['Error saving sleep record.', 'Error al guardar el registro de sueño.'],
         ['All-nighter / desvelo log saved successfully (0 hrs · visible to psychiatrist).', 'Desvelo total guardado correctamente (0 hrs · visible para tu psiquiatra).'],
+        ['Nap / siesta saved successfully.', 'Siesta guardada correctamente.'],
         ['Sleep & desvelo record saved successfully (visible to psychiatrist).', 'Registro de sueño y desvelo guardado (visible para tu psiquiatra).'],
         ['Sleep record saved successfully.', 'Registro de sueño guardado correctamente.'],
+        ['Minimum normal sleep hours must be between 3 and 12.', 'El mínimo de horas para sueño normal debe estar entre 3 y 12.'],
         ['Invalid sleep record ID.', 'ID de registro de sueño inválido.'],
         ['Sleep record not found.', 'Registro de sueño no encontrado.'],
         ['Invalid sleep quality or entry type.', 'Calidad o tipo de registro de sueño inválido.'],
@@ -1976,6 +1988,10 @@
             en: '<strong>Morning Sleep Log</strong> (supports Snooze / Postpone)',
             es: '<strong>Registro Matutino de Sueño</strong> (con opción Posponer / Snooze)'
         },
+        sleep_rules_settings_hint: {
+            en: 'Going to bed at/after this cutoff or sleeping fewer than these hours marks Desvelo automatically (Naps / Siestas are never marked as Desvelo).',
+            es: 'Dormir desde esta hora o dormir menos de estas horas marca automáticamente Desvelo (las Siestas nunca se marcan como desvelo).'
+        },
         rem_agenda_title: {
             en: '<strong>Weekly Agenda</strong> — Events &amp; Tasks alerts',
             es: '<strong>Agenda Semanal</strong> — Alertas de Eventos y Tareas'
@@ -2317,6 +2333,27 @@
                 '¡Hora de dormir tardía (' + m[1] + ') guardada! Completa tu hora de despertar cuando te levantes.'
             );
         }
+        if ((m = trim.match(/^Late bedtime \(([^)]+)\) saved! We will remind you at ([^\s]+) to log your wake-up time\.$/i))
+            || (m = trim.match(/^¡Hora de dormir tardía \(([^)]+)\) guardada! Te recordaremos a las ([^\s]+) para registrar tu despertar\.$/i))) {
+            return pick(
+                'Late bedtime (' + m[1] + ') saved! We will remind you at ' + m[2] + ' to log your wake-up time.',
+                '¡Hora de dormir tardía (' + m[1] + ') guardada! Te recordaremos a las ' + m[2] + ' para registrar tu despertar.'
+            );
+        }
+        if ((m = trim.match(/^Bedtime \(([^)]+)\) saved! We will remind you at ([^\s]+) to log your wake-up time\.$/i))
+            || (m = trim.match(/^¡Hora de dormir \(([^)]+)\) guardada! Te recordaremos a las ([^\s]+) para registrar tu despertar\.$/i))) {
+            return pick(
+                'Bedtime (' + m[1] + ') saved! We will remind you at ' + m[2] + ' to log your wake-up time.',
+                '¡Hora de dormir (' + m[1] + ') guardada! Te recordaremos a las ' + m[2] + ' para registrar tu despertar.'
+            );
+        }
+        if ((m = trim.match(/^You logged bedtime at ([^\s]+)\. Tap to record when you woke up\.$/i))
+            || (m = trim.match(/^Registraste tu hora de dormir a las ([^\s]+)\. Toca para registrar a qué hora despertaste\.$/i))) {
+            return pick(
+                'You logged bedtime at ' + m[1] + '. Tap to record when you woke up.',
+                'Registraste tu hora de dormir a las ' + m[1] + '. Toca para registrar a qué hora despertaste.'
+            );
+        }
         if ((m = trim.match(/^(?:Note encrypted with password and saved locally|Nota cifrada con contraseña y guardada localmente)\s*\(([^)]+)\)\.?$/i))) {
             return pick(
                 'Note encrypted with password and saved locally (' + m[1] + ').',
@@ -2428,6 +2465,7 @@
                 [/^Pending Mood Check-in \((.+)\)$/i, 'Ánimo pendiente por registrar ($1)'],
                 [/^You still have unlogged mood block\(s\) for today \((.+)\)\.\s*Tap to record your mood in Daily Hub\.?$/i, 'Aún tienes bloque(s) sin registrar hoy ($1). Toca aquí para registrar tu ánimo en Daily Hub.'],
                 [/^You logged bedtime at ([^\s]+) \(Desvelo\)\.\s*Tap to record when you woke up\.?$/i, 'Registraste tu hora de dormir a las $1 (Desvelo). Toca para registrar a qué hora despertaste.'],
+                [/^You logged bedtime at ([^\s]+)\.\s*Tap to record when you woke up\.?$/i, 'Registraste tu hora de dormir a las $1. Toca para registrar a qué hora despertaste.'],
                 [/^Welcome,\s*(.+)!\s*Your session stays active until Sunday at 00:00\.?$/i, '¡Bienvenido(a), $1! Tu sesión permanece activa hasta el domingo a las 00:00.'],
                 [/^Imported (\d+) lyric lines cleanly \(E2EE local only\)\.?$/i, 'Se importaron $1 líneas limpias de letra (solo cifrado local E2EE).'],
                 [/^Cleaned timestamps \((\d+) lines ready\)\.?$/i, 'Marcas de tiempo limpiadas ($1 líneas listas).'],

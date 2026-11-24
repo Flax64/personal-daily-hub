@@ -242,6 +242,11 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     return finish(null, { affectedRows: 1 });
                 }
 
+                if (normalized.includes('FROM RegistrosSleep') && normalized.includes('WHERE fecha IN (?, ?)')) {
+                    const existing = sleepInserts.filter((s) => s.fecha === params[0] || s.fecha === params[1]);
+                    return finish(null, existing);
+                }
+
                 if (normalized.includes('FROM RegistrosSleep WHERE fecha = ?')) {
                     const existing = sleepInserts.filter((s) => s.fecha === params[0]);
                     return finish(null, existing);
@@ -3093,6 +3098,308 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             headers: { Cookie: adminCookie }
         });
         assert.strictEqual(adminDel.status, 200);
+    });
+
+    it('aplica reglas configurables de sueño/desvelo en Ajustes, soporta siestas sin desvelo y recuerda despertar de sueño normal pendiente', async () => {
+        const backupSleeps = sleepInserts.splice(0, sleepInserts.length);
+        const origSettingsRes = await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } });
+        assert.strictEqual(origSettingsRes.status, 200);
+        const origSettings = JSON.parse(origSettingsRes.body).settings;
+
+        try {
+            // 1. Guardar y recuperar sleepDesveloBedtimeTime y sleepMinNormalHours (con redondeo a 0.5) y rechazar rangos inválidos (400)
+            for (const badSleepSettings of [
+                { sleepDesveloBedtimeTime: '25:99' },
+                { sleepMinNormalHours: 2 },
+                { sleepMinNormalHours: 13 },
+                { sleepMinNormalHours: 'abc' },
+                { sleepMinNormalHours: null }
+            ]) {
+                const badRes = await request({
+                    port,
+                    method: 'PUT',
+                    reqPath: '/api/settings',
+                    headers: { Cookie: adminCookie },
+                    body: badSleepSettings
+                });
+                assert.strictEqual(badRes.status, 400, `Debe rechazar ajuste inválido: ${JSON.stringify(badSleepSettings)}`);
+            }
+
+            const putValidRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    sleepDesveloBedtimeTime: '01:00',
+                    sleepMinNormalHours: 7.2
+                }
+            });
+            assert.strictEqual(putValidRes.status, 200);
+            assert.strictEqual(JSON.parse(putValidRes.body).settings.sleepMinNormalHours, 7);
+
+            const putCustomRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    sleepDesveloBedtimeTime: '01:00',
+                    sleepMinNormalHours: 7
+                }
+            });
+            assert.strictEqual(putCustomRes.status, 200);
+            const getSaved = JSON.parse((await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } })).body).settings;
+            assert.strictEqual(getSaved.sleepDesveloBedtimeTime, '01:00');
+            assert.strictEqual(getSaved.sleepMinNormalHours, 7);
+
+            // 2. Dormirse a la 01:15 con 7.5 hrs -> auto-marca es_desvelo=1 y tipo_registro='desvelo_tarde'
+            const lateGoodDurRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-11-19',
+                    horaDormir: '01:15',
+                    horaDespertar: '08:45',
+                    horas: 7.5,
+                    calidad: 'Good',
+                    tipoRegistro: 'normal'
+                }
+            });
+            assert.strictEqual(lateGoodDurRes.status, 200);
+            const lateRow = sleepInserts.find((r) => r.fecha === '2026-11-19');
+            assert.ok(lateRow);
+            assert.strictEqual(Number(lateRow.es_desvelo), 1);
+            assert.strictEqual(lateRow.tipo_registro, 'desvelo_tarde');
+
+            // 3. Dormirse a las 22:00 con 5.5 hrs (< 7 hrs) -> auto-marca es_desvelo=1 y tipo_registro='desvelo_tarde'
+            const shortSleepRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-11-20',
+                    horaDormir: '22:00',
+                    horaDespertar: '03:30',
+                    horas: 5.5,
+                    calidad: 'Regular',
+                    tipoRegistro: 'normal'
+                }
+            });
+            assert.strictEqual(shortSleepRes.status, 200);
+            const shortRow = sleepInserts.find((r) => r.fecha === '2026-11-20');
+            assert.ok(shortRow);
+            assert.strictEqual(Number(shortRow.es_desvelo), 1);
+            assert.strictEqual(shortRow.tipo_registro, 'desvelo_tarde');
+
+            // 4. Dormirse a las 22:00 con 7.5 hrs (>= 7 hrs y antes de 01:00) -> es_desvelo=0 y tipo_registro='normal'
+            const normalSleepRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-11-21',
+                    horaDormir: '22:00',
+                    horaDespertar: '05:30',
+                    horas: 7.5,
+                    calidad: 'Good',
+                    tipoRegistro: 'normal'
+                }
+            });
+            assert.strictEqual(normalSleepRes.status, 200);
+            const normalRow = sleepInserts.find((r) => r.fecha === '2026-11-21');
+            assert.ok(normalRow);
+            assert.strictEqual(Number(normalRow.es_desvelo), 0);
+            assert.strictEqual(normalRow.tipo_registro, 'normal');
+
+            // 5. Registrar tipoRegistro: 'siesta' (15:00-16:30 y 02:00-03:00) -> siempre es_desvelo=0 y tipo_registro='siesta'
+            const afternoonNapRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-11-22',
+                    horaDormir: '15:00',
+                    horaDespertar: '16:30',
+                    horas: 1.5,
+                    calidad: 'Good',
+                    tipoRegistro: 'siesta'
+                }
+            });
+            assert.strictEqual(afternoonNapRes.status, 200);
+
+            const lateNapRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-11-22',
+                    horaDormir: '02:00',
+                    horaDespertar: '03:00',
+                    horas: 1,
+                    calidad: 'Regular',
+                    tipoRegistro: 'siesta',
+                    esDesvelo: true
+                }
+            });
+            assert.strictEqual(lateNapRes.status, 200);
+            const napRows = sleepInserts.filter((r) => r.fecha === '2026-11-22');
+            assert.strictEqual(napRows.length, 2);
+            for (const nr of napRows) {
+                assert.strictEqual(Number(nr.es_desvelo), 0);
+                assert.strictEqual(nr.tipo_registro, 'siesta');
+            }
+
+            // 6. Sueño normal pendiente desde anoche -> recordatorio matutino sleep-wakeup + PATCH normal vs corto
+            const candidateTzs = [
+                'UTC', 'America/Mexico_City', 'America/Los_Angeles', 'Pacific/Honolulu',
+                'America/Sao_Paulo', 'Asia/Dubai', 'Asia/Bangkok', 'Asia/Tokyo', 'Pacific/Auckland'
+            ];
+            const getTzInfo = (tz) => {
+                const parts = new Intl.DateTimeFormat('en-CA', {
+                    timeZone: tz,
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hourCycle: 'h23'
+                }).formatToParts(new Date());
+                const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+                return { tz, hour: Number(map.hour), dateStr: `${map.year}-${map.month}-${map.day}` };
+            };
+            const morningTz = candidateTzs.map(getTzInfo).find((x) => x.hour >= 8 && x.hour <= 13) || getTzInfo('UTC');
+            const [ty, tm, td] = morningTz.dateStr.split('-').map(Number);
+            const yesterdayStr = new Date(Date.UTC(ty, tm - 1, td - 1)).toISOString().slice(0, 10);
+
+            const remSettingsRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    sleepReminderEnabled: true,
+                    sleepReminderTime: '00:00',
+                    sleepDesveloBedtimeTime: '01:00',
+                    sleepMinNormalHours: 7,
+                    timezone: morningTz.tz
+                }
+            });
+            assert.strictEqual(remSettingsRes.status, 200);
+
+            // Una siesta registrada hoy NO suprime el recordatorio matutino de sueño nocturno
+            await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: morningTz.dateStr,
+                    horaDormir: '11:00',
+                    horaDespertar: '11:30',
+                    horas: 0.5,
+                    calidad: 'Good',
+                    tipoRegistro: 'siesta'
+                }
+            });
+
+            const pendingNormalRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: yesterdayStr,
+                    horaDormir: '22:30',
+                    horaDespertar: '',
+                    horas: 0,
+                    calidad: 'Good',
+                    tipoRegistro: 'normal'
+                }
+            });
+            assert.strictEqual(pendingNormalRes.status, 200);
+            assert.match(pendingNormalRes.body, /Bedtime \(22:30\) saved! We will remind you at 00:00/i);
+
+            const pendingNormalRow = sleepInserts.find((r) => r.fecha === yesterdayStr && r.hora_dormir === '22:30');
+            assert.ok(pendingNormalRow);
+            assert.strictEqual(Number(pendingNormalRow.es_desvelo), 0);
+            assert.strictEqual(pendingNormalRow.tipo_registro, 'normal');
+
+            if (morningTz.hour < 14) {
+                const activeRemRes = await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } });
+                assert.strictEqual(activeRemRes.status, 200);
+                const remPayload = JSON.parse(activeRemRes.body);
+                const wakeupRem = remPayload.active.find((r) => r.key === `sleep-wakeup:${morningTz.dateStr}`);
+                assert.ok(wakeupRem, 'Debe dispararse sleep-wakeup con el registro normal pendiente de anoche');
+                assert.strictEqual(Number(wakeupRem.refId), pendingNormalRow.id);
+                assert.strictEqual(wakeupRem.targetDate, yesterdayStr);
+                assert.strictEqual(wakeupRem.targetView, 'sueno');
+            }
+
+            // Completar con 7.5 hrs -> queda normal (es_desvelo = 0)
+            const patchGoodRes = await request({
+                port,
+                method: 'PATCH',
+                reqPath: `/api/update-sleep/${pendingNormalRow.id}`,
+                headers: { Cookie: adminCookie },
+                body: { horaDespertar: '06:00', horas: 7.5, calidad: 'Good', tipoRegistro: 'normal' }
+            });
+            assert.strictEqual(patchGoodRes.status, 200);
+            assert.strictEqual(Number(pendingNormalRow.es_desvelo), 0);
+            assert.strictEqual(pendingNormalRow.tipo_registro, 'normal');
+
+            // Nuevo pendiente normal de noche que al despertar solo durmió 5.5 hrs -> pasa a desvelo_tarde (es_desvelo = 1)
+            const pendingShortRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-sleep',
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-11-23',
+                    horaDormir: '22:30',
+                    horaDespertar: '',
+                    horas: 0,
+                    calidad: 'Regular',
+                    tipoRegistro: 'normal'
+                }
+            });
+            assert.strictEqual(pendingShortRes.status, 200);
+            const pendingShortRow = sleepInserts.find((r) => r.fecha === '2026-11-23' && r.hora_dormir === '22:30');
+            assert.ok(pendingShortRow);
+            assert.strictEqual(Number(pendingShortRow.es_desvelo), 0);
+
+            const patchShortRes = await request({
+                port,
+                method: 'PATCH',
+                reqPath: `/api/update-sleep/${pendingShortRow.id}`,
+                headers: { Cookie: adminCookie },
+                body: { horaDespertar: '04:00', horas: 5.5, calidad: 'Regular', tipoRegistro: 'normal' }
+            });
+            assert.strictEqual(patchShortRes.status, 200);
+            assert.strictEqual(Number(pendingShortRow.es_desvelo), 1);
+            assert.strictEqual(pendingShortRow.tipo_registro, 'desvelo_tarde');
+        } finally {
+            sleepInserts.splice(0, sleepInserts.length, ...backupSleeps);
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    sleepReminderEnabled: origSettings.sleepReminderEnabled,
+                    sleepReminderTime: origSettings.sleepReminderTime,
+                    sleepDesveloBedtimeTime: origSettings.sleepDesveloBedtimeTime,
+                    sleepMinNormalHours: origSettings.sleepMinNormalHours,
+                    timezone: origSettings.timezone
+                }
+            });
+        }
     });
 
     it('rechaza coordenadas Null Island (0,0), soporta Casa/direcciones y webhook GPS HTTP del teléfono con token rotativo', async () => {

@@ -3986,6 +3986,31 @@ select,
     font-size: 0.84rem;
 }
 
+.sleep-rules-sub-grid {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding-left: 26px;
+}
+
+.sleep-rule-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+.sleep-rule-field input[type="time"],
+.sleep-rule-field input[type="number"] {
+    width: auto;
+    min-width: 96px;
+    max-width: 120px;
+}
+
 .mini-check {
     display: inline-flex;
     align-items: center;
@@ -6997,6 +7022,10 @@ body {
     border-left-color: #8b5cf6;
 }
 
+.sleep-detail-card.is-nap {
+    border-left-color: #0ea5e9;
+}
+
 .sleep-detail-card.is-total {
     border-left-color: #ef4444;
 }
@@ -7037,6 +7066,11 @@ body {
     color: #1d4ed8;
 }
 
+.sleep-desvelo-badge.is-nap {
+    background: rgba(14, 165, 233, 0.15);
+    color: #0369a1;
+}
+
 .sleep-detail-note {
     margin: 0;
     font-size: 0.9rem;
@@ -7060,8 +7094,29 @@ body {
     border-left: 4px solid #8b5cf6;
 }
 
+.sleep-today-card.is-nap {
+    border-left: 4px solid #0ea5e9;
+}
+
 .sleep-today-card.is-total {
     border-left: 4px solid #ef4444;
+}
+
+.sleep-today-pending-yesterday {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    border-radius: 10px;
+    border: 1px dashed rgba(245, 158, 11, 0.55);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.sleep-today-pending-title {
+    font-size: 0.82rem;
+    font-weight: 800;
+    color: #b45309;
 }
 
 .sleep-today-card-head {
@@ -7119,6 +7174,20 @@ body {
 :root[data-theme="dark"] .sleep-desvelo-badge.is-normal {
     background: rgba(96, 165, 250, 0.2);
     color: #bfdbfe;
+}
+
+:root[data-theme="dark"] .sleep-desvelo-badge.is-nap {
+    background: rgba(56, 189, 248, 0.2);
+    color: #bae6fd;
+}
+
+:root[data-theme="dark"] .sleep-today-pending-yesterday {
+    background: rgba(245, 158, 11, 0.14);
+    border-color: rgba(251, 191, 36, 0.45);
+}
+
+:root[data-theme="dark"] .sleep-today-pending-title {
+    color: #fcd34d;
 }
 
 @media (max-width: 640px) {

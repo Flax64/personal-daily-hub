@@ -834,6 +834,7 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
+                            <button type="button" class="btn-secondary-pill" id="btnSleepOpenSettings">⚙️ Sleep Rules &amp; Alert</button>
                             <button type="button" class="btn-secondary-pill" data-go-view="resumen">📈 Weekly Summary</button>
                         </div>
                     </div>
@@ -847,6 +848,7 @@
                                     <label>Entry Type:</label>
                                     <div class="sleep-mode-pills" id="sleepModePills" role="group" aria-label="Sleep or desvelo entry type">
                                         <button type="button" class="sleep-mode-pill active" data-sleep-mode="normal">🌙 Sleep Session</button>
+                                        <button type="button" class="sleep-mode-pill" data-sleep-mode="siesta">🛋️ Nap / Siesta</button>
                                         <button type="button" class="sleep-mode-pill" data-sleep-mode="desvelo_tarde">🦉 Desvelo / Late Bedtime (e.g. 3 AM)</button>
                                         <button type="button" class="sleep-mode-pill" data-sleep-mode="desvelo_total">⚡ All-Nighter / No Sleep (0 hrs)</button>
                                     </div>
@@ -882,8 +884,8 @@
                                 </div>
 
                                 <div class="sleep-desvelo-controls" id="sleepDesveloControls">
-                                    <div class="sleep-auto-banner" id="sleepDesveloAutoBanner" hidden>
-                                        🦉 <span>Late-night bedtime detected (</span><strong id="sleepDetectedBedtimeText" data-no-i18n="true">3:00 AM</strong><span>):</span> <span>automatically marked as Desvelo for your psychiatrist's weekly report.</span>
+                                    <div class="sleep-auto-banner" id="sleepDesveloAutoBanner" hidden data-no-i18n="true">
+                                        🦉 <strong id="sleepDetectedBedtimeText"></strong> <span id="sleepDesveloAutoReason"></span>
                                     </div>
 
                                     <label class="sleep-desvelo-toggle" for="sleepEsDesvelo" id="sleepEsDesveloRow">
@@ -893,7 +895,7 @@
 
                                     <label class="sleep-desvelo-toggle" for="sleepStillAwake" id="sleepStillAwakeRow">
                                         <input type="checkbox" id="sleepStillAwake">
-                                        <span>⏳ Going to sleep just now (e.g. 3:00 AM) — log bedtime immediately and add wake-up time later</span>
+                                        <span>⏳ Going to sleep now (e.g. 10:30 PM or 2:00 AM) — log bedtime now and get a morning reminder to add your wake-up time</span>
                                     </label>
                                 </div>
 
@@ -942,8 +944,8 @@
                             <div id="sleepTodaySummary" class="sleep-today-box">
                                 <p class="muted-text">Loading today's sleep log...</p>
                             </div>
-                            <div class="side-tip-box" data-i18n-html="sleep_side_tip">
-                                <strong>Tip:</strong> Bedtimes between <strong>1:00 AM and 5:59 AM</strong> (like 3:00 AM) are automatically flagged as <strong>Desvelo</strong> for your psychiatrist. If you are just going to bed at 3:00 AM, check <em>"Going to sleep just now"</em> to save your bedtime right away and complete your wake-up time in the morning!
+                            <div class="side-tip-box" id="sleepRulesTipBox" data-no-i18n="true">
+                                <strong>Tip:</strong> Bedtimes from <strong>1:00 AM to 5:59 AM</strong> or sleeping less than <strong>7 hrs</strong> are automatically flagged as <strong>Desvelo</strong> for your psychiatrist (Naps / Siestas are never flagged).
                             </div>
                         </aside>
                     </div>
@@ -2571,7 +2573,7 @@
                                 </label>
                             </div>
 
-                            <div class="reminder-rule-block">
+                            <div class="reminder-rule-block" id="settingsSleepRulesBlock">
                                 <div class="rule-row-split">
                                     <label class="switch-row">
                                         <input type="checkbox" id="setSleepEnabled">
@@ -2579,6 +2581,17 @@
                                     </label>
                                     <input type="time" id="setSleepTime" value="08:30" aria-label="Morning sleep reminder time">
                                 </div>
+                                <div class="sleep-rules-sub-grid">
+                                    <label class="sleep-rule-field" for="setSleepDesveloBedtimeTime">
+                                        <span>Late bedtime cutoff for auto-Desvelo:</span>
+                                        <input type="time" id="setSleepDesveloBedtimeTime" value="01:00" aria-label="Late bedtime cutoff time">
+                                    </label>
+                                    <label class="sleep-rule-field" for="setSleepMinNormalHours">
+                                        <span>Min. hours for Normal Sleep:</span>
+                                        <input type="number" id="setSleepMinNormalHours" min="3" max="12" step="0.5" value="7" aria-label="Minimum hours for normal sleep">
+                                    </label>
+                                </div>
+                                <p class="form-hint" data-i18n-html="sleep_rules_settings_hint">Going to bed at/after this cutoff or sleeping fewer than these hours marks Desvelo automatically (Naps / Siestas are never marked as Desvelo).</p>
                             </div>
 
                             <div class="reminder-rule-block">
