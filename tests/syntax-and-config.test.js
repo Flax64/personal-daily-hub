@@ -1094,9 +1094,25 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
         assert.match(techGuide, /Pago/i);
         assert.match(migGuide, /Google Cloud Platform|GCP/i);
 
-        assert.ok(indexHtml.includes('id="studyViewerSongFilter"'));
-        assert.ok(indexHtml.includes('id="studyViewerLangFilter"'));
+        for (const removedStudyId of [
+            'id="studyViewerArtistFilter"',
+            'id="studyViewerAlbumFilter"',
+            'id="studyViewerSongFilter"',
+            'id="studyViewerLangFilter"',
+            'id="studyViewerNotebookLangFilter"',
+            'id="studyViewerLanguageApartments"'
+        ]) {
+            assert.equal(indexHtml.includes(removedStudyId), false, `public/index.html debe retirar el filtro obsoleto ${removedStudyId}`);
+        }
+        assert.ok(indexHtml.includes('id="studyViewerSectionFilter"'));
+        assert.ok(indexHtml.includes('id="studyViewerSearchInput"'));
+        assert.ok(indexHtml.includes('id="btnRefreshStudyViewer"'));
+        assert.match(indexHtml, /id="btnRefreshStudyViewer"[\s\S]*?<svg\b/i);
+        assert.equal(/id="btnRefreshStudyViewer"[^>]*>[^<]*Recargar/i.test(indexHtml), false, 'El botón #btnRefreshStudyViewer solo debe mostrar ícono SVG sin texto Recargar');
         assert.ok(indexHtml.includes('id="btnOpenStudyViewerFromMusic"'));
+        assert.ok(styleCss.includes('modal-scroll-locked'), 'public/style.css debe definir modal-scroll-locked');
+        assert.ok(styleCss.includes('overscroll-behavior: contain'), 'public/style.css debe aislar scroll con overscroll-behavior: contain');
+        assert.ok(frontendJs.includes('initGlobalModalScrollLock'), 'public/frontend.js debe definir e invocar initGlobalModalScrollLock');
 
         const langStudio = require(path.join(ROOT, 'lib', 'language-studio.js'));
         assert.equal(typeof langStudio.parseStudyNotebookDocxBuffer, 'function');

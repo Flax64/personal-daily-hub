@@ -4769,6 +4769,26 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         });
         assert.strictEqual(quickCrisis.status, 200);
 
+        const customOtroCrisis = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-crisis',
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: '2026-11-16',
+                hora: '10:15',
+                tipoCrisis: 'Otro',
+                detalleOtro: 'Frustración, rabia y odio',
+                intensidad: 4,
+                motivo: 'Estafaron a mi cuñado'
+            }
+        });
+        assert.strictEqual(customOtroCrisis.status, 200);
+        const customOtroBody = JSON.parse(customOtroCrisis.body);
+        assert.strictEqual(customOtroBody.tipo_crisis, 'Frustración, rabia y odio');
+        assert.strictEqual(customOtroBody.motivo, 'Estafaron a mi cuñado');
+        assert.strictEqual(customOtroBody.motivo.includes('['), false, 'El motivo de crisis Otro no debe incluir corchetes');
+
         // 3. Modelos Gemini activos solamente + Toggle aprendizaje secuencial + Word inactivity + Contrato ligero
         const prevEnvGemini = process.env.GEMINI_API_KEY;
         delete process.env.GEMINI_API_KEY;

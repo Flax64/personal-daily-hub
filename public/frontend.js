@@ -17898,10 +17898,37 @@ function renderCrisisCards(container, rows, { allowDelete = false } = {}) {
 
         const typeBadge = document.createElement('span');
         typeBadge.className = 'crisis-type-badge';
-        const rawType = item.tipo_crisis || 'Crisis';
-        typeBadge.textContent = (window.DailyHubI18n && typeof window.DailyHubI18n.crisisTypeLabel === 'function')
-            ? window.DailyHubI18n.crisisTypeLabel(rawType, true)
-            : rawType;
+        let displayType = String(item.tipo_crisis || 'Crisis').trim() || 'Crisis';
+        let displayMotivo = String(item.motivo || '').trim();
+        const bracketMatch = displayMotivo.match(/^\[([^\]]{1,80})\]\s*(.*)$/s);
+        if (bracketMatch) {
+            const extractedLabel = String(bracketMatch[1] || '').trim();
+            const extractedRemainder = String(bracketMatch[2] || '').trim();
+            if (extractedLabel && (/^(otro|other|crisis)$/i.test(displayType) || !displayType)) {
+                displayType = extractedLabel;
+            }
+            displayMotivo = extractedRemainder || extractedLabel;
+        }
+        const STANDARD_CRISIS_LABELS = new Set([
+            'Estrés',
+            'Ira / Rabia',
+            'Ansiedad',
+            'Pánico',
+            'Llanto / Sobrecarga',
+            'Bloqueo / Saturación',
+            'Insomnio / Agitación',
+            'Tristeza / Desánimo',
+            'Frustración / Impotencia',
+            'Agotamiento Mental',
+            'Otro',
+            'Crisis'
+        ]);
+        if (STANDARD_CRISIS_LABELS.has(displayType) && window.DailyHubI18n && typeof window.DailyHubI18n.crisisTypeLabel === 'function') {
+            typeBadge.textContent = window.DailyHubI18n.crisisTypeLabel(displayType, true);
+        } else {
+            protectUserNode(typeBadge);
+            typeBadge.textContent = displayType;
+        }
 
         const intBadge = document.createElement('span');
         intBadge.className = 'crisis-intensity-badge';
@@ -17940,7 +17967,7 @@ function renderCrisisCards(container, rows, { allowDelete = false } = {}) {
         const motivoP = document.createElement('p');
         motivoP.className = 'crisis-entry-motivo';
         protectUserNode(motivoP);
-        motivoP.textContent = item.motivo || '';
+        motivoP.textContent = displayMotivo;
 
         card.append(head, motivoP);
         fragment.appendChild(card);
@@ -18876,12 +18903,123 @@ function initSingleTabAndNtfyHandover() {
     });
 }
 
+function syncModalScrollLock() {
+    if (typeof document === 'undefined') return;
+    const overlays = document.querySelectorAll('.modal-overlay');
+    const hasOpenModal = Array.from(overlays).some((el) => {
+        if (!el || el.hidden) return false;
+        if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+            return window.getComputedStyle(el).display !== 'none';
+        }
+        return true;
+    });
+    document.documentElement?.classList?.toggle('modal-scroll-locked', hasOpenModal);
+    document.body?.classList?.toggle('modal-scroll-locked', hasOpenModal);
+}
+
+function wireScrollIsolationContainer(scrollEl, boundaryRootEl = scrollEl) {
+    if (!scrollEl || scrollEl.dataset?.scrollIsolated === '1') return;
+    if (scrollEl.dataset) scrollEl.dataset.scrollIsolated = '1';
+
+    let lastTouchY = 0;
+
+    const getScrollableTarget = (node) => {
+        let cur = node;
+        while (cur && cur !== boundaryRootEl) {
+            if (cur.nodeType === 1 && cur.scrollHeight > cur.clientHeight + 1) {
+                const style = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+                    ? window.getComputedStyle(cur)
+                    : null;
+                const oy = style ? style.overflowY : '';
+                if (oy === 'auto' || oy === 'scroll' || cur.tagName === 'TEXTAREA') {
+                    return cur;
+                }
+            }
+            cur = cur.parentElement;
+        }
+        return scrollEl;
+    };
+
+    const canScrollInDirection = (targetEl, deltaY) => {
+        if (!targetEl || targetEl.scrollHeight <= targetEl.clientHeight + 1) return false;
+        if (deltaY < 0) return targetEl.scrollTop > 0;
+        if (deltaY > 0) return targetEl.scrollTop + targetEl.clientHeight < targetEl.scrollHeight - 1;
+        return false;
+    };
+
+    (boundaryRootEl || scrollEl).addEventListener('wheel', (e) => {
+        e.stopPropagation();
+        const targetEl = getScrollableTarget(e.target);
+        if (!canScrollInDirection(targetEl, e.deltaY) && e.cancelable) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    (boundaryRootEl || scrollEl).addEventListener('touchstart', (e) => {
+        if (e.touches && e.touches[0]) {
+            lastTouchY = e.touches[0].clientY;
+        }
+    }, { passive: true });
+
+    (boundaryRootEl || scrollEl).addEventListener('touchmove', (e) => {
+        e.stopPropagation();
+        const touch = e.touches && e.touches[0];
+        if (!touch) return;
+        const deltaY = lastTouchY - touch.clientY;
+        lastTouchY = touch.clientY;
+        const targetEl = getScrollableTarget(e.target);
+        if (!canScrollInDirection(targetEl, deltaY) && e.cancelable) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+}
+
+function initGlobalModalScrollLock() {
+    if (typeof document === 'undefined') return;
+    const overlays = document.querySelectorAll('.modal-overlay');
+    if (overlays && typeof overlays.forEach === 'function') {
+        overlays.forEach((overlay) => {
+            if (!overlay || overlay.dataset?.scrollLockWired === '1') return;
+            if (overlay.dataset) overlay.dataset.scrollLockWired = '1';
+
+            if (typeof MutationObserver === 'function') {
+                const observer = new MutationObserver(() => syncModalScrollLock());
+                observer.observe(overlay, {
+                    attributes: true,
+                    attributeFilter: ['hidden', 'class', 'style']
+                });
+            }
+
+            overlay.addEventListener('touchmove', (e) => {
+                if (e.target === overlay && e.cancelable) {
+                    e.preventDefault();
+                }
+            }, { passive: false });
+
+            overlay.addEventListener('wheel', (e) => {
+                if (e.target === overlay && e.cancelable) {
+                    e.preventDefault();
+                }
+            }, { passive: false });
+        });
+    }
+
+    const translatorDrawer = document.getElementById('floatingTranslatorModal');
+    const translatorBody = translatorDrawer ? translatorDrawer.querySelector('.floating-translator-body') : null;
+    if (translatorBody) {
+        wireScrollIsolationContainer(translatorBody, translatorDrawer);
+    }
+
+    syncModalScrollLock();
+}
+
 function initApp() {
     initTheme();
     actualizarCabecerasDeFecha();
     initPasswordToggles();
     initSingleTabAndNtfyHandover();
     initRealtimeSessionSync();
+    initGlobalModalScrollLock();
     initAuthHandlers();
     initSettingsHandlers();
     initLanguageAiStudio();
@@ -18958,12 +19096,6 @@ function initStudyNotebookViewer() {
     const btnClose = document.getElementById('btnCloseStudyNotebookModal');
     const btnRefresh = document.getElementById('btnRefreshStudyViewer');
     const sectionSel = document.getElementById('studyViewerSectionFilter');
-    const nbLangSel = document.getElementById('studyViewerNotebookLangFilter');
-    const langAptBar = document.getElementById('studyViewerLanguageApartments');
-    const artistSel = document.getElementById('studyViewerArtistFilter');
-    const albumSel = document.getElementById('studyViewerAlbumFilter');
-    const songSel = document.getElementById('studyViewerSongFilter');
-    const langSel = document.getElementById('studyViewerLangFilter');
     const searchInp = document.getElementById('studyViewerSearchInput');
     const statusBar = document.getElementById('studyViewerStatusBar');
     const bodyEl = document.getElementById('studyViewerBody');
@@ -18977,8 +19109,7 @@ function initStudyNotebookViewer() {
         offsetStack: [0],
         nextOffset: null,
         loading: false,
-        lastResult: null,
-        nbLanguage: 'all'
+        lastResult: null
     };
 
     const getSectionLabels = () => ({
@@ -19001,34 +19132,6 @@ function initStudyNotebookViewer() {
         return map[code] || map.en;
     };
 
-    function syncLanguageApartmentUi(activeCode = 'all', countsByLang = null) {
-        const safeCode = ['all', 'en', 'ko', 'ja', 'en_ko', 'en_ja'].includes(activeCode) ? activeCode : 'all';
-        viewerState.nbLanguage = safeCode;
-        if (nbLangSel && nbLangSel.value !== safeCode) nbLangSel.value = safeCode;
-        if (langAptBar) {
-            const baseNames = {
-                all: tUi('🌍 All', '🌍 Todos'),
-                en: tUi('🇺🇸 English', '🇺🇸 Inglés'),
-                ko: tUi('🇰🇷 Korean', '🇰🇷 Coreano'),
-                ja: tUi('🇯🇵 Japanese', '🇯🇵 Japonés'),
-                en_ko: '🎵 K-Pop',
-                en_ja: '🎌 J-Pop'
-            };
-            langAptBar.querySelectorAll('.study-viewer-lang-pill[data-nb-lang]').forEach((pill) => {
-                const code = pill.getAttribute('data-nb-lang') || 'all';
-                const isActive = code === safeCode;
-                pill.classList.toggle('active', isActive);
-                pill.setAttribute('aria-selected', String(isActive));
-                const base = baseNames[code] || code;
-                if (countsByLang && typeof countsByLang[code] === 'number') {
-                    pill.textContent = `${base} (${countsByLang[code]})`;
-                } else {
-                    pill.textContent = base;
-                }
-            });
-        }
-    }
-
     const getFieldLabels = () => ({
         focus_summary: tUi('Focus', 'Enfoque'),
         lyrics_study: tUi('Lyrics & Study', 'Letra y Estudio'),
@@ -19050,23 +19153,6 @@ function initStudyNotebookViewer() {
         'release_date',
         'playlist_name'
     ]);
-
-    function populateSelectOptions(sel, items, defaultLabel) {
-        if (!sel || !Array.isArray(items)) return;
-        const current = sel.value;
-        sel.textContent = '';
-        const optAll = document.createElement('option');
-        optAll.value = '';
-        optAll.textContent = defaultLabel;
-        sel.appendChild(optAll);
-        items.forEach((val) => {
-            const opt = document.createElement('option');
-            opt.value = val;
-            opt.textContent = val;
-            if (val === current) opt.selected = true;
-            sel.appendChild(opt);
-        });
-    }
 
     function buildEntryCard(entry, SECTION_LABELS, FIELD_LABELS) {
         const card = document.createElement('article');
@@ -19106,7 +19192,7 @@ function initStudyNotebookViewer() {
                 if (!val || SKIP_DETAIL_FIELDS.has(k)) return;
                 const block = document.createElement('details');
                 block.className = 'study-viewer-field';
-                if (k === 'lyrics_study' || k === 'focus_summary') block.open = true;
+                block.open = true;
 
                 const sum = document.createElement('summary');
                 sum.textContent = FIELD_LABELS[k] || k;
@@ -19115,7 +19201,7 @@ function initStudyNotebookViewer() {
                 if (k === 'lyrics_study') {
                     const lyricsBox = document.createElement('div');
                     lyricsBox.className = 'lyrics-readonly-full-view';
-                    let activeCardLang = langSel?.value || 'all';
+                    let activeCardLang = 'all';
                     const rerenderCardLyrics = (nextLang) => {
                         activeCardLang = nextLang;
                         renderLyricsSectionsIntoContainer(lyricsBox, String(val), activeCardLang, {
@@ -19234,20 +19320,13 @@ function initStudyNotebookViewer() {
         if (statusBar) statusBar.textContent = tUi('Loading Word notebook (read-only)...', 'Cargando cuaderno Word (solo lectura)...');
         try {
             const sectionVal = sectionSel?.value || 'all';
-            const nbLangVal = nbLangSel?.value || viewerState.nbLanguage || 'all';
-            const artistVal = artistSel?.value || '';
-            const albumVal = albumSel?.value || '';
-            const songVal = songSel?.value || '';
             const qVal = (searchInp?.value || '').trim();
 
             const params = new URLSearchParams();
             if (sectionVal && sectionVal !== 'all') params.set('section', sectionVal);
-            if (nbLangVal && nbLangVal !== 'all') params.set('language', nbLangVal);
-            if (artistVal) params.set('artist', artistVal);
-            if (albumVal) params.set('album', albumVal);
-            if (songVal) params.set('song', songVal);
             if (qVal) params.set('q', qVal);
             params.set('offset', String(offset));
+            params.set('limit', '25');
             if (forceRefresh) params.set('refresh', '1');
 
             let result = null;
@@ -19276,12 +19355,9 @@ function initStudyNotebookViewer() {
                 const pcPayload = {
                     action: 'read_study_notebook',
                     section: sectionVal,
-                    language: nbLangVal,
-                    artist: artistVal,
-                    album: albumVal,
-                    song: songVal,
                     q: qVal,
-                    offset
+                    offset,
+                    limit: 25
                 };
                 if (forceRefresh || !musicState?.ytdlpStatus?.pcOnline) {
                     const serverRefresh = await resilientFetchJson(
@@ -19325,11 +19401,8 @@ function initStudyNotebookViewer() {
             if (pushStack) viewerState.offsetStack.push(offset);
             viewerState.nextOffset = result.nextOffset ?? null;
 
-            populateSelectOptions(artistSel, result.facets?.artists || [], tUi('All artists', 'Todos los artistas'));
-            populateSelectOptions(albumSel, result.facets?.albums || [], tUi('All albums', 'Todos los álbumes'));
-            populateSelectOptions(songSel, result.facets?.songs || [], tUi('All songs', 'Todas las canciones'));
-            syncLanguageApartmentUi(nbLangVal, result.countsByLanguage || null);
             renderEntries(result);
+            bodyEl.scrollTop = 0;
 
             const counts = result.counts || {};
             if (statusBar) {
@@ -19353,14 +19426,12 @@ function initStudyNotebookViewer() {
         }
     }
 
-    function openModal({ defaultSection = null, defaultLanguage = null } = {}) {
+    function openModal({ defaultSection = null } = {}) {
         if (defaultSection && sectionSel) {
             sectionSel.value = defaultSection;
         }
-        if (defaultLanguage) {
-            syncLanguageApartmentUi(defaultLanguage, viewerState.lastResult?.countsByLanguage || null);
-        }
         modal.hidden = false;
+        if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
         viewerState.offsetStack = [0];
         viewerState.nextOffset = null;
         loadStudyPage(0);
@@ -19369,6 +19440,7 @@ function initStudyNotebookViewer() {
 
     function closeModal() {
         modal.hidden = true;
+        if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
     }
 
     btnOpen?.addEventListener('click', () => openModal());
@@ -19388,23 +19460,6 @@ function initStudyNotebookViewer() {
     };
     btnRefresh?.addEventListener('click', () => resetAndReload(true));
     sectionSel?.addEventListener('change', () => resetAndReload(false));
-    nbLangSel?.addEventListener('change', () => {
-        syncLanguageApartmentUi(nbLangSel.value, viewerState.lastResult?.countsByLanguage || null);
-        resetAndReload(false);
-    });
-    langAptBar?.querySelectorAll('.study-viewer-lang-pill[data-nb-lang]').forEach((pill) => {
-        pill.addEventListener('click', () => {
-            const nextLang = pill.getAttribute('data-nb-lang') || 'all';
-            syncLanguageApartmentUi(nextLang, viewerState.lastResult?.countsByLanguage || null);
-            resetAndReload(false);
-        });
-    });
-    artistSel?.addEventListener('change', () => resetAndReload(false));
-    albumSel?.addEventListener('change', () => resetAndReload(false));
-    songSel?.addEventListener('change', () => resetAndReload(false));
-    langSel?.addEventListener('change', () => {
-        if (viewerState.lastResult) renderEntries(viewerState.lastResult);
-    });
     let searchTimer = null;
     searchInp?.addEventListener('input', () => {
         clearTimeout(searchTimer);

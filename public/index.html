@@ -3701,48 +3701,19 @@
                     <option value="notes">5. Notas Manuales</option>
                     <option value="alphabet">6. Alfabetos y Reglas</option>
                 </select>
-                <select id="studyViewerNotebookLangFilter" class="select-input" hidden aria-hidden="true" style="display:none !important;" aria-label="Notebook language section filter" title="Filtrar todo el cuaderno por apartado de idioma">
-                    <option value="all">🌍 Todos los Apartados por Idioma</option>
-                    <option value="en">🇺🇸 Inglés</option>
-                    <option value="ko">🇰🇷 Coreano</option>
-                    <option value="ja">🇯🇵 Japonés</option>
-                    <option value="en_ko">🎵 K-Pop (EN + KR)</option>
-                    <option value="en_ja">🎌 J-Pop (EN + JP)</option>
-                </select>
-                <select id="studyViewerArtistFilter" class="select-input" aria-label="Artist filter">
-                    <option value="">Todos los artistas</option>
-                </select>
-                <select id="studyViewerAlbumFilter" class="select-input" aria-label="Album filter">
-                    <option value="">Todos los álbumes</option>
-                </select>
-                <select id="studyViewerSongFilter" class="select-input" aria-label="Song filter">
-                    <option value="">Todas las canciones</option>
-                </select>
-                <select id="studyViewerLangFilter" class="select-input" hidden aria-hidden="true" style="display:none !important;" aria-label="Lyrics language filter" title="Idioma mostrado dentro de la letra de las canciones">
-                    <option value="all">🎵 Letra: Todos los Idiomas</option>
-                    <option value="original">🎵 Original (Mezcla Nativa)</option>
-                    <option value="ko">🇰🇷 Coreano (Solo Coreano)</option>
-                    <option value="en">🇺🇸 Inglés</option>
-                    <option value="ja">🇯🇵 Japonés (JP)</option>
-                    <option value="en_ja">🎌 Japonés + Inglés (JP-EN)</option>
-                    <option value="es">🇪🇸 Español</option>
-                </select>
                 <input type="search" id="studyViewerSearchInput" maxlength="120"
                     placeholder="Buscar palabra, canción, letra o nota...">
-                <button type="button" class="btn-secondary btn-small" id="btnRefreshStudyViewer" title="Recargar desde Word PC">🔄 Recargar</button>
-            </div>
-
-            <div class="study-viewer-lang-tabs" id="studyViewerLanguageApartments" role="tablist" aria-label="Apartados por idioma">
-                <button type="button" class="study-viewer-lang-pill active" data-nb-lang="all" role="tab" aria-selected="true">🌍 Todos</button>
-                <button type="button" class="study-viewer-lang-pill" data-nb-lang="en" role="tab" aria-selected="false">🇺🇸 Inglés</button>
-                <button type="button" class="study-viewer-lang-pill" data-nb-lang="ko" role="tab" aria-selected="false">🇰🇷 Coreano</button>
-                <button type="button" class="study-viewer-lang-pill" data-nb-lang="ja" role="tab" aria-selected="false">🇯🇵 Japonés</button>
-                <button type="button" class="study-viewer-lang-pill" data-nb-lang="en_ko" role="tab" aria-selected="false">🎵 K-Pop</button>
-                <button type="button" class="study-viewer-lang-pill" data-nb-lang="en_ja" role="tab" aria-selected="false">🎌 J-Pop</button>
+                <button type="button" class="btn-secondary study-viewer-refresh-btn" id="btnRefreshStudyViewer"
+                    aria-label="Recargar cuaderno" title="Recargar cuaderno">
+                    <svg class="ui-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                        <polyline points="21 3 21 9 15 9" />
+                    </svg>
+                </button>
             </div>
 
             <div id="studyViewerStatusBar" class="study-viewer-status muted-text">
-                Haz clic en "Recargar" o abre el visor con tu PC encendida para leer tu cuaderno.
+                Usa el filtro o busca en tu cuaderno de estudio (solo lectura).
             </div>
 
             <div id="studyViewerBody" class="study-viewer-body"></div>
