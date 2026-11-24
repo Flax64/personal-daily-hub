@@ -1894,7 +1894,25 @@
         ['Open Visual Guide', 'Abrir Guía Visual'],
         ['Edit campus or building', 'Editar campus o edificio'],
         ['View location on Google Maps', 'Ver ubicación en Google Maps'],
-        ['Delete campus or building', 'Borrar campus o edificio']
+        ['Delete campus or building', 'Borrar campus o edificio'],
+
+        // --- Configurable Crisis Episode Types Modal ---
+        ['⚙️ Edit Types', '⚙️ Editar tipos'],
+        ['Manage crisis episode types', 'Administrar tipos de episodio de crisis'],
+        ['⚙️ Manage Crisis Episode Types', '⚙️ Administrar Tipos de Episodio de Crisis'],
+        ['Add, rename, or remove episode types. "Other" always stays available at the end (max 25 types).', 'Agrega, edita o elimina tipos de episodio. "Otro" siempre se mantiene disponible al final (máx. 25 tipos).'],
+        ['New episode type (e.g. Sensory Overload)', 'Nuevo tipo de episodio (ej. Sobrecarga sensorial)'],
+        ['Emoji or icon (optional)', 'Emoji o ícono (opcional)'],
+        ['Episode type name', 'Nombre del tipo de episodio'],
+        ['Crisis episode types updated.', 'Tipos de episodio de crisis actualizados.'],
+        ['At least 1 crisis episode type is required.', 'Se requiere al menos 1 tipo de episodio de crisis.'],
+        ['An episode type with that name already exists.', 'Ya existe un tipo de episodio con ese nombre.'],
+        ['Episode type name must be 2 to 60 characters.', 'El nombre del tipo de episodio debe tener entre 2 y 60 caracteres.'],
+        ['"Other" is already reserved at the end of the list.', '"Otro" ya está reservado al final de la lista.'],
+        ['Maximum 25 crisis episode types allowed.', 'Se permiten máximo 25 tipos de episodio de crisis.'],
+        ['At least 1 valid crisis episode type (2-60 chars) is required.', 'Se requiere al menos 1 tipo de episodio válido (2 a 60 caracteres).'],
+        ['Crisis episode types must be an array.', 'Los tipos de episodio de crisis deben ser una lista.'],
+        ['Could not update crisis episode types.', 'No se pudieron actualizar los tipos de episodio de crisis.']
     ];
 
     var EN_FROM_KEY = new Map();
@@ -2093,6 +2111,9 @@
         'Llanto / Sobrecarga': { en: '😢 Crying / Overload', es: '😢 Llanto / Sobrecarga', plainEn: 'Crying / Overload', plainEs: 'Llanto / Sobrecarga' },
         'Bloqueo / Saturación': { en: '🧱 Shutdown / Overwhelmed', es: '🧱 Bloqueo / Saturación', plainEn: 'Shutdown / Overwhelmed', plainEs: 'Bloqueo / Saturación' },
         'Insomnio / Agitación': { en: '🌘 Insomnia / Restlessness', es: '🌘 Insomnio / Agitación', plainEn: 'Insomnia / Restlessness', plainEs: 'Insomnio / Agitación' },
+        'Tristeza / Desánimo': { en: '😔 Sadness / Low Mood', es: '😔 Tristeza / Desánimo', plainEn: 'Sadness / Low Mood', plainEs: 'Tristeza / Desánimo' },
+        'Frustración / Impotencia': { en: '😤 Frustration', es: '😤 Frustración', plainEn: 'Frustration', plainEs: 'Frustración' },
+        'Agotamiento Mental': { en: '🪫 Exhaustion', es: '🪫 Agotamiento', plainEn: 'Exhaustion', plainEs: 'Agotamiento' },
         'Otro': { en: '📝 Other', es: '📝 Otro', plainEn: 'Other', plainEs: 'Otro' }
     };
 

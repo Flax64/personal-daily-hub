@@ -12,24 +12,39 @@
 }
 
 :root {
+    --brand-primary: #3b82f6;
+    --brand-primary-hover: #2563eb;
+    --brand-primary-active: #4f7df3;
+    --brand-primary-soft: rgba(59, 130, 246, 0.14);
+    --brand-primary-border: rgba(96, 165, 250, 0.45);
     --sidebar-width: 260px;
     --sidebar-collapsed-width: 74px;
     --sidebar-bg: #1e2430;
     --sidebar-hover: #2b3344;
-    --sidebar-active: #4f7df3;
+    --sidebar-active: var(--brand-primary);
     --bg-page: #f4f6fb;
     --bg-surface: #ffffff;
     --bg-surface-alt: #f8fafc;
     --border-color: #e2e8f0;
     --border-strong: #cbd5e1;
-    --accent-primary: #4f7df3;
-    --accent-hover: #3b66dc;
-    --accent-soft: rgba(79, 125, 243, 0.12);
+    --accent-primary: var(--brand-primary);
+    --accent-hover: var(--brand-primary-hover);
+    --accent-soft: var(--brand-primary-soft);
     --text-main: #1e293b;
     --text-muted: #64748b;
     --radius-card: 16px;
     --radius-control: 10px;
     --card-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--brand-primary);
+    outline-offset: 2px;
 }
 
 html {
@@ -693,10 +708,10 @@ body {
 }
 
 .nav-item.active {
-    background-color: var(--sidebar-active);
+    background-color: var(--brand-primary);
     color: #ffffff;
     font-weight: 600;
-    box-shadow: 0 4px 12px rgba(79, 125, 243, 0.35);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
 }
 
 .nav-icon {
@@ -941,7 +956,7 @@ body {
 }
 
 .btn-primary-pill {
-    background: #333;
+    background: var(--brand-primary);
     color: #fff;
 }
 
@@ -953,8 +968,12 @@ body {
 
 .btn-primary-pill:hover,
 .btn-secondary-pill:hover {
-    opacity: 0.9;
+    opacity: 0.94;
     transform: translateY(-1px);
+}
+
+.btn-primary-pill:hover {
+    background: var(--brand-primary-hover);
 }
 
 .section-heading {
@@ -1268,13 +1287,17 @@ select,
 }
 
 .btn-submit {
-    background: #333;
+    background: var(--brand-primary);
     color: white;
     border: none;
 }
 
 .btn-submit:hover {
-    background: #555;
+    background: var(--brand-primary-hover);
+}
+
+.btn-submit:active {
+    background: var(--brand-primary-active);
 }
 
 .btn-submit:disabled,
@@ -1485,15 +1508,15 @@ select,
 }
 
 .english-tab-btn:hover {
-    background: #eef2ff;
-    border-color: #93c5fd;
+    background: var(--brand-primary-soft);
+    border-color: var(--brand-primary-border);
 }
 
 .english-tab-btn.active {
-    background: #2563eb;
-    border-color: #2563eb;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
-    box-shadow: 0 3px 10px rgba(37, 99, 235, 0.25);
+    box-shadow: 0 3px 10px rgba(59, 130, 246, 0.25);
 }
 
 .english-fieldset {
@@ -1639,7 +1662,7 @@ select,
 }
 
 .btn-agenda-add-main {
-    background: #1e2430;
+    background: var(--brand-primary);
     color: #fff;
     border: none;
     border-radius: 10px;
@@ -1652,7 +1675,11 @@ select,
 }
 
 .btn-agenda-add-main:hover {
-    background: #364156;
+    background: var(--brand-primary-hover);
+}
+
+.btn-agenda-add-main:active {
+    background: var(--brand-primary-active);
 }
 
 .agenda-toolbar {
@@ -1718,32 +1745,53 @@ select,
 /* Cuadrícula semanal SaaS profesional */
 .agenda-table-scroll {
     width: 100%;
+    max-width: 100%;
     overflow-x: auto;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: 6px;
+    overscroll-behavior-x: contain;
+    padding-bottom: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(96, 165, 250, 0.55) rgba(15, 23, 42, 0.22);
+}
+
+.agenda-table-scroll::-webkit-scrollbar {
+    height: 9px;
+}
+
+.agenda-table-scroll::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.18);
+    border-radius: 999px;
+}
+
+.agenda-table-scroll::-webkit-scrollbar-thumb {
+    background: rgba(96, 165, 250, 0.55);
+    border-radius: 999px;
+}
+
+:root[data-theme="dark"] .agenda-table-scroll::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.72);
 }
 
 .agenda-week-board {
     display: grid;
-    grid-template-columns: 92px repeat(var(--agenda-cols, 7), minmax(112px, 1fr));
-    gap: 8px;
-    min-width: 890px;
+    grid-template-columns: 108px repeat(var(--agenda-cols, 7), minmax(220px, 1fr));
+    width: max-content;
+    min-width: 100%;
+    gap: 10px;
 }
 
 .agenda-week-board.cols-5 {
-    grid-template-columns: 108px repeat(var(--agenda-cols, 5), minmax(134px, 1fr));
-    min-width: 680px;
-}
-
-@media (min-width: 1200px) {
-    .agenda-week-board,
-    .agenda-week-board.cols-5 {
-        min-width: 0;
-        width: 100%;
-    }
+    grid-template-columns: 108px repeat(5, minmax(225px, 1fr));
 }
 
 .agenda-corner-cell {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background-color: var(--bg-surface, #ffffff);
+    border-radius: 12px;
+    padding: 8px 6px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1760,7 +1808,7 @@ select,
     background-color: var(--day-header);
     color: #0f172a;
     border: 1px solid var(--border-color, #e2e8f0);
-    border-top: 3px solid var(--day-accent, #6366f1);
+    border-top: 3px solid var(--day-accent, var(--brand-primary));
     text-align: center;
     font-weight: 700;
     display: flex;
@@ -1771,10 +1819,10 @@ select,
 }
 
 .agenda-day-header.is-today {
-    background-color: rgba(79, 125, 243, 0.09);
-    border-color: rgba(79, 125, 243, 0.45);
-    border-top: 3px solid #4f7df3;
-    box-shadow: 0 0 0 2px rgba(79, 125, 243, 0.18);
+    background-color: var(--brand-primary-soft);
+    border-color: var(--brand-primary-border);
+    border-top: 3px solid var(--brand-primary);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
 }
 
 .agenda-day-header.is-today .agenda-day-name::after {
@@ -1787,7 +1835,7 @@ select,
     font-weight: 700;
     letter-spacing: 0.02em;
     text-transform: uppercase;
-    background: #4f7df3;
+    background: var(--brand-primary);
     color: #ffffff;
     vertical-align: middle;
 }
@@ -1813,6 +1861,9 @@ select,
 .day-dom { --day-header: #f8fafc; --day-accent: #64748b; --day-bg: #f8fafc; }
 
 .agenda-block-header {
+    position: sticky;
+    left: 0;
+    z-index: 3;
     background-color: #f1f5f9;
     color: #334155;
     border: 1px solid #e2e8f0;
@@ -2026,27 +2077,37 @@ select,
 
 /* Vista Día (OPPO A79 / móvil / modo enfocado) */
 .agenda-day-tabs {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+    width: 100%;
     gap: 8px;
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     padding: 4px 2px 12px;
     margin-bottom: 12px;
     -webkit-overflow-scrolling: touch;
 }
 
 .agenda-day-tab {
-    flex: 0 0 auto;
-    border: 2px solid #e5e7eb;
+    width: 100%;
+    min-width: 0;
+    border: 1px solid #d1d5db;
     background: #ffffff;
     border-radius: 12px;
-    padding: 8px 12px;
-    min-width: 72px;
+    padding: 8px 10px;
     text-align: center;
     cursor: pointer;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
     gap: 2px;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.agenda-day-tab:hover {
+    border-color: var(--brand-primary-border);
+    background: var(--brand-primary-soft);
 }
 
 .agenda-day-tab .tab-day {
@@ -2070,8 +2131,8 @@ select,
 }
 
 .agenda-day-tab.active {
-    background-color: var(--day-header);
-    border-color: var(--day-header);
+    background-color: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
 }
 
@@ -2732,17 +2793,22 @@ body.modal-scroll-locked {
 :root,
 :root[data-theme="dark"] {
     color-scheme: dark;
+    --brand-primary: #3b82f6;
+    --brand-primary-hover: #2563eb;
+    --brand-primary-active: #4f7df3;
+    --brand-primary-soft: rgba(59, 130, 246, 0.14);
+    --brand-primary-border: rgba(96, 165, 250, 0.45);
     --sidebar-bg: #111827;
     --sidebar-hover: #1f2937;
-    --sidebar-active: #4f7df3;
+    --sidebar-active: var(--brand-primary);
     --bg-page: #0b1120;
     --bg-surface: #111827;
     --bg-surface-alt: #162032;
     --border-color: #1f2937;
     --border-strong: #334155;
-    --accent-primary: #60a5fa;
-    --accent-hover: #3b82f6;
-    --accent-soft: rgba(96, 165, 250, 0.16);
+    --accent-primary: var(--brand-primary);
+    --accent-hover: var(--brand-primary-hover);
+    --accent-soft: var(--brand-primary-soft);
     --text-main: #e2e8f0;
     --text-muted: #94a3b8;
     --card-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
@@ -3302,14 +3368,16 @@ body.modal-scroll-locked {
 :root[data-theme="dark"] .btn-submit,
 :root[data-theme="dark"] .btn-primary-pill,
 :root[data-theme="dark"] .btn-agenda-add-main {
-    background: #4f7df3;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
 }
 
 :root[data-theme="dark"] .btn-submit:hover,
 :root[data-theme="dark"] .btn-primary-pill:hover,
 :root[data-theme="dark"] .btn-agenda-add-main:hover {
-    background: #3b6ae0;
+    background: var(--brand-primary-hover);
+    border-color: var(--brand-primary-hover);
 }
 
 :root[data-theme="dark"] .btn-view,
@@ -3430,9 +3498,13 @@ body.modal-scroll-locked {
 }
 
 :root[data-theme="dark"] .agenda-chip-btn.active {
-    background: #4f7df3;
-    border-color: #4f7df3;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
+}
+
+:root[data-theme="dark"] .agenda-corner-cell {
+    background-color: var(--bg-surface, #111827);
 }
 
 :root[data-theme="dark"] .agenda-block-header,
@@ -3449,10 +3521,10 @@ body.modal-scroll-locked {
 }
 
 :root[data-theme="dark"] .agenda-day-header.is-today {
-    background-color: rgba(79, 125, 243, 0.16);
-    border-color: rgba(96, 165, 250, 0.55);
-    border-top-color: #60a5fa;
-    box-shadow: 0 0 0 2px rgba(79, 125, 243, 0.25);
+    background-color: var(--brand-primary-soft);
+    border-color: var(--brand-primary-border);
+    border-top-color: var(--brand-primary);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.24);
 }
 
 :root[data-theme="dark"] .agenda-day-date {
@@ -3535,6 +3607,12 @@ body.modal-scroll-locked {
     border-color: #334155;
 }
 
+:root[data-theme="dark"] .agenda-day-tab.active {
+    background-color: var(--brand-primary);
+    border-color: var(--brand-primary);
+    color: #ffffff;
+}
+
 :root[data-theme="dark"] .agenda-day-tab .tab-day {
     color: #f1f5f9;
 }
@@ -3548,6 +3626,16 @@ body.modal-scroll-locked {
     color: #cbd5e1;
 }
 
+:root[data-theme="dark"] .agenda-day-tab.active .tab-day,
+:root[data-theme="dark"] .agenda-day-tab.active .tab-date {
+    color: #ffffff;
+}
+
+:root[data-theme="dark"] .agenda-day-tab.active .tab-count {
+    background: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+}
+
 :root[data-theme="dark"] .english-subtitle {
     color: #94a3b8;
 }
@@ -3559,13 +3647,13 @@ body.modal-scroll-locked {
 }
 
 :root[data-theme="dark"] .english-tab-btn:hover {
-    background: #29374e;
-    border-color: #60a5fa;
+    background: var(--brand-primary-soft);
+    border-color: var(--brand-primary-border);
 }
 
 :root[data-theme="dark"] .english-tab-btn.active {
-    background: #3b82f6;
-    border-color: #60a5fa;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
 }
 
@@ -3740,11 +3828,27 @@ body.modal-scroll-locked {
 ========================================= */
 .agenda-filter-bar {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.agenda-filter-row {
+    display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 10px;
     flex-wrap: wrap;
-    margin-bottom: 16px;
+    width: 100%;
+    min-width: 0;
+}
+
+.agenda-filter-row-primary {
+    justify-content: flex-start;
+}
+
+.agenda-filter-row-secondary {
+    justify-content: space-between;
 }
 
 .agenda-filter-group {
@@ -3767,12 +3871,13 @@ body.modal-scroll-locked {
 }
 
 .agenda-filter-pill:hover {
-    background: #e5e7eb;
+    background: var(--brand-primary-soft);
+    border-color: var(--brand-primary-border);
 }
 
 .agenda-filter-pill.active {
-    background: #1e2430;
-    border-color: #1e2430;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
 }
 
@@ -3835,7 +3940,7 @@ body.modal-scroll-locked {
 
 .agenda-cat-pill.is-uni.is-class-linked {
     border: 1px solid rgba(99, 102, 241, 0.35);
-    max-width: 190px;
+    max-width: 100%;
 }
 
 .agenda-cat-pill.is-personal {
@@ -4299,8 +4404,8 @@ body.modal-scroll-locked {
 }
 
 :root[data-theme="dark"] .agenda-filter-pill.active {
-    background: #4f7df3;
-    border-color: #4f7df3;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
 }
 
@@ -5162,8 +5267,9 @@ body.modal-scroll-locked {
     width: 48px;
     height: 48px;
     border-radius: 13px;
-    background: var(--accent-soft);
-    color: var(--accent-primary, #60a5fa);
+    background: var(--brand-primary-soft);
+    color: var(--brand-primary);
+    border: 1px solid var(--brand-primary-border);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -5710,14 +5816,21 @@ body.modal-scroll-locked {
 }
 
 .btn-primary {
-    background: var(--accent-primary);
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
     padding: 9px 15px;
     font-size: 0.9rem;
 }
 
 .btn-primary:hover {
-    background: var(--accent-hover);
+    background: var(--brand-primary-hover);
+    border-color: var(--brand-primary-hover);
+}
+
+.btn-primary:active {
+    background: var(--brand-primary-active);
+    border-color: var(--brand-primary-active);
 }
 
 .btn-secondary {
@@ -6289,8 +6402,8 @@ body.modal-scroll-locked {
     margin-top: 18px;
     padding: 14px 16px;
     border-radius: 12px;
-    border: 1px solid #93c5fd;
-    background: rgba(59, 130, 246, 0.06);
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface-alt);
 }
 
 .lang-ai-head {
@@ -6479,8 +6592,8 @@ body.modal-scroll-locked {
 }
 
 :root[data-theme="dark"] .lang-ai-panel {
-    background: rgba(30, 58, 138, 0.25);
-    border-color: rgba(96, 165, 250, 0.45);
+    background: var(--bg-surface-alt);
+    border-color: var(--border-color);
 }
 
 :root[data-theme="dark"] .lang-ai-badge {
@@ -6522,16 +6635,17 @@ body.modal-scroll-locked {
 
 .crisis-pill:hover,
 .crisis-int-pill:hover {
-    border-color: #ef4444;
-    background: rgba(239, 68, 68, 0.08);
+    border-color: var(--brand-primary-border);
+    background: var(--brand-primary-soft);
     transform: translateY(-1px);
 }
 
 .crisis-pill.active,
 .crisis-int-pill.active {
-    background: #dc2626;
-    border-color: #dc2626;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
+    box-shadow: 0 3px 10px rgba(59, 130, 246, 0.25);
 }
 
 .crisis-summary-container {
@@ -6721,8 +6835,8 @@ body.modal-scroll-locked {
 
 :root[data-theme="dark"] .crisis-pill.active,
 :root[data-theme="dark"] .crisis-int-pill.active {
-    background: #ef4444;
-    border-color: #ef4444;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
 }
 
@@ -7117,14 +7231,16 @@ body {
 }
 
 .sleep-mode-pill:hover {
-    border-color: #6366f1;
+    border-color: var(--brand-primary-border);
+    background: var(--brand-primary-soft);
     transform: translateY(-1px);
 }
 
 .sleep-mode-pill.active {
-    background: linear-gradient(135deg, #4f46e5, #7c3aed);
-    border-color: transparent;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
+    box-shadow: 0 3px 10px rgba(59, 130, 246, 0.25);
 }
 
 .sleep-date-quick {
@@ -7143,8 +7259,8 @@ body {
 .sleep-auto-banner {
     padding: 10px 12px;
     border-radius: 10px;
-    border: 1px solid rgba(139, 92, 246, 0.35);
-    background: rgba(139, 92, 246, 0.1);
+    border: 1px solid var(--brand-primary-border);
+    background: var(--brand-primary-soft);
     color: var(--text-main, #1e293b);
     font-size: 0.84rem;
     line-height: 1.45;
@@ -7168,7 +7284,7 @@ body {
     width: auto;
     margin: 2px 0 0;
     flex-shrink: 0;
-    accent-color: #7c3aed;
+    accent-color: var(--brand-primary);
 }
 
 .sleep-card.has-desvelo {
@@ -7350,15 +7466,15 @@ body {
 }
 
 :root[data-theme="dark"] .sleep-mode-pill.active {
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
-    border-color: transparent;
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
     color: #ffffff;
 }
 
 :root[data-theme="dark"] .sleep-auto-banner {
-    background: rgba(139, 92, 246, 0.2);
-    border-color: rgba(167, 139, 250, 0.45);
-    color: #ede9fe;
+    background: var(--brand-primary-soft);
+    border-color: var(--brand-primary-border);
+    color: var(--text-main, #e2e8f0);
 }
 
 :root[data-theme="dark"] .sleep-card.has-desvelo {
@@ -7411,8 +7527,8 @@ body {
     margin: 14px 0 16px;
     padding: 16px 18px;
     border-radius: 14px;
-    border: 1px solid rgba(16, 185, 129, 0.28);
-    background: linear-gradient(135deg, rgba(16, 185, 129, 0.06), rgba(59, 130, 246, 0.05));
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface-alt);
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -7771,8 +7887,8 @@ body {
 }
 
 :root[data-theme="dark"] .lang-translator-panel {
-    background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(59, 130, 246, 0.1));
-    border-color: rgba(52, 211, 153, 0.32);
+    background: var(--bg-surface-alt);
+    border-color: var(--border-color);
 }
 
 :root[data-theme="dark"] .lang-dir-pill,
@@ -11297,5 +11413,180 @@ input[type="password"] {
         min-width: 38px;
         min-height: 36px;
         padding: 6px 9px;
+    }
+}
+
+/* =========================================================================
+   UNIFICACION DE SUPERFICIES, TITULOS DE SECCION, CRISIS MODAL & AGENDA
+   ========================================================================= */
+#view-horario .view-header-card h2,
+#view-settings .view-header-card h2,
+#view-crisis .view-header-card h2,
+#view-sueno .view-header-card h2,
+#view-english .view-header-card h2 {
+    color: var(--text-main);
+}
+
+#view-horario .music-yt-finder-head h3,
+#view-horario .planner-tab-panel h3,
+#view-horario .planner-tab-panel h4,
+#view-settings .settings-card h3,
+#view-crisis .side-insight-head h3,
+#view-sueno .side-insight-head h3,
+#view-english .music-panel-head h3,
+#view-english .music-yt-finder-head h3,
+#view-english .lang-ai-head h3 {
+    color: var(--text-main);
+    border-left: 3px solid var(--brand-primary);
+    padding-left: 10px;
+}
+
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .view-header-card,
+:root[data-theme="dark"] .settings-header-card,
+:root[data-theme="dark"] .music-panel-card,
+:root[data-theme="dark"] .music-yt-finder-card,
+:root[data-theme="dark"] .music-lyrics-viewer-card {
+    background-color: var(--bg-surface-alt);
+    border-color: var(--border-color);
+}
+
+/* Modal configurable de Tipos de Episodio en Bitacora de Crisis */
+.crisis-types-modal-card {
+    max-width: 560px;
+}
+
+.crisis-types-add-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.crisis-type-icon-input {
+    width: 68px;
+    min-width: 68px;
+    text-align: center;
+    font-size: 1.05rem;
+    flex: 0 0 68px;
+}
+
+.crisis-type-label-input {
+    flex: 1 1 200px;
+    min-width: 0;
+}
+
+.crisis-types-manage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 4px;
+}
+
+.crisis-type-manage-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color, #e2e8f0);
+    background: var(--bg-surface-alt, #f8fafc);
+}
+
+.crisis-type-manage-row.is-editing {
+    flex-wrap: wrap;
+}
+
+.crisis-type-manage-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.crisis-type-manage-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+
+.crisis-type-manage-label {
+    font-weight: 600;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+}
+
+.crisis-type-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+:root[data-theme="dark"] .crisis-type-manage-row {
+    background: #0f172a;
+    border-color: #334155;
+}
+
+/* Responsividad de Vista Rejilla & Vista Dia de Agenda en Tablet y Celular */
+@media (max-width: 1024px) {
+    .agenda-week-board {
+        grid-template-columns: 96px repeat(var(--agenda-cols, 7), minmax(205px, 1fr));
+    }
+
+    .agenda-week-board.cols-5 {
+        grid-template-columns: 96px repeat(5, minmax(205px, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .agenda-day-tabs {
+        grid-template-columns: repeat(7, minmax(64px, 1fr));
+        gap: 6px;
+    }
+
+    .agenda-day-tabs.cols-5 {
+        grid-template-columns: repeat(5, minmax(64px, 1fr));
+    }
+
+    .agenda-week-board {
+        grid-template-columns: 84px repeat(var(--agenda-cols, 7), minmax(195px, 1fr));
+        gap: 8px;
+    }
+
+    .agenda-week-board.cols-5 {
+        grid-template-columns: 84px repeat(5, minmax(195px, 1fr));
+    }
+
+    .agenda-filter-row-secondary {
+        justify-content: flex-start;
+    }
+
+    .agenda-course-filter-group {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .agenda-course-filter-select {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .crisis-types-add-form {
+        align-items: stretch;
+    }
+
+    .crisis-type-icon-input {
+        width: 72px;
+        flex: 0 0 72px;
+    }
+
+    .crisis-type-row-actions {
+        margin-left: auto;
     }
 }

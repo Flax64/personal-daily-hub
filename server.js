@@ -2504,21 +2504,80 @@ app.get('/api/get-sleep', apiReadLimiter.middleware, requireAuth, (req, res) => 
 // =======================================================
 // REGISTRO DE CRISIS (SOLO ADMIN ESCRIBE; PSIQUIATRA SOLO LECTURA)
 // =======================================================
+const DEFAULT_CRISIS_EPISODE_TYPES = [
+    { id: 'estres', label: 'Estrés', icon: '😣' },
+    { id: 'ira_rabia', label: 'Ira / Rabia', icon: '😠' },
+    { id: 'ansiedad', label: 'Ansiedad', icon: '😰' },
+    { id: 'panico', label: 'Pánico', icon: '🫨' },
+    { id: 'llanto_sobrecarga', label: 'Llanto / Sobrecarga', icon: '😢' },
+    { id: 'bloqueo_saturacion', label: 'Bloqueo / Saturación', icon: '🧱' },
+    { id: 'insomnio_agitacion', label: 'Insomnio / Agitación', icon: '🌘' },
+    { id: 'tristeza_desanimo', label: 'Tristeza / Desánimo', icon: '😔' },
+    { id: 'frustracion_impotencia', label: 'Frustración / Impotencia', icon: '😤' },
+    { id: 'agotamiento_mental', label: 'Agotamiento Mental', icon: '🪫' }
+];
+
+function getDefaultCrisisEpisodeTypes() {
+    return DEFAULT_CRISIS_EPISODE_TYPES.map((item) => ({ ...item }));
+}
+
+function sanitizeCrisisEpisodeTypes(rawList, fallbackList = getDefaultCrisisEpisodeTypes()) {
+    if (!Array.isArray(rawList)) {
+        return Array.isArray(fallbackList) ? fallbackList.map((item) => ({ ...item })) : [];
+    }
+    const out = [];
+    const seenLabels = new Set();
+    const seenIds = new Set();
+    for (let idx = 0; idx < rawList.length; idx += 1) {
+        if (out.length >= 25) break;
+        const entry = rawList[idx];
+        const rawLabel = typeof entry === 'string' ? entry : entry?.label;
+        const cleanLabel = String(rawLabel || '')
+            .replace(/[\x00-\x1F\x7F<>]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (cleanLabel.length < 2 || cleanLabel.length > 60) continue;
+        if (/^(otro|other)$/i.test(cleanLabel)) continue;
+        const dedupeKey = cleanLabel.toLowerCase();
+        if (seenLabels.has(dedupeKey)) continue;
+        seenLabels.add(dedupeKey);
+
+        const cleanIcon = typeof entry === 'object' && entry !== null
+            ? String(entry.icon ?? '').replace(/[\x00-\x1F\x7F<>]/g, '').trim().slice(0, 12)
+            : '';
+
+        let cleanId = typeof entry === 'object' && entry !== null
+            ? String(entry.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
+            : '';
+        if (!cleanId) {
+            cleanId = cleanLabel
+                .toLowerCase()
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 36) || `tipo_${out.length + 1}`;
+        }
+        let finalId = cleanId;
+        let suffix = 2;
+        while (seenIds.has(finalId)) {
+            finalId = `${cleanId.slice(0, 42)}_${suffix++}`;
+        }
+        seenIds.add(finalId);
+        out.push({ id: finalId, label: cleanLabel, icon: cleanIcon });
+    }
+    if (out.length === 0) {
+        return Array.isArray(fallbackList) ? fallbackList.map((item) => ({ ...item })) : [];
+    }
+    return out;
+}
+
 const CRISIS_TIPOS_VALIDOS = new Set([
-    'Estrés',
-    'Ira / Rabia',
-    'Ansiedad',
-    'Pánico',
-    'Llanto / Sobrecarga',
-    'Bloqueo / Saturación',
-    'Insomnio / Agitación',
-    'Tristeza / Desánimo',
-    'Frustración / Impotencia',
-    'Agotamiento Mental',
+    ...DEFAULT_CRISIS_EPISODE_TYPES.map((item) => item.label),
     'Otro'
 ]);
 
-app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 8000 }), (req, res) => {
+app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 8000 }), async (req, res) => {
     const fecha = String(req.body.fecha || '').trim();
     const hora = String(req.body.hora || '').trim();
     const tipoCrisis = String(req.body.tipoCrisis || req.body.tipo_crisis || '').trim();
@@ -2533,7 +2592,18 @@ app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, require
     if (!hora || !HORA_24H_REGEX.test(hora)) {
         return res.status(400).send('Hora inválida (formato HH:MM 24h).');
     }
-    if (!CRISIS_TIPOS_VALIDOS.has(tipoCrisis)) {
+
+    const userSettings = await loadUserSettings(req.user.id).catch(() => getDefaultUserSettings());
+    const allowedTypes = new Set(CRISIS_TIPOS_VALIDOS);
+    if (Array.isArray(userSettings?.crisisEpisodeTypes)) {
+        for (const item of userSettings.crisisEpisodeTypes) {
+            const lbl = String(item?.label || '').trim();
+            if (lbl) allowedTypes.add(lbl);
+        }
+    }
+    allowedTypes.add('Otro');
+
+    if (!allowedTypes.has(tipoCrisis)) {
         return res.status(400).send('Tipo de crisis inválido.');
     }
     if (!Number.isInteger(intensidadNum) || intensidadNum < 1 || intensidadNum > 5) {
@@ -5174,6 +5244,7 @@ function getDefaultUserSettings() {
         geminiApiKey: '',
         studyDriveSyncEnabled: true,
         studyDriveFolder: String(process.env.STUDY_RCLONE_DIR || 'NotasIdiomas').trim(),
+        crisisEpisodeTypes: getDefaultCrisisEpisodeTypes(),
         languageMemory: sanitizeLanguageMemory(),
         academicPlanner: getDefaultAcademicPlanner()
     };
@@ -5417,6 +5488,22 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
         if (cleanFolder) next.studyDriveFolder = cleanFolder;
     }
 
+    if (input.crisisEpisodeTypes !== undefined) {
+        if (!Array.isArray(input.crisisEpisodeTypes)) {
+            return { error: 'Crisis episode types must be an array.' };
+        }
+        if (input.crisisEpisodeTypes.length > 25) {
+            return { error: 'Maximum 25 crisis episode types allowed.' };
+        }
+        const cleanedTypes = sanitizeCrisisEpisodeTypes(input.crisisEpisodeTypes, []);
+        if (cleanedTypes.length === 0) {
+            return { error: 'At least 1 valid crisis episode type (2-60 chars) is required.' };
+        }
+        next.crisisEpisodeTypes = cleanedTypes;
+    } else {
+        next.crisisEpisodeTypes = sanitizeCrisisEpisodeTypes(base.crisisEpisodeTypes, getDefaultCrisisEpisodeTypes());
+    }
+
     if (input.languageMemory !== undefined) {
         next.languageMemory = sanitizeLanguageMemory(input.languageMemory);
     } else {
@@ -5430,6 +5517,11 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
     }
 
     return { settings: next };
+}
+
+function sanitizeUserSettings(input = {}, base = getDefaultUserSettings()) {
+    const res = validateUserSettingsPayload(input, base);
+    return res.settings || { ...getDefaultUserSettings(), ...base };
 }
 
 async function loadUserSettings(userId) {

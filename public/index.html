@@ -755,7 +755,11 @@
                                 </div>
 
                                 <div class="form-group">
-                                    <label>Crisis Type:</label>
+                                    <div class="label-with-helper">
+                                        <label>Crisis Type:</label>
+                                        <button type="button" class="btn-secondary btn-small" id="btnManageCrisisTypes"
+                                            title="Manage crisis episode types">⚙️ Edit Types</button>
+                                    </div>
                                     <input type="hidden" id="crisisTipo" value="Estrés">
                                     <div class="crisis-type-pills" id="crisisTipoPills" role="group" aria-label="Tipo de crisis">
                                         <button type="button" class="crisis-pill active" data-crisis-type="Estrés" title="Episodio de estrés agudo o sobrecarga">😣 Estrés</button>
@@ -1790,21 +1794,25 @@
                     </div>
 
                     <div class="agenda-filter-bar">
-                        <div class="agenda-filter-group" id="agendaCategoryFilters" role="group" aria-label="Category filter">
-                            <button type="button" class="agenda-filter-pill active" data-agenda-cat="all">All</button>
-                            <button type="button" class="agenda-filter-pill" data-agenda-cat="universidad">🎓 University</button>
-                            <button type="button" class="agenda-filter-pill" data-agenda-cat="personal">👤 Personal</button>
+                        <div class="agenda-filter-row agenda-filter-row-primary">
+                            <div class="agenda-filter-group" id="agendaCategoryFilters" role="group" aria-label="Category filter">
+                                <button type="button" class="agenda-filter-pill active" data-agenda-cat="all">All</button>
+                                <button type="button" class="agenda-filter-pill" data-agenda-cat="universidad">🎓 University</button>
+                                <button type="button" class="agenda-filter-pill" data-agenda-cat="personal">👤 Personal</button>
+                            </div>
                         </div>
-                        <div class="agenda-filter-group" id="agendaTypeFilters" role="group" aria-label="Type filter">
-                            <button type="button" class="agenda-filter-pill active" data-agenda-type="all">Events &amp; Tasks</button>
-                            <button type="button" class="agenda-filter-pill" data-agenda-type="evento">📌 Events</button>
-                            <button type="button" class="agenda-filter-pill" data-agenda-type="tarea">☑ Tasks (Jira)</button>
-                        </div>
-                        <div class="agenda-filter-group agenda-course-filter-group" id="agendaCourseFilterGroup">
-                            <label class="sr-only" for="agendaCourseFilter">Class filter</label>
-                            <select id="agendaCourseFilter" class="agenda-course-filter-select" aria-label="Filter by current class">
-                                <option value="">🎓 All Classes</option>
-                            </select>
+                        <div class="agenda-filter-row agenda-filter-row-secondary">
+                            <div class="agenda-filter-group" id="agendaTypeFilters" role="group" aria-label="Type filter">
+                                <button type="button" class="agenda-filter-pill active" data-agenda-type="all">Events &amp; Tasks</button>
+                                <button type="button" class="agenda-filter-pill" data-agenda-type="evento">📌 Events</button>
+                                <button type="button" class="agenda-filter-pill" data-agenda-type="tarea">☑ Tasks (Jira)</button>
+                            </div>
+                            <div class="agenda-filter-group agenda-course-filter-group" id="agendaCourseFilterGroup">
+                                <label class="sr-only" for="agendaCourseFilter">Class filter</label>
+                                <select id="agendaCourseFilter" class="agenda-course-filter-select" aria-label="Filter by current class">
+                                    <option value="">🎓 All Classes</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
 
@@ -3686,6 +3694,36 @@
             <div class="modal-actions">
                 <button type="button" class="btn-cancel" id="btnCloseDuplicateTab">Cerrar esta pestaña</button>
                 <button type="button" class="btn-submit btn-modal-save" id="btnTakeOverTab">Usar aquí (pausar la otra)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Manage Crisis Episode Types -->
+    <div class="modal-overlay" id="crisisTypesModal" hidden aria-modal="true" role="dialog"
+        aria-labelledby="crisisTypesModalTitle">
+        <div class="modal-card modal-card-wide crisis-types-modal-card">
+            <div class="modal-header">
+                <div>
+                    <h3 id="crisisTypesModalTitle">⚙️ Manage Crisis Episode Types</h3>
+                    <p class="muted-text" style="margin:2px 0 0;font-size:0.84rem;">Add, rename, or remove episode types. "Other" always stays available at the end (max 25 types).</p>
+                </div>
+                <button type="button" class="modal-close-btn" id="btnCloseCrisisTypesModal" aria-label="Close">✕</button>
+            </div>
+
+            <form id="crisisTypeAddForm" class="crisis-types-add-form" autocomplete="off">
+                <input type="text" id="crisisNewTypeIcon" class="crisis-type-icon-input" maxlength="12"
+                    placeholder="😵" aria-label="Emoji or icon (optional)">
+                <input type="text" id="crisisNewTypeLabel" class="crisis-type-label-input" minlength="2" maxlength="60"
+                    placeholder="New episode type (e.g. Sensory Overload)" aria-label="Episode type name" required>
+                <button type="submit" class="btn-primary btn-small" id="btnAddCrisisType">+ Add</button>
+            </form>
+
+            <div id="crisisTypesModalBanner" class="inline-status-banner" hidden aria-live="polite"></div>
+
+            <div id="crisisTypesList" class="crisis-types-manage-list"></div>
+
+            <div class="modal-actions" style="margin-top:14px;">
+                <button type="button" class="btn-cancel" id="btnDoneCrisisTypesModal">Done</button>
             </div>
         </div>
     </div>
