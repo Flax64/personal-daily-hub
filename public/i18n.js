@@ -1912,7 +1912,8 @@
         ['Maximum 25 crisis episode types allowed.', 'Se permiten máximo 25 tipos de episodio de crisis.'],
         ['At least 1 valid crisis episode type (2-60 chars) is required.', 'Se requiere al menos 1 tipo de episodio válido (2 a 60 caracteres).'],
         ['Crisis episode types must be an array.', 'Los tipos de episodio de crisis deben ser una lista.'],
-        ['Could not update crisis episode types.', 'No se pudieron actualizar los tipos de episodio de crisis.']
+        ['Could not update crisis episode types.', 'No se pudieron actualizar los tipos de episodio de crisis.'],
+        ['E2EE key mismatch or integrity check failed for journal entry.', 'La llave E2EE no coincide o falló la verificación de integridad de la nota del diario.']
     ];
 
     var EN_FROM_KEY = new Map();

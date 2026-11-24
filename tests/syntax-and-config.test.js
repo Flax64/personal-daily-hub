@@ -1934,4 +1934,32 @@ describe('Arquitectura Blue-Green Caddy + Rollback y Modal de Canción (#musicSo
         assert.ok(frontendJs.includes('function renderCrisisTypePills(') && frontendJs.includes('function initCrisisTypesModal('),
             'public/frontend.js debe definir renderCrisisTypePills() e initCrisisTypesModal()');
     });
+
+    it('aplica cifrado pdh-j2 (salt + PBKDF2 + HMAC) exclusivamente al Journal (/api/send-to-pc) sin alterar encriptarTextoE2EE para /api/send-english', () => {
+        const frontendJs = readText('public/frontend.js');
+        assert.match(frontendJs, /JOURNAL_SALTED_PBKDF2_ITERATIONS\s*=\s*120000/);
+        assert.match(frontendJs, /async\s+function\s+encriptarDiarioSaltedE2EE\s*\(/);
+        assert.match(frontendJs, /function\s+encriptarTextoE2EE\s*\(/);
+
+        // Todos los envíos a /api/send-to-pc deben usar encriptarDiarioSaltedE2EE y no encriptarTextoE2EE
+        const sendToPcBlocks = [...frontendJs.matchAll(/url:\s*['"]\/api\/send-to-pc['"][\s\S]{0,360}?\}\)/g)];
+        assert.strictEqual(sendToPcBlocks.length, 2, 'Deben existir exactamente 2 flujos de envío a /api/send-to-pc en frontend.js');
+        assert.ok(frontendJs.includes("await encriptarDiarioSaltedE2EE('Nothing to report.', llaveTexto)"),
+            'El fallback Nothing to report. hacia /api/send-to-pc debe usar encriptarDiarioSaltedE2EE');
+        assert.ok(frontendJs.includes('await encriptarDiarioSaltedE2EE(composedJournalText, llaveTexto)'),
+            'El formulario principal del Journal hacia /api/send-to-pc debe usar encriptarDiarioSaltedE2EE');
+        for (const match of sendToPcBlocks) {
+            assert.equal(match[0].includes('encriptarTextoE2EE('), false,
+                '/api/send-to-pc ya no debe enviar sobres legacy sin salt');
+        }
+
+        // Todos los envíos a /api/send-english deben mantener encriptarTextoE2EE
+        const sendEnglishMatches = [...frontendJs.matchAll(/url:\s*['"]\/api\/send-english['"][\s\S]{0,420}?buildBody:\s*\(\)\s*=>\s*\(\{[^\n]+\}\)/g)];
+        assert.ok(sendEnglishMatches.length >= 1, 'Debe existir envío a /api/send-english en frontend.js');
+        for (const match of sendEnglishMatches) {
+            assert.ok(match[0].includes('encriptarTextoE2EE('), '/api/send-english debe conservar encriptarTextoE2EE');
+            assert.equal(match[0].includes('encriptarDiarioSaltedE2EE('), false,
+                '/api/send-english no debe cambiarse a encriptarDiarioSaltedE2EE');
+        }
+    });
 });

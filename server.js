@@ -2986,14 +2986,23 @@ app.post('/api/send-to-pc', pcQueueWriteLimiter.middleware, requireAdmin, requir
 
     const secretKey = String(process.env.JOURNAL_SECRET_KEY || '');
     const wordPassword = String(process.env.WORD_PASSWORD || '');
+    const trimmedTexto = texto.trim();
+    const isSaltedCandidate = trimmedTexto.startsWith(`${serverNotesService.JOURNAL_SALTED_E2EE_PREFIX}:`);
+    const isSalted = serverNotesService.isValidJournalSaltedEnvelope(trimmedTexto);
     if (
         serverNotesService.isServerAutonomousNotesEnabled()
         && serverNotesService.normalizeE2eeKeyBuffer(secretKey)
-        && serverNotesService.isValidE2eeEnvelope(texto)
+        && (isSaltedCandidate || serverNotesService.isValidE2eeEnvelope(trimmedTexto))
     ) {
-        const dec = serverNotesService.decryptClientE2ee(texto, secretKey);
+        const dec = isSaltedCandidate
+            ? serverNotesService.decryptJournalSaltedE2ee(trimmedTexto, secretKey)
+            : serverNotesService.decryptClientE2ee(trimmedTexto, secretKey);
         if (!dec.ok) {
-            return res.status(400).send('E2EE key mismatch: server JOURNAL_SECRET_KEY could not decrypt entry.');
+            return res.status(400).send(
+                isSaltedCandidate
+                    ? 'E2EE key mismatch or integrity check failed for journal entry.'
+                    : 'E2EE key mismatch: server JOURNAL_SECRET_KEY could not decrypt entry.'
+            );
         }
         if (wordPassword) {
             try {
@@ -3013,7 +3022,8 @@ app.post('/api/send-to-pc', pcQueueWriteLimiter.middleware, requireAdmin, requir
                         bytes: writeRes.bytes,
                         skipped: writeRes.skipped,
                         replacedPlaceholder: Boolean(writeRes.replacedPlaceholder),
-                        backfilledCount: Array.isArray(writeRes.backfilledDates) ? writeRes.backfilledDates.length : 0
+                        backfilledCount: Array.isArray(writeRes.backfilledDates) ? writeRes.backfilledDates.length : 0,
+                        encryptionScheme: isSalted ? 'pdh-j2-pbkdf2-hmac' : 'legacy-aes-cbc'
                     });
                     if (writeRes.skipped) {
                         return res.send(`Today already has a journal entry (${writeRes.heading}); "Nothing to report." was skipped.`);

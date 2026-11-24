@@ -802,13 +802,61 @@ def encriptar_texto(texto_plano, llave_secreta=None):
 
 
 _E2EE_CIPHERTEXT_RE = re.compile(r"^[0-9a-fA-F]{32}:[A-Za-z0-9+/=]+$")
+JOURNAL_SALTED_E2EE_PREFIX = "pdh-j2"
+JOURNAL_SALTED_MIN_ITERATIONS = 100000
+JOURNAL_SALTED_MAX_ITERATIONS = 600000
+_JOURNAL_SALTED_RE = re.compile(
+    r"^pdh-j2:(\d{1,7}):([0-9a-f]{32}):([0-9a-f]{32}):([0-9a-f]{64}):([A-Za-z0-9+/]+={0,2})$"
+)
 
 
 def desencriptar_texto(texto_cifrado, llave_secreta=None, raise_on_error=False):
-    es_sobre_e2ee = isinstance(texto_cifrado, str) and bool(
-        _E2EE_CIPHERTEXT_RE.fullmatch(texto_cifrado.strip())
-    )
+    raw_trim = texto_cifrado.strip() if isinstance(texto_cifrado, str) else ""
+    es_sobre_salted = raw_trim.startswith(f"{JOURNAL_SALTED_E2EE_PREFIX}:")
+    es_sobre_e2ee = es_sobre_salted or bool(_E2EE_CIPHERTEXT_RE.fullmatch(raw_trim))
     try:
+        if es_sobre_salted:
+            match = _JOURNAL_SALTED_RE.fullmatch(raw_trim)
+            if not match:
+                raise ValueError("Formato de sobre E2EE pdh-j2 inválido")
+            iter_str, salt_hex, iv_hex, mac_hex, cipher_b64 = match.groups()
+            iterations = int(iter_str)
+            if (
+                iterations < JOURNAL_SALTED_MIN_ITERATIONS
+                or iterations > JOURNAL_SALTED_MAX_ITERATIONS
+                or str(iterations) != iter_str
+            ):
+                raise ValueError("Iteraciones PBKDF2 fuera de rango permitido")
+            salt_bytes = binascii.unhexlify(salt_hex)
+            iv_bytes = binascii.unhexlify(iv_hex)
+            cipher_bytes = base64.b64decode(cipher_b64, validate=True)
+            if (
+                len(salt_bytes) != 16
+                or len(iv_bytes) != 16
+                or not cipher_bytes
+                or len(cipher_bytes) % 16 != 0
+                or base64.b64encode(cipher_bytes).decode("ascii") != cipher_b64
+            ):
+                raise ValueError("Payload cifrado pdh-j2 inválido")
+            llave = _normalizar_llave_aes(llave_secreta)
+            derived = hashlib.pbkdf2_hmac("sha256", llave, salt_bytes, iterations, dklen=64)
+            enc_key = derived[:32]
+            mac_key = derived[32:]
+            auth_payload = f"{JOURNAL_SALTED_E2EE_PREFIX}:{iter_str}:{salt_hex}:{iv_hex}:{cipher_b64}".encode("utf-8")
+            expected_mac = hmac.new(mac_key, auth_payload, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(mac_hex, expected_mac):
+                raise ValueError("MAC HMAC-SHA256 inválido o llave E2EE no coincidente")
+            cipher = AES.new(enc_key, AES.MODE_CBC, iv_bytes)
+            desencriptado = cipher.decrypt(cipher_bytes)
+            padding_len = desencriptado[-1]
+            if (
+                padding_len < 1
+                or padding_len > 16
+                or desencriptado[-padding_len:] != bytes([padding_len]) * padding_len
+            ):
+                raise ValueError("Padding PKCS#7 inválido en sobre pdh-j2")
+            return desencriptado[:-padding_len].decode("utf-8")
+
         if not isinstance(texto_cifrado, str) or ":" not in texto_cifrado:
             return str(texto_cifrado or "")
         iv_hex, mensaje_b64 = texto_cifrado.split(":", 1)

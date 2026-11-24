@@ -5883,6 +5883,77 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         }
     });
 
+    it('acepta notas del Diario cifradas con pdh-j2 (salt + PBKDF2 + HMAC) en /api/send-to-pc y rechaza sobres manipulados o con llave errónea', async () => {
+        const fs = require('node:fs');
+        const os = require('node:os');
+        const serverNotes = require('../lib/server-notes-service');
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-jrn-salted-'));
+        const prevKey = process.env.JOURNAL_SECRET_KEY;
+        const prevJrnPath = process.env.JOURNAL_LOCAL_PATH;
+        const prevWordPass = process.env.WORD_PASSWORD;
+        const testKey = '0123456789abcdef0123456789abcdef';
+        const wrongKey = 'ffffffffffffffffffffffffffffffff';
+
+        try {
+            process.env.JOURNAL_SECRET_KEY = testKey;
+            process.env.JOURNAL_LOCAL_PATH = path.join(tmpDir, 'Diario.docx');
+            process.env.WORD_PASSWORD = 'SaltedJournalPass2026!';
+            const lockStart = advisoryLockHistory.length;
+
+            // 1. Envío válido cifrado con pdh-j2 (guardado directo en Diario.docx si msoffcrypto está disponible, o encolado si MSOFFCRYPTO_MISSING)
+            const validSalted = serverNotes.encryptJournalSaltedE2ee('Hoy practiqué respiración profunda y me sentí más tranquilo 🦉', testKey);
+            const okRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/send-to-pc',
+                headers: { Cookie: adminCookie },
+                body: { texto: validSalted }
+            });
+            assert.strictEqual(okRes.status, 200);
+            const locksValid = advisoryLockHistory.slice(lockStart);
+            assert.ok(locksValid.some((e) => e.op === 'acquire' && e.lockName === 'pdh_docx_journal'), 'Debe adquirirse el lock pdh_docx_journal tras descifrar pdh-j2');
+            if (/Note encrypted with password and saved locally/i.test(okRes.body)) {
+                assert.ok(fs.existsSync(process.env.JOURNAL_LOCAL_PATH), 'Debe escribirse Diario.docx cifrado tras recibir pdh-j2 válido');
+                const magic = fs.readFileSync(process.env.JOURNAL_LOCAL_PATH).subarray(0, 4);
+                assert.strictEqual(magic.equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0])), true, 'Diario.docx debe estar cifrado con OLE2');
+            } else {
+                assert.match(okRes.body, /queued for your PC/i);
+            }
+
+            // 2. Rechazo 400 si el MAC fue manipulado en 1 carácter (no debe adquirir lock ni escribir)
+            const lockBeforeReject = advisoryLockHistory.length;
+            const parts = validSalted.split(':');
+            parts[4] = (parts[4][0] === 'a' ? 'b' : 'a') + parts[4].slice(1);
+            const tamperedMacRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/send-to-pc',
+                headers: { Cookie: adminCookie },
+                body: { texto: parts.join(':') }
+            });
+            assert.strictEqual(tamperedMacRes.status, 400);
+            assert.match(tamperedMacRes.body, /integrity check failed/i);
+
+            // 3. Rechazo 400 si se cifró con llave incorrecta (no debe adquirir lock ni escribir)
+            const wrongKeySalted = serverNotes.encryptJournalSaltedE2ee('Llave incorrecta en pdh-j2', wrongKey);
+            const wrongKeyRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/send-to-pc',
+                headers: { Cookie: adminCookie },
+                body: { texto: wrongKeySalted }
+            });
+            assert.strictEqual(wrongKeyRes.status, 400);
+            assert.match(wrongKeyRes.body, /integrity check failed/i);
+            assert.deepStrictEqual(advisoryLockHistory.slice(lockBeforeReject), [], 'Sobres pdh-j2 rechazados no deben intentar escribir en Diario.docx');
+        } finally {
+            if (prevKey === undefined) delete process.env.JOURNAL_SECRET_KEY; else process.env.JOURNAL_SECRET_KEY = prevKey;
+            if (prevJrnPath === undefined) delete process.env.JOURNAL_LOCAL_PATH; else process.env.JOURNAL_LOCAL_PATH = prevJrnPath;
+            if (prevWordPass === undefined) delete process.env.WORD_PASSWORD; else process.env.WORD_PASSWORD = prevWordPass;
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
     it('permite personalizar los 3 campus ITS, buscar/geocodificar en mapa y restaurar coordenadas oficiales del croquis', async () => {
         // 1. Personalizar Campus Principal (y verificar sincronía con university), Miravalle y Boillot
         const prinRes = await request({

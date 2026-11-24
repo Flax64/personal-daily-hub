@@ -1123,6 +1123,114 @@ function encriptarTextoE2EE(textoPlano, llaveTexto) {
     return iv.toString(CryptoJS.enc.Hex) + ':' + encrypted.toString();
 }
 
+const JOURNAL_SALTED_PBKDF2_ITERATIONS = 120000;
+
+async function encriptarDiarioSaltedE2EE(textoPlano, llaveTexto) {
+    if (!llaveTexto || typeof llaveTexto !== 'string' || llaveTexto.length !== 32) {
+        throw new Error('Secret key must be exactly 32 characters long.');
+    }
+    const plainStr = String(textoPlano ?? '');
+    const iterations = JOURNAL_SALTED_PBKDF2_ITERATIONS;
+
+    const toHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    const toBase64 = (bytes) => {
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 1) {
+            bin += String.fromCharCode(bytes[i]);
+        }
+        return btoa(bin);
+    };
+
+    const hasSubtle = typeof window !== 'undefined'
+        && window.crypto
+        && window.crypto.subtle
+        && typeof window.crypto.getRandomValues === 'function'
+        && typeof TextEncoder !== 'undefined';
+
+    if (hasSubtle) {
+        try {
+            const encoder = new TextEncoder();
+            const saltBytes = window.crypto.getRandomValues(new Uint8Array(16));
+            const ivBytes = window.crypto.getRandomValues(new Uint8Array(16));
+            const baseKey = await window.crypto.subtle.importKey(
+                'raw',
+                encoder.encode(llaveTexto),
+                { name: 'PBKDF2' },
+                false,
+                ['deriveBits']
+            );
+            const derivedBits = await window.crypto.subtle.deriveBits(
+                { name: 'PBKDF2', salt: saltBytes, iterations, hash: 'SHA-256' },
+                baseKey,
+                512
+            );
+            const derivedBytes = new Uint8Array(derivedBits);
+            const encKey = await window.crypto.subtle.importKey(
+                'raw',
+                derivedBytes.slice(0, 32),
+                { name: 'AES-CBC' },
+                false,
+                ['encrypt']
+            );
+            const macKey = await window.crypto.subtle.importKey(
+                'raw',
+                derivedBytes.slice(32, 64),
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+            );
+            const cipherBuf = await window.crypto.subtle.encrypt(
+                { name: 'AES-CBC', iv: ivBytes },
+                encKey,
+                encoder.encode(plainStr)
+            );
+            const saltHex = toHex(saltBytes);
+            const ivHex = toHex(ivBytes);
+            const cipherB64 = toBase64(new Uint8Array(cipherBuf));
+            const authPayload = `pdh-j2:${iterations}:${saltHex}:${ivHex}:${cipherB64}`;
+            const macBuf = await window.crypto.subtle.sign('HMAC', macKey, encoder.encode(authPayload));
+            const macHex = toHex(new Uint8Array(macBuf));
+            return `pdh-j2:${iterations}:${saltHex}:${ivHex}:${macHex}:${cipherB64}`;
+        } catch (_) {
+            // Fallback a CryptoJS si el entorno bloquea WebCrypto
+        }
+    }
+
+    if (typeof CryptoJS === 'undefined') {
+        throw new Error('Local CryptoJS library failed to load. Reload the page.');
+    }
+
+    const randomWordArray16 = () => {
+        if (typeof window !== 'undefined' && window.crypto && typeof window.crypto.getRandomValues === 'function') {
+            const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+            return CryptoJS.enc.Hex.parse(toHex(bytes));
+        }
+        return CryptoJS.lib.WordArray.random(16);
+    };
+
+    const saltWA = randomWordArray16();
+    const ivWA = randomWordArray16();
+    const derivedWA = CryptoJS.PBKDF2(CryptoJS.enc.Utf8.parse(llaveTexto), saltWA, {
+        keySize: 16,
+        iterations,
+        hasher: CryptoJS.algo.SHA256
+    });
+    const encKeyWA = CryptoJS.lib.WordArray.create(derivedWA.words.slice(0, 8), 32);
+    const macKeyWA = CryptoJS.lib.WordArray.create(derivedWA.words.slice(8, 16), 32);
+    const cipherB64 = CryptoJS.AES.encrypt(plainStr, encKeyWA, {
+        iv: ivWA,
+        mode: CryptoJS.mode.CBC,
+        padding: CryptoJS.pad.Pkcs7
+    }).toString();
+    const saltHex = saltWA.toString(CryptoJS.enc.Hex).toLowerCase();
+    const ivHex = ivWA.toString(CryptoJS.enc.Hex).toLowerCase();
+    const authPayload = `pdh-j2:${iterations}:${saltHex}:${ivHex}:${cipherB64}`;
+    const macHex = CryptoJS.HmacSHA256(CryptoJS.enc.Utf8.parse(authPayload), macKeyWA)
+        .toString(CryptoJS.enc.Hex)
+        .toLowerCase();
+    return `pdh-j2:${iterations}:${saltHex}:${ivHex}:${macHex}:${cipherB64}`;
+}
+
 function desencriptarTextoE2EE(textoCifrado, llaveTexto) {
     if (typeof CryptoJS === 'undefined') {
         throw new Error('Local CryptoJS library failed to load. Reload the page.');
@@ -3904,12 +4012,13 @@ if (journalForm) {
                         if (data409 && data409.fallbackToPcQueue) {
                             const llaveTexto = await solicitarLlaveE2EEAsync();
                             if (!llaveTexto) return;
+                            const encryptedJournalNtr = await encriptarDiarioSaltedE2EE('Nothing to report.', llaveTexto);
                             const queueResp = await submitMutationRequest({
                                 url: '/api/send-to-pc',
                                 method: 'POST',
                                 scopeKey: 'journal-ntr',
                                 signature: `Nothing to report.:${new Date().toISOString().slice(0, 10)}`,
-                                buildBody: () => ({ texto: encriptarTextoE2EE('Nothing to report.', llaveTexto) })
+                                buildBody: () => ({ texto: encryptedJournalNtr })
                             });
                             const msg = String(queueResp || '').includes('was skipped.')
                                 ? tServer(queueResp)
@@ -4026,12 +4135,13 @@ if (journalForm) {
 
         runWithButtonLock(btnEnviarWord, async () => {
             try {
+                const encryptedJournalPayload = await encriptarDiarioSaltedE2EE(composedJournalText, llaveTexto);
                 const respText = await submitMutationRequest({
                     url: '/api/send-to-pc',
                     method: 'POST',
                     scopeKey: 'journal',
                     signature: composedClean,
-                    buildBody: () => ({ texto: encriptarTextoE2EE(composedJournalText, llaveTexto) })
+                    buildBody: () => ({ texto: encryptedJournalPayload })
                 });
                 lastSentJournalText = composedClean;
                 textInput.value = '';

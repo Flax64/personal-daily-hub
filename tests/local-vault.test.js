@@ -675,10 +675,13 @@ describe('Bóveda local (.env / .env.enc)', () => {
         });
 
         // Cifrado desde Node con formato ivHex:cipherB64 igual que frontend.js
+        const serverNotes = require('../lib/server-notes-service');
         const nodeIv = crypto.randomBytes(16);
         const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(secretKey, 'utf8'), nodeIv);
         const nodeEnc = Buffer.concat([cipher.update(samplePayload, 'utf8'), cipher.final()]);
         const nodeEnvelope = `${nodeIv.toString('hex')}:${nodeEnc.toString('base64')}`;
+        const saltedJournalSample = 'Diario pdh-j2 con salt único y emojis 🦉 사랑해';
+        const nodeSaltedEnvelope = serverNotes.encryptJournalSaltedE2ee(saltedJournalSample, secretKey);
 
         const pyCode = [
             'import hashlib, hmac, json, sys',
@@ -686,12 +689,24 @@ describe('Bóveda local (.env / .env.enc)', () => {
             'import sincronizador as sc',
             'secret = sys.argv[2]',
             'node_env = sys.argv[3]',
+            'node_salted = sys.argv[4]',
+            'expected_salted_plain = sys.argv[5]',
             'sc.LLAVE_SECRETA = secret.encode("utf-8")',
             '',
             '# 1. Interoperabilidad E2EE AES-256-CBC Node -> Python -> Node',
             'dec_from_node = json.loads(sc.desencriptar_texto(node_env))',
             'assert dec_from_node["songTitle"] == "DRIP"',
             'assert "네 맘을 사로잡아" in dec_from_node["lyrics"]',
+            'assert sc.desencriptar_texto(node_salted, raise_on_error=True) == expected_salted_plain',
+            'parts_s = node_salted.split(":")',
+            'parts_s[4] = ("a" if parts_s[4][0] != "a" else "b") + parts_s[4][1:]',
+            'tampered_salted = ":".join(parts_s)',
+            'salted_rejected = False',
+            'try:',
+            '    sc.desencriptar_texto(tampered_salted, raise_on_error=True)',
+            'except ValueError:',
+            '    salted_rejected = True',
+            'assert salted_rejected, "sincronizador.desencriptar_texto debe rechazar sobre pdh-j2 alterado cuando raise_on_error=True"',
             'py_env = sc.encriptar_texto(json.dumps({"ok": True, "source": "word-pc", "lyrics": "Forever ever 빛나"}, ensure_ascii=False))',
             '',
             '# 2. Firma HMAC-SHA256 site-to-site PC <-> EC2',
@@ -734,7 +749,7 @@ describe('Bóveda local (.env / .env.enc)', () => {
 
         const res = spawnSync(
             pyCmd,
-            ['-B', '-c', pyCode, path.dirname(PY_SYNC), secretKey, nodeEnvelope],
+            ['-B', '-c', pyCode, path.dirname(PY_SYNC), secretKey, nodeEnvelope, nodeSaltedEnvelope, saltedJournalSample],
             { cwd: ROOT_DIR, encoding: 'utf8' }
         );
         assert.equal(res.status, 0, res.stderr || res.stdout);
