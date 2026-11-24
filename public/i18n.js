@@ -1920,7 +1920,7 @@
         ['📥 Download Journal (.docx)', '📥 Descargar Diario (.docx)'],
         ['Download your encrypted Journal and decrypt it on this device as Word (.docx)', 'Descargar tu Diario cifrado y descifrarlo en este dispositivo como Word (.docx)'],
         ['Journal download password (.docx salted E2EE):', 'Contraseña de descarga del Diario (.docx cifrado con salt):'],
-        ['8–128 chars to decrypt Journal downloads', '8–128 caracteres para descifrar descargas del Diario'],
+        ['Password (8–128 characters)', 'Contraseña (8–128 caracteres)'],
         ['Save password', 'Guardar contraseña'],
         ['Save encrypted download password on the server', 'Guardar contraseña de descarga cifrada en el servidor'],
         ['Clear password', 'Borrar contraseña'],

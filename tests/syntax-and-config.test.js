@@ -1995,6 +1995,15 @@ describe('Arquitectura Blue-Green Caddy + Rollback y Modal de Canción (#musicSo
     it('expone botón, modal, ajuste anti-autofill y descifrado local binario pdh-j2 para descargar Diario (.docx)', async () => {
         const indexHtml = readText('public/index.html');
         const frontendJs = readText('public/frontend.js');
+        const styleCss = readText('public/style.css');
+
+        assert.equal(/\.settings-inline-actions\s+button\s*\{/.test(styleCss), false,
+            'style.css no debe estirar .password-toggle-btn al 100% dentro de .settings-inline-actions');
+        assert.ok(styleCss.includes('.settings-inline-actions > button:not(.password-toggle-btn)'),
+            'style.css debe excluir .password-toggle-btn al expandir botones en móvil');
+        assert.match(styleCss, /\.password-input-wrap\s*>\s*\.password-toggle-btn[\s\S]*?width:\s*34px;[\s\S]*?max-width:\s*34px;/);
+        assert.match(styleCss, /\.label-with-helper\s*\{[^}]*flex-wrap:\s*wrap;/);
+        assert.match(styleCss, /@media\s*\(max-width:\s*520px\)[\s\S]*?\.mobile-topbar-title\s*\{[^}]*flex:\s*1\s+1\s+auto;/);
 
         for (const requiredToken of [
             'id="btnDownloadJournalWord"',
