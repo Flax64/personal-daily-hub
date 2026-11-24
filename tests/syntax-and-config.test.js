@@ -323,7 +323,6 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'id="crisisForm"',
             'id="resumenCrisisList"',
             'id="resumenCalendarioDia"',
-            'id="btnResumenWeekStartToggle"',
             'id="resumenVisualWeekDays"',
             'id="btnResumenWeekAllDays"',
             'id="musicEntityEditModal"',
@@ -379,6 +378,8 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             assert.ok(indexHtml.includes(requiredId), `public/index.html debe incluir ${requiredId}`);
         }
         for (const removedId of [
+            'id="btnResumenWeekStartToggle"',
+            'id="plannerParkingBufferMin"',
             'id="btnBackToHome"',
             'id="transportSecurityCard"',
             'id="btnTransportBenchmark"',
@@ -447,6 +448,9 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         assert.ok(frontendSrcCheck.includes("window.addEventListener('popstate'"));
         assert.ok(frontendSrcCheck.includes("history.replaceState({ view: 'inicio' }, '', `${window.location.pathname}#inicio`)"));
         assert.ok(frontendSrcCheck.includes('initMedicoAutofillShield') && frontendSrcCheck.includes('resetMedicoAutofillShield'));
+        assert.ok(frontendSrcCheck.includes('weekStartDay: 1'), 'Resumen Semanal debe iniciar siempre en Lunes (weekStartDay: 1)');
+        assert.match(indexHtml, /<th data-day-col="Monday">Monday<\/th>[\s\S]*?<th data-day-col="Sunday">Sunday<\/th>/);
+        assert.ok(serverSrcCheck.includes('function computeCommuteAlertMilestones') && serverSrcCheck.includes('function resolveLiveDrivingMinutes'));
 
         const dockerfileText = readText('Dockerfile');
         assert.ok(dockerfileText.includes('COPY lib ./lib'), 'Dockerfile debe copiar carpeta lib/');

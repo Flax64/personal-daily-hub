@@ -437,6 +437,24 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     return finish(null, { affectedRows: 1 });
                 }
 
+                if (normalized.startsWith("DELETE FROM RecordatoriosEstado WHERE usuario_id = ? AND clave_unica LIKE CONCAT(?, ':m%')")) {
+                    const targetUid = Number(params[0]);
+                    const seriesPrefix = `${String(params[1] || '')}:m`;
+                    const excludeKey = normalized.includes('AND clave_unica <> ?') ? String(params[2] || '') : null;
+                    let deleted = 0;
+                    for (const [mapKey, val] of Array.from(reminderStatesMap.entries())) {
+                        if (
+                            Number(val.usuario_id) === targetUid &&
+                            String(val.clave_unica || '').startsWith(seriesPrefix) &&
+                            (excludeKey === null || val.clave_unica !== excludeKey)
+                        ) {
+                            reminderStatesMap.delete(mapKey);
+                            deleted += 1;
+                        }
+                    }
+                    return finish(null, { affectedRows: deleted });
+                }
+
                 if (normalized.startsWith("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ?")) {
                     const targetRefId = Number(params[0]);
                     for (const val of reminderStatesMap.values()) {
@@ -2187,22 +2205,43 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(n21.campusKey, 'miravalle');
         assert.strictEqual(n21.croquisCode, 'CTO-003');
 
-        // 4. Calcular tiempo de traslado en carro y anticipación de notificación (lejos >= 30 min con tráfico vs cerca = 10 min)
+        // 4. Calcular tiempo de traslado en carro y escalonamiento inteligente por 3 zonas (Casa, Lejos de Casa/Campus, Cerca del Campus)
+        // 4a. Lejos de Casa y lejos del campus (away_far -> 1 solo aviso [T + 10])
         const farLocRes = await request({
             port,
             method: 'POST',
             reqPath: '/api/planner/location',
             headers: { Cookie: adminCookie },
-            body: { mapsUrl: '25.380000, -101.020000', label: 'Casa Sur Saltillo' }
+            body: { mapsUrl: '25.380000, -101.020000', label: 'Punto Externo Sur Saltillo' }
         });
         assert.strictEqual(farLocRes.status, 200);
         const farData = JSON.parse(farLocRes.body);
         assert.ok(Array.isArray(farData.commutes) && farData.commutes.length >= 3);
         const farPrincipal = farData.commutes.find((c) => c.campusKey === 'principal');
         assert.strictEqual(farPrincipal.isNearCampus, false);
-        assert.ok(farPrincipal.recommendedLeadMinutes >= 30, 'Si está lejos del ITS debe notificar mínimo 30 minutos antes');
+        assert.strictEqual(farPrincipal.commuteZone, 'away_far');
+        assert.deepStrictEqual(farPrincipal.alertMilestones, [farPrincipal.driveMinutesWithTraffic + 10]);
+        assert.strictEqual(farPrincipal.recommendedLeadMinutes, farPrincipal.driveMinutesWithTraffic + 10);
         assert.ok(farPrincipal.mapsDirectionsUrl.includes('google.com/maps/dir/'));
 
+        // 4b. En Casa (home -> avisos progresivos [T + 20, T + 10, T, 10])
+        const homeLocRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/location',
+            headers: { Cookie: adminCookie },
+            body: { target: 'home', mapsUrl: '25.380000, -101.020000', label: 'Mi Casa Sur' }
+        });
+        assert.strictEqual(homeLocRes.status, 200);
+        const homeData = JSON.parse(homeLocRes.body);
+        const homePrincipal = homeData.commutes.find((c) => c.campusKey === 'principal');
+        const homeDriveT = homePrincipal.driveMinutesWithTraffic;
+        assert.strictEqual(homePrincipal.commuteZone, 'home');
+        assert.strictEqual(homePrincipal.isAtHome, true);
+        assert.deepStrictEqual(homePrincipal.alertMilestones, [homeDriveT + 20, homeDriveT + 10, homeDriveT, 10]);
+        assert.strictEqual(homePrincipal.recommendedLeadMinutes, homeDriveT + 20);
+
+        // 4c. Cerca del campus (near_destination -> únicamente [20, 15], recommendedLeadMinutes = 20)
         const nearLocRes = await request({
             port,
             method: 'POST',
@@ -2215,7 +2254,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(nearData.planner.locations.current.label, 'En el Tec de Saltillo');
         const nearPrincipal = nearData.commutes.find((c) => c.campusKey === 'principal');
         assert.strictEqual(nearPrincipal.isNearCampus, true);
-        assert.strictEqual(nearPrincipal.recommendedLeadMinutes, 10, 'Si ya está en o cerca del ITS debe notificar 10 minutos antes');
+        assert.strictEqual(nearPrincipal.commuteZone, 'near_destination');
+        assert.deepStrictEqual(nearPrincipal.alertMilestones, [20, 15]);
+        assert.strictEqual(nearPrincipal.recommendedLeadMinutes, 20, 'Si ya está en o cerca del ITS debe notificar a los 20 y 15 minutos antes');
 
         const embedMapsRes = await request({
             port,
@@ -2450,6 +2491,187 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(afterEmptySem.semesters.length, 1);
         assert.strictEqual(afterEmptySem.semesters[0].courses.length, 0);
         assert.strictEqual(afterEmptySem.activeSemesterId, afterEmptySem.semesters[0].id);
+
+        // 9. Flujo ntfy OK (action=ack) y reemplazo automático de etapas previas en traslado a clases
+        const candidateTzs = [
+            'UTC', 'America/Monterrey', 'Europe/London', 'Asia/Tokyo',
+            'Pacific/Auckland', 'America/Anchorage', 'America/Sao_Paulo', 'Asia/Kolkata'
+        ];
+        const getTzHour = (tz) => Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+        const safeMiddayTz =
+            candidateTzs.find((tz) => [10, 11, 15, 16].includes(getTzHour(tz))) ||
+            candidateTzs.find((tz) => {
+                const hr = getTzHour(tz);
+                return hr >= 8 && hr <= 20;
+            }) ||
+            'UTC';
+        const prevSettingsForAck = JSON.parse((await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } })).body).settings || {};
+        await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/settings',
+            headers: { Cookie: adminCookie },
+            body: {
+                timezone: safeMiddayTz,
+                phoneNotificationsEnabled: true,
+                ntfyServerUrl: 'https://ntfy.sh',
+                ntfyTopic: 'hub_commute_ack_test',
+                publicBaseUrl: 'http://203.0.113.10:3000'
+            }
+        });
+
+        // Limpiar GPS en vivo para que el origen sea Casa guardada (zona 'home' -> [T+20, T+10, T, 10])
+        const resetHomeRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/planner/location',
+            headers: { Cookie: adminCookie },
+            body: { target: 'clear_current' }
+        });
+        assert.strictEqual(resetHomeRes.status, 200);
+        const baseCommuteInfo = JSON.parse(resetHomeRes.body).commutes.find((c) => c.campusKey === 'principal');
+        const driveT = baseCommuteInfo.driveMinutesWithTraffic;
+
+        const nowProbeRes = await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } });
+        const localNowInfo = JSON.parse(nowProbeRes.body).localNow;
+        const toHHMM = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+
+        // Etapa 1: faltan (driveT + 5) min -> activa el hito (driveT + 10)
+        const stage1StartMin = localNowInfo.minutesOfDay + driveT + 5;
+        const plannerStage1 = JSON.parse(resetHomeRes.body).planner;
+        plannerStage1.classRemindersEnabled = true;
+        plannerStage1.vacations = [];
+        plannerStage1.semesters[0].startDate = '2020-01-01';
+        plannerStage1.semesters[0].endDate = '2030-12-31';
+        plannerStage1.semesters[0].courses = [{
+            id: 'ack-course-1',
+            code: 'ITS901',
+            name: 'Arquitectura Cloud',
+            room: 'A01',
+            campusId: 'principal',
+            days: [0, 1, 2, 3, 4, 5, 6],
+            startTime: toHHMM(stage1StartMin),
+            endTime: toHHMM(stage1StartMin + 60)
+        }];
+        await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/planner',
+            headers: { Cookie: adminCookie },
+            body: { planner: plannerStage1 }
+        });
+
+        const origFetchAck = globalThis.fetch;
+        const pushedPayloads = [];
+        globalThis.fetch = async (url, options) => {
+            pushedPayloads.push({ url, body: JSON.parse(options.body) });
+            return { ok: true, status: 200, text: async () => '{"id":"ok1"}' };
+        };
+        try {
+            const remStage1Res = await request({
+                port,
+                reqPath: '/api/reminders/active?dispatchPush=1',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(remStage1Res.status, 200);
+            const remStage1 = JSON.parse(remStage1Res.body).active.find((r) => r.type === 'class' && r.ackKey?.includes('ack-course-1'));
+            assert.ok(remStage1, 'Debe emitir recordatorio de traslado en el primer hito');
+            assert.strictEqual(remStage1.stageMin, driveT + 10);
+            assert.ok(remStage1.key.endsWith(`:m${driveT + 10}`));
+
+            const classPush1 = pushedPayloads.find((p) => p.body.title && p.body.title.includes('Arquitectura Cloud'));
+            assert.ok(classPush1, 'Debe enviar push ntfy para la clase');
+            assert.strictEqual(classPush1.body.actions[0].label, 'OK');
+            assert.strictEqual(classPush1.body.actions[0].action, 'http');
+            assert.ok(classPush1.body.actions[0].url.includes('action=ack'));
+            assert.strictEqual(classPush1.body.actions[1].label, 'Google Maps Route');
+            assert.strictEqual(classPush1.body.actions[2].label, 'Open App');
+
+            // Etapa 2 (sin pulsar OK): faltan Math.max(12, driveT - 2) min -> avanza al siguiente hito y borra el anterior
+            const stage2LeadOffset = driveT > 12 ? (driveT - 2) : 8;
+            const expectedStage2 = driveT > 12 ? driveT : 10;
+            plannerStage1.semesters[0].courses[0].startTime = toHHMM(localNowInfo.minutesOfDay + stage2LeadOffset);
+            plannerStage1.semesters[0].courses[0].endTime = toHHMM(localNowInfo.minutesOfDay + stage2LeadOffset + 60);
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/planner',
+                headers: { Cookie: adminCookie },
+                body: { planner: plannerStage1 }
+            });
+
+            pushedPayloads.length = 0;
+            const remStage2Res = await request({
+                port,
+                reqPath: '/api/reminders/active?dispatchPush=1',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(remStage2Res.status, 200);
+            const classActives2 = JSON.parse(remStage2Res.body).active.filter((r) => r.type === 'class' && r.ackKey?.includes('ack-course-1'));
+            assert.strictEqual(classActives2.length, 1, 'Solo debe existir la notificación del hito actual');
+            assert.strictEqual(classActives2[0].stageMin, expectedStage2);
+            assert.strictEqual(reminderStatesMap.has(`1:${remStage1.key}`), false, 'El hito anterior debe eliminarse automáticamente de RecordatoriosEstado');
+            assert.strictEqual(reminderStatesMap.has(`1:${classActives2[0].key}`), true);
+            assert.ok(pushedPayloads.some((p) => p.body.title && p.body.title.includes('Arquitectura Cloud')), 'Al no pulsar OK debe enviar push del nuevo hito');
+
+            // Etapa 3: usuario pulsa botón OK desde ntfy -> silencia todos los hitos restantes hoy
+            const okUrlObj = new URL(classPush1.body.actions[0].url);
+            const ackHttpRes = await request({
+                port,
+                method: 'POST',
+                reqPath: `${okUrlObj.pathname}${okUrlObj.search}`
+            });
+            assert.strictEqual(ackHttpRes.status, 200);
+            const ackBody = JSON.parse(ackHttpRes.body);
+            assert.strictEqual(ackBody.action, 'acknowledged');
+
+            // Incluso acercando la clase a 5 min (hito 10 min), ya no notifica ni aparece en activos
+            plannerStage1.semesters[0].courses[0].startTime = toHHMM(localNowInfo.minutesOfDay + 5);
+            plannerStage1.semesters[0].courses[0].endTime = toHHMM(localNowInfo.minutesOfDay + 65);
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/planner',
+                headers: { Cookie: adminCookie },
+                body: { planner: plannerStage1 }
+            });
+
+            pushedPayloads.length = 0;
+            const remAfterAckRes = await request({
+                port,
+                reqPath: '/api/reminders/active?dispatchPush=1',
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(remAfterAckRes.status, 200);
+            const classAfterAck = JSON.parse(remAfterAckRes.body).active.filter((r) => r.type === 'class' && r.ackKey?.includes('ack-course-1'));
+            assert.strictEqual(classAfterAck.length, 0, 'Tras confirmar OK no debe volver a mostrar ni enviar avisos para esa clase hoy');
+            assert.strictEqual(pushedPayloads.some((p) => p.body.title && p.body.title.includes('Arquitectura Cloud')), false);
+
+            // Dejar planificador limpio sin materias para los siguientes tests
+            plannerStage1.semesters[0].courses = [];
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/planner',
+                headers: { Cookie: adminCookie },
+                body: { planner: plannerStage1 }
+            });
+        } finally {
+            globalThis.fetch = origFetchAck;
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    timezone: prevSettingsForAck.timezone || 'America/Monterrey',
+                    phoneNotificationsEnabled: Boolean(prevSettingsForAck.phoneNotificationsEnabled),
+                    ntfyServerUrl: prevSettingsForAck.ntfyServerUrl || 'https://ntfy.sh',
+                    ntfyTopic: prevSettingsForAck.ntfyTopic || '',
+                    publicBaseUrl: prevSettingsForAck.publicBaseUrl || ''
+                }
+            });
+        }
     });
 
     it('soporta túnel de transporte cifrado X25519 + AES-256-CTR + HMAC-SHA256 para grandes volúmenes, rechaza manipulación/replay y expone Studio Multilingüe EN/KR/K-Pop', async () => {

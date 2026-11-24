@@ -2328,11 +2328,11 @@ if (formRegistro) {
 // ==========================================
 const resumenCalendarState = {
     anchorDate: new Date(),
-    weekStartDay: 0, // 0 = Domingo a Sábado, 1 = Lunes a Domingo
+    weekStartDay: 1, // 1 = Lunes a Domingo siempre
     exactDayIso: '' // Si el doctor pulsa un día exacto, filtra ese día; '' = semana completa
 };
 
-function getResumenWeekWindow(dateObj, weekStartDay = 0) {
+function getResumenWeekWindow(dateObj, weekStartDay = 1) {
     const base = dateObj instanceof Date && !Number.isNaN(dateObj.getTime()) ? new Date(dateObj) : new Date();
     base.setHours(0, 0, 0, 0);
     const jsDay = base.getDay();
@@ -2369,19 +2369,13 @@ function getResumenWeekWindow(dateObj, weekStartDay = 0) {
 function renderResumenVisualWeekStrip() {
     const stripEl = document.getElementById('resumenVisualWeekDays');
     const badgeRango = document.getElementById('resumenRangoVisualBadge');
-    const toggleBtn = document.getElementById('btnResumenWeekStartToggle');
     const allDaysBtn = document.getElementById('btnResumenWeekAllDays');
     const calDiaInput = document.getElementById('resumenCalendarioDia');
     if (!stripEl) return;
 
-    const win = getResumenWeekWindow(resumenCalendarState.anchorDate, resumenCalendarState.weekStartDay);
+    const win = getResumenWeekWindow(resumenCalendarState.anchorDate, 1);
     if (calDiaInput && !calDiaInput.matches(':focus')) {
         calDiaInput.value = resumenCalendarState.exactDayIso || formatLocalDate(resumenCalendarState.anchorDate);
-    }
-    if (toggleBtn) {
-        toggleBtn.textContent = resumenCalendarState.weekStartDay === 1
-            ? tUi('📆 Range: Mon–Sun', '📆 Rango: Lun–Dom')
-            : tUi('📆 Range: Sun–Sat', '📆 Rango: Dom–Sáb');
     }
     if (badgeRango) {
         if (resumenCalendarState.exactDayIso) {
@@ -2716,7 +2710,6 @@ function cargarResumenSemanalActual() {
     const btnPrevWk = document.getElementById('btnResumenPrevWeek');
     const btnTodayWk = document.getElementById('btnResumenTodayWeek');
     const btnNextWk = document.getElementById('btnResumenNextWeek');
-    const btnToggleStart = document.getElementById('btnResumenWeekStartToggle');
     const btnAllDays = document.getElementById('btnResumenWeekAllDays');
 
     if (!calDiaInput && !document.getElementById('resumenVisualWeekDays')) return;
@@ -2753,13 +2746,6 @@ function cargarResumenSemanalActual() {
     if (btnTodayWk) {
         btnTodayWk.addEventListener('click', () => {
             seleccionarSemanaPorFechaCalendario(new Date(), { exactDay: false });
-        });
-    }
-    if (btnToggleStart) {
-        btnToggleStart.addEventListener('click', () => {
-            resumenCalendarState.weekStartDay = resumenCalendarState.weekStartDay === 1 ? 0 : 1;
-            resumenCalendarState.exactDayIso = '';
-            cargarResumenSemanalActual();
         });
     }
     if (btnAllDays) {
@@ -13810,6 +13796,22 @@ function renderReminderTray(data) {
             actions.appendChild(doneBtn);
         }
 
+        const isCommuteAckCard = Boolean(
+            reminder.ackKey || ['class', 'residencias', 'work'].includes(String(reminder.type || ''))
+        );
+        if (isCommuteAckCard) {
+            const ackBtn = document.createElement('button');
+            ackBtn.type = 'button';
+            ackBtn.className = 'reminder-btn done';
+            ackBtn.textContent = tUi('✓ OK (Got it)', '✓ OK (Enterado)');
+            ackBtn.title = tUi(
+                'Confirm and stop remaining commute alerts for this class/shift today',
+                'Confirmar enterado y detener los siguientes avisos de esta clase/turno hoy'
+            );
+            ackBtn.addEventListener('click', () => acknowledgeCommuteReminder(reminder, ackBtn, card));
+            actions.appendChild(ackBtn);
+        }
+
         if (reminder.canSnooze) {
             [15, 30, 60].forEach(mins => {
                 const snzBtn = document.createElement('button');
@@ -13869,6 +13871,39 @@ function renderReminderTray(data) {
     }
 
     tray.hidden = false;
+}
+
+function acknowledgeCommuteReminder(reminder, triggerBtn, cardEl = null) {
+    const targetKey = reminder.ackKey || reminder.seriesKey || reminder.key;
+    runWithButtonLock(triggerBtn, async () => {
+        try {
+            const resData = await submitMutationRequest({
+                url: '/api/reminders/snooze',
+                method: 'POST',
+                scopeKey: `reminder-ack:${targetKey}`,
+                signature: `ack:${targetKey}`,
+                buildBody: () => ({
+                    key: targetKey,
+                    action: 'ack',
+                    type: reminder.type,
+                    title: reminder.title,
+                    message: reminder.message || ''
+                }),
+                parseJson: true
+            });
+            if (cardEl && cardEl.parentElement) {
+                cardEl.remove();
+            }
+            const tray = document.getElementById('reminderTray');
+            if (tray && tray.children.length === 0) {
+                tray.hidden = true;
+            }
+            showToast('ok', tServer(resData?.message || 'Entendido (OK). No se enviarán más avisos para esta clase/turno hoy.'));
+            cargarRecordatoriosActivos();
+        } catch (err) {
+            showToast('err', `${tUi('Error updating reminder', 'Error al actualizar recordatorio')}: ${tServer(err.message)}`);
+        }
+    }, { loadingText: 'OK...' });
 }
 
 function snoozeOrDismissReminder(reminder, action, minutes, triggerBtn) {
@@ -15922,7 +15957,6 @@ function renderPlannerResidenciasAndWorkUI() {
     setCheck('plannerClassRemindersEnabled', academicPlannerState.classRemindersEnabled !== false);
     setVal('plannerFarLeadMin', academicPlannerState.farLeadMinutesMin ?? 30);
     setVal('plannerNearLeadMin', academicPlannerState.nearLeadMinutes ?? 10);
-    setVal('plannerParkingBufferMin', academicPlannerState.parkingBufferMinutes ?? 8);
     setVal('plannerNearRadiusKm', academicPlannerState.nearRadiusKm ?? 0.85);
 
     const locs = academicPlannerState.locations || {};
@@ -16013,7 +16047,6 @@ function collectPlannerStateFromDOM() {
     academicPlannerState.classRemindersEnabled = Boolean(document.getElementById('plannerClassRemindersEnabled')?.checked);
     academicPlannerState.farLeadMinutesMin = Number(document.getElementById('plannerFarLeadMin')?.value || 30);
     academicPlannerState.nearLeadMinutes = Number(document.getElementById('plannerNearLeadMin')?.value || 10);
-    academicPlannerState.parkingBufferMinutes = Number(document.getElementById('plannerParkingBufferMin')?.value || 8);
     academicPlannerState.nearRadiusKm = Number(document.getElementById('plannerNearRadiusKm')?.value || 0.85);
 
     const homeCoords = cleanCoordPair('homeLocationLat', 'homeLocationLng');
@@ -16117,6 +16150,8 @@ function renderLiveCommuteCards(previewOrList = []) {
         rows.push({
             target: `🏢 Residencias (${academicPlannerState?.residencias?.companyName || tUi('Company', 'Empresa')})`,
             isNearCampus: rc.isNear,
+            commuteZone: rc.commuteZone,
+            alertMilestones: rc.alertMilestones,
             distanceKm: rc.distanceKm,
             driveMinutesWithTraffic: rc.driveMinutes,
             trafficLabel: rc.trafficLabel,
@@ -16129,6 +16164,8 @@ function renderLiveCommuteCards(previewOrList = []) {
         rows.push({
             target: `💼 ${tUi('Work', 'Trabajo')} (${academicPlannerState?.work?.companyName || tUi('Workplace', 'Lugar de Trabajo')})`,
             isNearCampus: wc.isNear,
+            commuteZone: wc.commuteZone,
+            alertMilestones: wc.alertMilestones,
             distanceKm: wc.distanceKm,
             driveMinutesWithTraffic: wc.driveMinutes,
             trafficLabel: wc.trafficLabel,
@@ -16158,16 +16195,19 @@ function renderLiveCommuteCards(previewOrList = []) {
         protectUserNode(h4);
         h4.textContent = `🎯 ${c.target}`;
 
+        const stagesText = Array.isArray(c.alertMilestones) && c.alertMilestones.length > 0
+            ? `${c.alertMilestones.join(', ')} min`
+            : `${c.recommendedLeadMinutes} min`;
         const badge = document.createElement('span');
         badge.className = `proofing-issue-chip ${c.isNearCampus ? 'is-grammar' : 'is-spelling'}`;
         badge.textContent = c.isNearCampus
             ? tUi(
-                `📍 On / Near (${c.distanceKm} km) → Notify ${c.recommendedLeadMinutes} min before`,
-                `📍 En sitio / Cerca (${c.distanceKm} km) → Avisar ${c.recommendedLeadMinutes} min antes`
+                `📍 On / Near (${c.distanceKm} km) → Alerts ${stagesText} before`,
+                `📍 En sitio / Cerca (${c.distanceKm} km) → Avisos ${stagesText} antes`
             )
             : tUi(
-                `🚗 Driving (${c.distanceKm} km · ${c.trafficLabel}) → ~${c.driveMinutesWithTraffic} min drive · Notify ${c.recommendedLeadMinutes} min before`,
-                `🚗 En auto (${c.distanceKm} km · ${c.trafficLabel}) → ~${c.driveMinutesWithTraffic} min traslado · Avisar ${c.recommendedLeadMinutes} min antes`
+                `🚗 Driving (${c.distanceKm} km · ${c.trafficLabel}) → ~${c.driveMinutesWithTraffic} min drive · Alerts ${stagesText} before`,
+                `🚗 En auto (${c.distanceKm} km · ${c.trafficLabel}) → ~${c.driveMinutesWithTraffic} min traslado · Avisos ${stagesText} antes`
             );
 
         meta.append(h4, badge);

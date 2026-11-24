@@ -2125,7 +2125,7 @@
                                 <div class="music-panel-card">
                                     <h3>📍 Saved Locations &amp; Commute Notification Rules</h3>
                                     <p class="muted-text" data-i18n-html="commute_rules_hint">
-                                        If you are at Home or far from the Tec (or it is your first class of the day), Daily Hub notifies you <strong>at least 30 minutes before</strong> (or earlier if driving + traffic takes longer). If you are already at or near the Tec, it notifies you <strong>10 minutes before</strong> with walking time between buildings.
+                                        Smart Maps-based alerts by zone: <strong>At Home</strong> (progressive alerts, e.g. 20 min drive → <strong>40, 30, 20 &amp; 10 min before</strong>), <strong>Away from Home &amp; campus</strong> (1 alert <strong>10 min before Maps drive time</strong>), and <strong>Near destination</strong> (only at <strong>20 &amp; 15 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to confirm and stop remaining alerts for that class/shift.
                                     </p>
 
                                     <label class="switch-row" style="margin: 10px 0;">
@@ -2142,17 +2142,13 @@
                                         <div class="form-group">
                                             <label for="plannerNearLeadMin">Alert when inside / near ITS campus (min):</label>
                                             <input type="number" id="plannerNearLeadMin" min="5" max="45" value="10">
-                                            <small class="form-hint">Default 10 min before class when already on campus.</small>
+                                            <small class="form-hint">Default 20 &amp; 15 min before class when already on or near campus.</small>
                                         </div>
                                     </div>
 
                                     <div class="form-row-2">
                                         <div class="form-group">
-                                            <label for="plannerParkingBufferMin">Parking &amp; walking buffer (min):</label>
-                                            <input type="number" id="plannerParkingBufferMin" min="0" max="30" value="8">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="plannerNearRadiusKm">Campus proximity radius (km):</label>
+                                            <label for="plannerNearRadiusKm">Home &amp; Campus/Destination proximity radius (km):</label>
                                             <input type="number" id="plannerNearRadiusKm" min="0.2" max="5" step="0.05" value="0.85">
                                         </div>
                                     </div>
@@ -2280,7 +2276,6 @@
                                 <button type="button" class="btn-secondary btn-small" id="btnResumenPrevWeek" title="Retroceder una semana completa">◀ Anterior</button>
                                 <button type="button" class="btn-secondary btn-small" id="btnResumenTodayWeek" title="Volver al día y semana actual">Hoy</button>
                                 <button type="button" class="btn-secondary btn-small" id="btnResumenNextWeek" title="Avanzar una semana completa">Siguiente ▶</button>
-                                <button type="button" class="btn-secondary btn-small" id="btnResumenWeekStartToggle" title="Alternar el rango semanal entre Lunes a Domingo o Domingo a Sábado">📆 Rango: Dom–Sáb</button>
                                 <span id="resumenRangoVisualBadge" class="badge-pill">Semana actual</span>
                             </div>
                         </div>
@@ -2298,65 +2293,65 @@
                                 <thead>
                                     <tr>
                                         <th></th>
-                                        <th>Sunday</th>
-                                        <th>Monday</th>
-                                        <th>Tuesday</th>
-                                        <th>Wednesday</th>
-                                        <th>Thursday</th>
-                                        <th>Friday</th>
-                                        <th>Saturday</th>
+                                        <th data-day-col="Monday">Monday</th>
+                                        <th data-day-col="Tuesday">Tuesday</th>
+                                        <th data-day-col="Wednesday">Wednesday</th>
+                                        <th data-day-col="Thursday">Thursday</th>
+                                        <th data-day-col="Friday">Friday</th>
+                                        <th data-day-col="Saturday">Saturday</th>
+                                        <th data-day-col="Sunday">Sunday</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
                                         <td class="row-label">Late Night</td>
-                                        <td class="mood-cell" data-day="Sunday" data-time="Madrugada"></td>
                                         <td class="mood-cell" data-day="Monday" data-time="Madrugada"></td>
                                         <td class="mood-cell" data-day="Tuesday" data-time="Madrugada"></td>
                                         <td class="mood-cell" data-day="Wednesday" data-time="Madrugada"></td>
                                         <td class="mood-cell" data-day="Thursday" data-time="Madrugada"></td>
                                         <td class="mood-cell" data-day="Friday" data-time="Madrugada"></td>
                                         <td class="mood-cell" data-day="Saturday" data-time="Madrugada"></td>
+                                        <td class="mood-cell" data-day="Sunday" data-time="Madrugada"></td>
                                     </tr>
                                     <tr>
                                         <td class="row-label">Morning</td>
-                                        <td class="mood-cell" data-day="Sunday" data-time="Morning"></td>
                                         <td class="mood-cell" data-day="Monday" data-time="Morning"></td>
                                         <td class="mood-cell" data-day="Tuesday" data-time="Morning"></td>
                                         <td class="mood-cell" data-day="Wednesday" data-time="Morning"></td>
                                         <td class="mood-cell" data-day="Thursday" data-time="Morning"></td>
                                         <td class="mood-cell" data-day="Friday" data-time="Morning"></td>
                                         <td class="mood-cell" data-day="Saturday" data-time="Morning"></td>
+                                        <td class="mood-cell" data-day="Sunday" data-time="Morning"></td>
                                     </tr>
                                     <tr>
                                         <td class="row-label">Noon</td>
-                                        <td class="mood-cell" data-day="Sunday" data-time="Noon"></td>
                                         <td class="mood-cell" data-day="Monday" data-time="Noon"></td>
                                         <td class="mood-cell" data-day="Tuesday" data-time="Noon"></td>
                                         <td class="mood-cell" data-day="Wednesday" data-time="Noon"></td>
                                         <td class="mood-cell" data-day="Thursday" data-time="Noon"></td>
                                         <td class="mood-cell" data-day="Friday" data-time="Noon"></td>
                                         <td class="mood-cell" data-day="Saturday" data-time="Noon"></td>
+                                        <td class="mood-cell" data-day="Sunday" data-time="Noon"></td>
                                     </tr>
                                     <tr>
                                         <td class="row-label">Afternoon</td>
-                                        <td class="mood-cell" data-day="Sunday" data-time="Afternoon"></td>
                                         <td class="mood-cell" data-day="Monday" data-time="Afternoon"></td>
                                         <td class="mood-cell" data-day="Tuesday" data-time="Afternoon"></td>
                                         <td class="mood-cell" data-day="Wednesday" data-time="Afternoon"></td>
                                         <td class="mood-cell" data-day="Thursday" data-time="Afternoon"></td>
                                         <td class="mood-cell" data-day="Friday" data-time="Afternoon"></td>
                                         <td class="mood-cell" data-day="Saturday" data-time="Afternoon"></td>
+                                        <td class="mood-cell" data-day="Sunday" data-time="Afternoon"></td>
                                     </tr>
                                     <tr>
                                         <td class="row-label">Night</td>
-                                        <td class="mood-cell" data-day="Sunday" data-time="Night"></td>
                                         <td class="mood-cell" data-day="Monday" data-time="Night"></td>
                                         <td class="mood-cell" data-day="Tuesday" data-time="Night"></td>
                                         <td class="mood-cell" data-day="Wednesday" data-time="Night"></td>
                                         <td class="mood-cell" data-day="Thursday" data-time="Night"></td>
                                         <td class="mood-cell" data-day="Friday" data-time="Night"></td>
                                         <td class="mood-cell" data-day="Saturday" data-time="Night"></td>
+                                        <td class="mood-cell" data-day="Sunday" data-time="Night"></td>
                                     </tr>
                                 </tbody>
                             </table>

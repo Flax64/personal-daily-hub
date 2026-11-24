@@ -861,8 +861,11 @@
         ['Minimum 30 min; increases automatically if driving + traffic takes longer.', 'Mínimo 30 min; aumenta automáticamente si el trayecto + tráfico tarda más.'],
         ['Alert when inside / near ITS campus (min):', 'Aviso dentro / cerca del campus ITS (min):'],
         ['Default 10 min before class when already on campus.', 'Predeterminado: 10 min antes de clase si ya estás en el campus.'],
-        ['Parking & walking buffer (min):', 'Margen de estacionamiento y caminata (min):'],
+        ['Default 20 & 15 min before class when already on or near campus.', 'Predeterminado: 20 y 15 min antes de clase si ya estás en o cerca del campus.'],
         ['Campus proximity radius (km):', 'Radio de cercanía al campus (km):'],
+        ['Home & Campus/Destination proximity radius (km):', 'Radio de cercanía para Casa y Campus/Destino (km):'],
+        ['✓ OK (Got it)', '✓ OK (Enterado)'],
+        ['Got it (OK). No further alerts will be sent for this class/shift today.', 'Entendido (OK). No se enviarán más avisos para esta clase/turno hoy.'],
         ['🏠 Home / Base Location (for 1st Class & Morning Commute)', '🏠 Casa / Ubicación Base (para 1ra Clase y Mañana)'],
         ['Home Label:', 'Etiqueta de Casa:'],
         ['Street Address / Neighborhood (auto-locates in Saltillo):', 'Calle, Número y Colonia (ubica automáticamente en Saltillo):'],
@@ -1927,8 +1930,8 @@
             es: 'El modo Auto usa <strong>YouTube estándar</strong> en PC y <strong>YouTube Music</strong> en celular, abriendo pistas individuales sin alterar jamás tus playlists personales.'
         },
         commute_rules_hint: {
-            en: 'If you are at Home or far from the Tec (or it is your first class of the day), Daily Hub notifies you <strong>at least 30 minutes before</strong> (or earlier if driving + traffic takes longer). If you are already at or near the Tec, it notifies you <strong>10 minutes before</strong> with walking time between buildings.',
-            es: 'Si estás en Casa o lejos del Tec (o es tu primera clase del día), Daily Hub te avisa <strong>al menos 30 minutos antes</strong> (o más temprano si el tráfico tarda más). Si ya estás dentro o cerca del Tec, te avisa <strong>10 minutos antes</strong> considerando la caminata entre edificios.'
+            en: 'Smart Maps-based alerts by zone: <strong>At Home</strong> (progressive alerts, e.g. 20 min drive → <strong>40, 30, 20 &amp; 10 min before</strong>), <strong>Away from Home &amp; campus</strong> (1 alert <strong>10 min before Maps drive time</strong>), and <strong>Near destination</strong> (only at <strong>20 &amp; 15 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to confirm and stop remaining alerts for that class/shift.',
+            es: 'Avisos inteligentes basados en Maps por zona: <strong>En Casa</strong> (avisos progresivos, ej. 20 min de trayecto → <strong>40, 30, 20 y 10 min antes</strong>), <strong>Lejos de Casa y del destino</strong> (1 aviso <strong>10 min antes del tiempo de Google Maps</strong>) y <strong>Cerca del lugar</strong> (únicamente <strong>20 y 15 min antes</strong>). Pulsa <strong>OK</strong> en ntfy o en la app para confirmar enterado y detener los siguientes avisos.'
         },
         home_loc_hint: {
             en: 'Pick your Home on the interactive map or enter your Saltillo street address, then click <strong>Save &amp; Find Home Location</strong>.',
