@@ -57,6 +57,22 @@ function formatCompactBytes(bytes) {
     return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function setResponsiveButtonContent(el, iconGlyph, labelText) {
+    if (!el) return;
+    if (el.classList && (el.classList.contains('icon-only-mobile') || el.classList.contains('btn-icon-mobile-compact'))) {
+        const glyphSpan = document.createElement('span');
+        glyphSpan.className = 'btn-icon-glyph';
+        glyphSpan.setAttribute('aria-hidden', 'true');
+        glyphSpan.textContent = iconGlyph;
+        const textSpan = document.createElement('span');
+        textSpan.className = 'btn-responsive-text';
+        textSpan.textContent = labelText;
+        el.replaceChildren(glyphSpan, textSpan);
+    } else {
+        el.textContent = iconGlyph ? `${iconGlyph} ${labelText}`.trim() : labelText;
+    }
+}
+
 function updateTransportStatusBadges() {
     const authPill = document.getElementById('authTunnelPill');
     const mobilePill = document.getElementById('mobileTunnelPill');
@@ -82,6 +98,10 @@ function updateTransportStatusBadges() {
             authPill.textContent = tUi('🔓 Standard Connection', '🔓 Conexión Estándar');
             authPill.classList.add('is-pending');
         }
+        if (mobilePill) {
+            setResponsiveButtonContent(mobilePill, '🔓', tUi('Standard', 'Estándar'));
+            mobilePill.classList.add('is-pending');
+        }
         setSidebarBadge('🔓', tUi('Privacy: Standard', 'Privacidad: Estándar'));
         return;
     }
@@ -94,7 +114,7 @@ function updateTransportStatusBadges() {
             authPill.classList.remove('is-pending');
         }
         if (mobilePill) {
-            mobilePill.textContent = tUi('🔐 Secure', '🔐 Seguro');
+            setResponsiveButtonContent(mobilePill, '🔐', tUi('Secure', 'Seguro'));
             mobilePill.classList.remove('is-pending');
         }
         setSidebarBadge('🔐', tUi('Encryption: Active', 'Cifrado: Activo'));
@@ -102,6 +122,10 @@ function updateTransportStatusBadges() {
         if (authPill) {
             authPill.textContent = tUi('🔐 Securing Connection...', '🔐 Protegiendo Conexión...');
             authPill.classList.add('is-pending');
+        }
+        if (mobilePill) {
+            setResponsiveButtonContent(mobilePill, '🔐', tUi('Securing...', 'Protegiendo...'));
+            mobilePill.classList.add('is-pending');
         }
         setSidebarBadge('🔐', tUi('Encryption: Connecting...', 'Cifrado: Conectando...'));
     }
@@ -1024,7 +1048,15 @@ function solicitarLlaveE2EEAsync({ forceEdit = false } = {}) {
     if (activeE2eeResolver) closeE2eeModal(null);
 
     input.value = saved.length === 32 ? saved : '';
-    input.type = 'password';
+    input.dataset.programmaticValue = saved.length === 32 ? 'true' : '';
+    if (isMaskedSecretInput(input)) {
+        input.type = 'text';
+        input.classList?.remove('is-secret-revealed');
+    } else {
+        input.type = 'password';
+    }
+    const e2eeToggleBtn = document.querySelector('.password-toggle-btn[data-toggle-password="e2eeKeyInput"]');
+    if (e2eeToggleBtn) setPasswordVisibilityState(input, e2eeToggleBtn, false);
     updateE2eeCharCounter();
     setInlineBanner('e2eeKeyModalStatus', '', '');
     if (forgetBtn) forgetBtn.hidden = saved.length === 0;
@@ -1032,7 +1064,11 @@ function solicitarLlaveE2EEAsync({ forceEdit = false } = {}) {
     return new Promise((resolve) => {
         activeE2eeResolver = resolve;
         modal.hidden = false;
-        setTimeout(() => input.focus(), 20);
+        setTimeout(() => {
+            input.readOnly = false;
+            if (typeof input.removeAttribute === 'function') input.removeAttribute('readonly');
+            input.focus();
+        }, 20);
 
         input.oninput = () => {
             updateE2eeCharCounter();
@@ -7019,6 +7055,7 @@ function initGlobalSelectionTranslator() {
         if (
             activeEl &&
             (activeEl.tagName === 'TEXTAREA' || (activeEl.tagName === 'INPUT' && !/^(?:password|checkbox|radio|file|range|color|date|time|submit|button|reset|hidden)$/i.test(activeEl.type || 'text'))) &&
+            !(activeEl.getAttribute && activeEl.getAttribute('data-secret-mask') === 'true') &&
             !isExcludedContainer(activeEl) &&
             typeof activeEl.selectionStart === 'number' &&
             typeof activeEl.selectionEnd === 'number' &&
@@ -7302,7 +7339,7 @@ function initGlobalFloatingTranslator() {
     const getSelectionText = () => {
         try {
             const active = document.activeElement;
-            if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type !== 'password')) && typeof active.selectionStart === 'number' && active.selectionEnd > active.selectionStart) {
+            if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type !== 'password' && !(active.getAttribute && active.getAttribute('data-secret-mask') === 'true'))) && typeof active.selectionStart === 'number' && active.selectionEnd > active.selectionStart) {
                 const txt = String(active.value || '').slice(active.selectionStart, active.selectionEnd).trim();
                 if (txt) return txt.slice(0, 600);
             }
@@ -13206,6 +13243,87 @@ function initMedicoAutofillShield() {
     }
 }
 
+function initGlobalNoAutofillGuard() {
+    if (typeof document === 'undefined') return;
+    const containers = document.querySelectorAll('#appShell, .modal-overlay:not(#authOverlay)');
+    if (!containers || !containers.length) return;
+
+    const armSensitiveField = (field) => {
+        if (!field || typeof field.setAttribute !== 'function') return;
+        const unlock = () => {
+            field.readOnly = false;
+            if (typeof field.removeAttribute === 'function') {
+                field.removeAttribute('readonly');
+            }
+        };
+        if (field.dataset?.autofillShielded !== '1') {
+            if (field.dataset) field.dataset.autofillShielded = '1';
+            if (!field.value || field.dataset?.userEdited !== 'true') {
+                field.readOnly = true;
+                field.setAttribute('readonly', 'readonly');
+            }
+            ['focus', 'pointerdown', 'keydown', 'touchstart'].forEach((evt) => {
+                field.addEventListener?.(evt, unlock, { passive: true });
+            });
+            ['input', 'paste', 'change'].forEach((evt) => {
+                field.addEventListener?.(evt, () => {
+                    if (!field.readOnly && field.dataset) {
+                        field.dataset.userEdited = 'true';
+                    }
+                });
+            });
+        }
+    };
+
+    const sensitiveFields = [];
+    containers.forEach((root) => {
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        root.querySelectorAll('form').forEach((form) => {
+            if (form.closest?.('#authOverlay, #authLoginForm')) return;
+            form.setAttribute('autocomplete', 'off');
+        });
+        root.querySelectorAll('input, textarea, select').forEach((el) => {
+            if (!el || el.closest?.('#authOverlay, #authLoginForm')) return;
+            const inputType = String(el.type || '').toLowerCase();
+            if (/^(?:hidden|submit|button|reset)$/.test(inputType)) return;
+            if (el.tagName === 'INPUT' && (inputType === 'checkbox' || inputType === 'radio')) {
+                el.setAttribute('autocomplete', 'off');
+                return;
+            }
+            el.setAttribute('autocomplete', 'off');
+            el.setAttribute('data-lpignore', 'true');
+            el.setAttribute('data-1p-ignore', 'true');
+            el.setAttribute('data-bwignore', 'true');
+            el.setAttribute('data-form-type', 'other');
+
+            const isSensitive =
+                el.hasAttribute('data-no-autofill') ||
+                el.hasAttribute('data-secret-mask') ||
+                ['medicoEmail', 'medicoPassword', 'setGeminiApiKey', 'e2eeKeyInput'].includes(el.id);
+
+            if (isSensitive) {
+                armSensitiveField(el);
+                sensitiveFields.push(el);
+            }
+        });
+    });
+
+    const clearGhostAutofill = () => {
+        sensitiveFields.forEach((field) => {
+            if (!field) return;
+            const edited = field.dataset?.userEdited === 'true';
+            const programmatic = field.dataset?.programmaticValue === 'true';
+            if (!edited && !programmatic && document.activeElement !== field && field.value) {
+                field.value = '';
+                field.readOnly = true;
+                field.setAttribute('readonly', 'readonly');
+            }
+        });
+    };
+    setTimeout(clearGhostAutofill, 120);
+    setTimeout(clearGhostAutofill, 450);
+}
+
 function cargarMedicos() {
     resetMedicoAutofillShield({ forceClear: false });
     const container = document.getElementById('medicosList');
@@ -13339,14 +13457,29 @@ function cargarMedicos() {
 const PASSWORD_EYE_OPEN_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
 const PASSWORD_EYE_OFF_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
 
+function isMaskedSecretInput(input) {
+    if (!input) return false;
+    return Boolean(
+        (input.getAttribute && input.getAttribute('data-secret-mask') === 'true') ||
+        input.dataset?.secretMask === 'true' ||
+        input.classList?.contains('secret-input-masked')
+    );
+}
+
 function setPasswordVisibilityState(input, btn, visible) {
     if (!input || !btn) return;
-    input.type = visible ? 'text' : 'password';
-    btn.innerHTML = visible ? PASSWORD_EYE_OFF_SVG : PASSWORD_EYE_OPEN_SVG;
-    const label = visible ? 'Hide password' : 'Show password';
+    const isVisible = Boolean(visible);
+    if (isMaskedSecretInput(input)) {
+        input.type = 'text';
+        input.classList?.toggle('is-secret-revealed', isVisible);
+    } else {
+        input.type = isVisible ? 'text' : 'password';
+    }
+    btn.innerHTML = isVisible ? PASSWORD_EYE_OFF_SVG : PASSWORD_EYE_OPEN_SVG;
+    const label = isVisible ? 'Hide password' : 'Show password';
     btn.setAttribute('aria-label', label);
     btn.title = label;
-    btn.setAttribute('aria-pressed', String(visible));
+    btn.setAttribute('aria-pressed', String(isVisible));
 }
 
 function resetPasswordToggles() {
@@ -13364,13 +13497,15 @@ function initPasswordToggles() {
 
         setPasswordVisibilityState(input, btn, false);
         btn.addEventListener('click', () => {
-            if (input.hasAttribute && input.hasAttribute('data-no-autofill')) {
+            if (input.hasAttribute && (input.hasAttribute('data-no-autofill') || input.hasAttribute('data-secret-mask'))) {
                 input.readOnly = false;
                 if (typeof input.removeAttribute === 'function') {
                     input.removeAttribute('readonly');
                 }
             }
-            const willShow = input.type === 'password';
+            const willShow = isMaskedSecretInput(input)
+                ? !input.classList?.contains('is-secret-revealed')
+                : input.type === 'password';
             setPasswordVisibilityState(input, btn, willShow);
             input.focus();
         });
@@ -14028,9 +14163,11 @@ function updateE2eeKeyStatusUI() {
         if (!pill) return;
         pill.classList.toggle('is-ready', isReady);
         pill.classList.toggle('is-missing', !isReady);
-        pill.textContent = isReady
-            ? tUi('🔐 E2EE Key Ready', '🔐 Llave E2EE Lista')
-            : tUi('🔑 Set 32-char Key', '🔑 Definir Llave 32 chars');
+        setResponsiveButtonContent(
+            pill,
+            isReady ? '🔐' : '🔑',
+            isReady ? tUi('E2EE Key Ready', 'Llave E2EE Lista') : tUi('Set 32-char Key', 'Definir Llave 32 chars')
+        );
     });
 }
 
@@ -14127,6 +14264,12 @@ function populateSettingsForm(settings = {}) {
     if (apiKeyEl) {
         apiKeyEl.value = '';
         apiKeyEl.dataset.pendingClear = '0';
+        delete apiKeyEl.dataset.userEdited;
+        apiKeyEl.readOnly = true;
+        if (typeof apiKeyEl.setAttribute === 'function') {
+            apiKeyEl.setAttribute('readonly', 'readonly');
+        }
+        resetPasswordToggles();
     }
     const keyStatusEl = document.getElementById('settingsGeminiKeyStatus');
     if (keyStatusEl) {
@@ -15441,22 +15584,28 @@ function renderItsCroquisDirectory(directory) {
 
         const editBtn = document.createElement('button');
         editBtn.type = 'button';
-        editBtn.className = 'btn-secondary btn-small';
-        editBtn.textContent = tUi('✏️ Edit', '✏️ Editar');
+        editBtn.className = 'btn-secondary btn-small icon-only-mobile';
+        editBtn.title = tUi('Edit campus or building', 'Editar campus o edificio');
+        editBtn.setAttribute('aria-label', editBtn.title);
+        setResponsiveButtonContent(editBtn, '✏️', tUi('Edit', 'Editar'));
         editBtn.addEventListener('click', () => openCampusPlaceModal(campId));
 
         const mapLink = document.createElement('a');
         mapLink.href = `https://www.google.com/maps/search/?api=1&query=${camp.lat},${camp.lng}`;
         mapLink.target = '_blank';
         mapLink.rel = 'noopener noreferrer';
-        mapLink.className = 'btn-secondary btn-small';
+        mapLink.className = 'btn-secondary btn-small icon-only-mobile';
         mapLink.style.textDecoration = 'none';
-        mapLink.textContent = tUi('🗺️ View on Map', '🗺️ Ver en Mapa');
+        mapLink.title = tUi('View location on Google Maps', 'Ver ubicación en Google Maps');
+        mapLink.setAttribute('aria-label', mapLink.title);
+        setResponsiveButtonContent(mapLink, '🗺️', tUi('View on Map', 'Ver en Mapa'));
 
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
-        delBtn.className = 'btn-secondary btn-small btn-danger-outline';
-        delBtn.textContent = tUi('🗑️ Delete', '🗑️ Borrar');
+        delBtn.className = 'btn-secondary btn-small btn-danger-outline icon-only-mobile';
+        delBtn.title = tUi('Delete campus or building', 'Borrar campus o edificio');
+        delBtn.setAttribute('aria-label', delBtn.title);
+        setResponsiveButtonContent(delBtn, '🗑️', tUi('Delete', 'Borrar'));
         delBtn.addEventListener('click', () => {
             const confirmMsg = tUi(
                 `Delete location "${camp.name || campId}"? Classes assigned to it will remain saved.`,
@@ -19057,6 +19206,7 @@ function initApp() {
     initTheme();
     actualizarCabecerasDeFecha();
     initPasswordToggles();
+    initGlobalNoAutofillGuard();
     initSingleTabAndNtfyHandover();
     initRealtimeSessionSync();
     initGlobalModalScrollLock();

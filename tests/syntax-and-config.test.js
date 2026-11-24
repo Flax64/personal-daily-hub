@@ -441,8 +441,42 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
 
         assert.match(indexHtml, /<form\s+id="medicoForm"\s+autocomplete="off">/);
         assert.match(indexHtml, /id="medicoEmail"[^>]*data-no-autofill="true"/);
-        assert.match(indexHtml, /id="medicoPassword"[^>]*autocomplete="new-password"[^>]*data-no-autofill="true"/);
+        assert.match(indexHtml, /id="medicoPassword"[^>]*data-secret-mask="true"[^>]*data-no-autofill="true"/);
         assert.ok(indexHtml.includes('data-toggle-password="medicoPassword"'));
+
+        // Regresión anti-recortes de inputs time/móvil, compactación por ícono y bloqueo global de autocompletado fuera de Login
+        assert.match(styleCssText, /\.secret-input-masked\s*\{[\s\S]*?-webkit-text-security:\s*disc/);
+        assert.ok(styleCssText.includes('.btn-responsive-text') && styleCssText.includes('.icon-only-mobile'),
+            'style.css debe definir .btn-responsive-text y .icon-only-mobile para compactar botones en móvil');
+        const sleepRuleTimeMatch = styleCssText.match(/\.rule-row-split input\[type="time"\][\s\S]*?min-width:\s*(\d+)px/);
+        assert.ok(sleepRuleTimeMatch && Number(sleepRuleTimeMatch[1]) >= 150,
+            'input[type="time"] en reglas de sueño/recordatorios debe tener min-width >= 150px para evitar recortes en formato 12h');
+
+        assert.match(indexHtml, /id="loginEmail"[^>]*autocomplete="email"/);
+        assert.match(indexHtml, /id="loginPassword"[^>]*autocomplete="current-password"/);
+        assert.match(indexHtml, /<input\s+type="password"\s+id="loginPassword"/);
+
+        for (const maskedId of ['medicoPassword', 'setGeminiApiKey', 'e2eeKeyInput']) {
+            assert.match(
+                indexHtml,
+                new RegExp(`type="text"[^>]*class="[^"]*secret-input-masked[^"]*"[^>]*id="${maskedId}"[^>]*data-secret-mask="true"`),
+                `#${maskedId} debe usar type="text" + .secret-input-masked + data-secret-mask="true" sin disparar gestores de contraseñas`
+            );
+            assert.match(
+                indexHtml,
+                new RegExp(`id="${maskedId}"[^>]*autocomplete="off"[^>]*data-lpignore="true"`),
+                `#${maskedId} debe desactivar autocompletado del navegador`
+            );
+        }
+
+        const appShellHtml = indexHtml.slice(indexHtml.indexOf('id="appShell"'));
+        const appFormsWithoutOff = [...appShellHtml.matchAll(/<form\b([^>]*)>/gi)]
+            .map((m) => m[1])
+            .filter((attrs) => !/autocomplete="off"/i.test(attrs));
+        assert.deepEqual(appFormsWithoutOff, [], `Todos los <form> en #appShell/modales deben llevar autocomplete="off": ${JSON.stringify(appFormsWithoutOff)}`);
+
+        assert.ok(frontendSrcCheck.includes('function initGlobalNoAutofillGuard(') && frontendSrcCheck.includes('initGlobalNoAutofillGuard();'),
+            'public/frontend.js debe definir e invocar initGlobalNoAutofillGuard()');
 
         assert.ok(frontendSrcCheck.includes('history.pushState({ view: targetView }, \'\', targetHash)'));
         assert.ok(frontendSrcCheck.includes("window.addEventListener('popstate'"));

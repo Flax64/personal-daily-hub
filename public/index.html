@@ -235,8 +235,10 @@
                         <path d="M14.8 9.8c1 1.7 2.6 3.2 4.8 4.2"/>
                     </svg>
                 </button>
-                <button type="button" class="tunnel-pill tunnel-pill-compact" id="mobileTunnelPill"
-                    title="Ver estado de privacidad y conexión en Configuración" data-go-view="settings">🔐 Seguro</button>
+                <button type="button" class="tunnel-pill tunnel-pill-compact icon-only-mobile" id="mobileTunnelPill"
+                    title="Ver estado de privacidad y conexión en Configuración"
+                    aria-label="Ver estado de privacidad y conexión en Configuración"
+                    data-go-view="settings"><span class="btn-icon-glyph" aria-hidden="true">🔐</span><span class="btn-responsive-text">Seguro</span></button>
                 <button type="button" class="icon-btn lang-icon-btn" id="btnLangToggleMobile"
                     title="Cambiar idioma (English / Español)" aria-label="Switch UI language (English / Español)">EN</button>
                 <span class="moment-pill" id="mobileMomentBadge" title="Momento actual del día">--</span>
@@ -610,13 +612,14 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
-                            <button type="button" class="btn-secondary-pill" data-go-view="resumen">📈 Weekly Summary</button>
+                            <button type="button" class="btn-secondary-pill icon-only-mobile" data-go-view="resumen"
+                                title="Open Weekly Summary" aria-label="Open Weekly Summary"><span class="btn-icon-glyph" aria-hidden="true">📈</span><span class="btn-responsive-text">Weekly Summary</span></button>
                         </div>
                     </div>
 
                     <div class="view-grid-2">
                         <div class="card view-main-card">
-                            <form id="moodForm">
+                            <form id="moodForm" autocomplete="off">
                                 <div class="form-row-2">
                                     <div class="form-group">
                                         <label for="fecha">Date:</label>
@@ -729,13 +732,14 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
-                            <button type="button" class="btn-secondary-pill" data-go-view="resumen">📈 Weekly Clinician View</button>
+                            <button type="button" class="btn-secondary-pill icon-only-mobile" data-go-view="resumen"
+                                title="Open Weekly Summary" aria-label="Open Weekly Summary"><span class="btn-icon-glyph" aria-hidden="true">📈</span><span class="btn-responsive-text">Weekly Clinician View</span></button>
                         </div>
                     </div>
 
                     <div class="view-grid-2">
                         <div class="card view-main-card">
-                            <form id="crisisForm">
+                            <form id="crisisForm" autocomplete="off">
                                 <div class="form-row-2">
                                     <div class="form-group">
                                         <label for="crisisFecha">Date (Fecha):</label>
@@ -834,14 +838,16 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
-                            <button type="button" class="btn-secondary-pill" id="btnSleepOpenSettings">⚙️ Sleep Rules &amp; Alert</button>
-                            <button type="button" class="btn-secondary-pill" data-go-view="resumen">📈 Weekly Summary</button>
+                            <button type="button" class="btn-secondary-pill icon-only-mobile" id="btnSleepOpenSettings"
+                                title="Configure sleep rules and morning reminder" aria-label="Configure sleep rules and morning reminder"><span class="btn-icon-glyph" aria-hidden="true">⚙️</span><span class="btn-responsive-text">Sleep Rules &amp; Alert</span></button>
+                            <button type="button" class="btn-secondary-pill icon-only-mobile" data-go-view="resumen"
+                                title="Open Weekly Summary" aria-label="Open Weekly Summary"><span class="btn-icon-glyph" aria-hidden="true">📈</span><span class="btn-responsive-text">Weekly Summary</span></button>
                         </div>
                     </div>
 
                     <div class="view-grid-2">
                         <div class="card view-main-card">
-                            <form id="sleepForm">
+                            <form id="sleepForm" autocomplete="off">
                                 <input type="hidden" id="sleepTipoRegistro" value="normal">
 
                                 <div class="form-group">
@@ -968,7 +974,7 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
-                            <button type="button" class="e2ee-key-pill" id="journalE2eePill" title="Configurar o cambiar tu llave privada de cifrado">🔑 Llave Privada</button>
+                            <button type="button" class="e2ee-key-pill icon-only-mobile" id="journalE2eePill" title="Configurar o cambiar tu llave privada de cifrado" aria-label="Configurar o cambiar tu llave privada de cifrado"><span class="btn-icon-glyph" aria-hidden="true">🔑</span><span class="btn-responsive-text">Llave Privada</span></button>
                         </div>
                     </div>
 
@@ -986,7 +992,7 @@
                     </div>
 
                     <div class="card view-main-card">
-                        <form id="journalForm">
+                        <form id="journalForm" autocomplete="off">
                             <div class="journal-editor-bar">
                                 <span id="journalWordCount" class="muted-text">0 words · 0 chars</span>
                                 <div class="journal-editor-actions">
@@ -1043,8 +1049,8 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
-                            <button type="button" class="btn-secondary btn-small" id="btnOpenStudyViewer" title="Abrir visor de estudio en modo solo lectura desde tu cuaderno Word">📚 Ver Cuaderno (Solo Lectura)</button>
-                            <button type="button" class="e2ee-key-pill" id="englishE2eePill" title="Configurar o desbloquear tu llave privada de cifrado">🔑 Llave Privada</button>
+                            <button type="button" class="btn-secondary btn-small icon-only-mobile" id="btnOpenStudyViewer" title="Abrir visor de estudio en modo solo lectura desde tu cuaderno Word" aria-label="Abrir visor de estudio en modo solo lectura desde tu cuaderno Word"><span class="btn-icon-glyph" aria-hidden="true">📚</span><span class="btn-responsive-text">Ver Cuaderno (Solo Lectura)</span></button>
+                            <button type="button" class="e2ee-key-pill icon-only-mobile" id="englishE2eePill" title="Configurar o desbloquear tu llave privada de cifrado" aria-label="Configurar o desbloquear tu llave privada de cifrado"><span class="btn-icon-glyph" aria-hidden="true">🔑</span><span class="btn-responsive-text">Llave Privada</span></button>
                         </div>
                     </div>
 
@@ -1085,7 +1091,7 @@
                             aria-selected="false">🎵 Learn with Music + AI</button>
                     </div>
 
-                    <form id="englishForm">
+                    <form id="englishForm" autocomplete="off">
                         <input type="hidden" id="englishCategoryInput" value="vocabulary">
                         <input type="hidden" id="studyLanguageInput" value="en_ko">
 
@@ -1471,7 +1477,7 @@
                                 </div>
                             </section>
 
-                            <form id="musicWordNotesForm">
+                            <form id="musicWordNotesForm" autocomplete="off">
                                 <input type="hidden" id="musicWordSongId" value="">
                                 <div class="form-group">
                                     <div class="ai-autosync-bar">
@@ -1737,7 +1743,8 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
-                            <button type="button" class="btn-secondary-pill" data-go-view="horario">🎓 ITS Schedule &amp; Commute</button>
+                            <button type="button" class="btn-secondary-pill icon-only-mobile" data-go-view="horario"
+                                title="Open ITS Schedule &amp; Commute" aria-label="Open ITS Schedule &amp; Commute"><span class="btn-icon-glyph" aria-hidden="true">🎓</span><span class="btn-responsive-text">ITS Schedule &amp; Commute</span></button>
                             <button type="button" class="btn-agenda-add-main" id="btnOpenAgendaModal">
                                 + New Activity
                             </button>
@@ -1752,8 +1759,8 @@
                             <button type="button" class="agenda-nav-btn" id="btnAgendaNextWeek"
                                 aria-label="Next week">▶</button>
                             <button type="button" class="agenda-chip-btn" id="btnAgendaToday">Today</button>
-                            <button type="button" class="agenda-chip-btn" id="btnToggleAgendaCalendar"
-                                aria-expanded="false" title="Abrir calendario mensual para navegar semanas">📅 Calendario</button>
+                            <button type="button" class="agenda-chip-btn icon-only-mobile" id="btnToggleAgendaCalendar"
+                                aria-expanded="false" title="Abrir calendario mensual para navegar semanas" aria-label="Abrir calendario mensual para navegar semanas"><span class="btn-icon-glyph" aria-hidden="true">📅</span><span class="btn-responsive-text">Calendario</span></button>
                         </div>
                         <div class="agenda-view-controls">
                             <button type="button" class="agenda-chip-btn" id="btnToggleWeekend">Mon - Fri Only</button>
@@ -1908,7 +1915,7 @@
                         <!-- TAB 2: VACATIONS & ACADEMIC BREAKS -->
                         <div class="planner-tab-panel" id="plannerPanelVacations" hidden>
                             <div class="music-studio-grid">
-                                <form id="plannerVacationForm" class="music-panel-card">
+                                <form id="plannerVacationForm" class="music-panel-card" autocomplete="off">
                                     <h3>Add Vacation / Academic Break</h3>
                                     <p class="muted-text">During these dates, automatic class notifications are paused and Agenda sync skips class generation.</p>
                                     <div class="form-group">
@@ -2273,9 +2280,9 @@
                                 <label for="resumenCalendarioDia"><strong>📅 Calendario Visual (Día o Semana):</strong></label>
                                 <input type="date" id="resumenCalendarioDia" class="select-input"
                                     title="Haz clic en el calendario para elegir un día exacto o consultar toda su semana">
-                                <button type="button" class="btn-secondary btn-small" id="btnResumenPrevWeek" title="Retroceder una semana completa">◀ Anterior</button>
+                                <button type="button" class="btn-secondary btn-small icon-only-mobile" id="btnResumenPrevWeek" title="Retroceder una semana completa" aria-label="Retroceder una semana completa"><span class="btn-icon-glyph" aria-hidden="true">◀</span><span class="btn-responsive-text">Anterior</span></button>
                                 <button type="button" class="btn-secondary btn-small" id="btnResumenTodayWeek" title="Volver al día y semana actual">Hoy</button>
-                                <button type="button" class="btn-secondary btn-small" id="btnResumenNextWeek" title="Avanzar una semana completa">Siguiente ▶</button>
+                                <button type="button" class="btn-secondary btn-small icon-only-mobile" id="btnResumenNextWeek" title="Avanzar una semana completa" aria-label="Avanzar una semana completa"><span class="btn-responsive-text">Siguiente</span><span class="btn-icon-glyph" aria-hidden="true">▶</span></button>
                                 <span id="resumenRangoVisualBadge" class="badge-pill">Semana actual</span>
                             </div>
                         </div>
@@ -2433,13 +2440,13 @@
                                 </div>
                                 <div class="form-group">
                                     <label for="medicoEmail">Doctor's email address:</label>
-                                    <input type="email" id="medicoEmail" name="psych_contact_mail" autocomplete="off" readonly data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" maxlength="150" placeholder="doctor@email.com" required>
+                                    <input type="email" id="medicoEmail" name="pdh_clinician_contact_field" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" maxlength="150" placeholder="doctor@email.com" required>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label for="medicoPassword">Assigned password (8–128 chars, letters &amp; numbers):</label>
                                 <div class="password-input-wrap">
-                                    <input type="password" id="medicoPassword" name="psych_assigned_secret" autocomplete="new-password" readonly data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" minlength="8" maxlength="128"
+                                    <input type="text" class="secret-input-masked" id="medicoPassword" name="pdh_clinician_key_field" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly data-secret-mask="true" data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" minlength="8" maxlength="128"
                                         placeholder="At least 8 characters with letters and numbers" required>
                                     <button type="button" class="password-toggle-btn" data-toggle-password="medicoPassword"
                                         aria-label="Show password" aria-pressed="false" title="Show password"></button>
@@ -2474,14 +2481,15 @@
                             </div>
                         </div>
                         <div class="settings-header-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
-                            <button type="button" class="btn-secondary-pill" data-go-view="guia">📖 Visual Guide</button>
+                            <button type="button" class="btn-secondary-pill icon-only-mobile" data-go-view="guia"
+                                title="Open Visual Guide" aria-label="Open Visual Guide"><span class="btn-icon-glyph" aria-hidden="true">📖</span><span class="btn-responsive-text">Visual Guide</span></button>
                             <button type="button" class="btn-secondary-pill" id="btnSettingsLangToggle">🌐 Switch to Español</button>
                         </div>
                     </div>
 
                     <div id="settingsLoadingBanner" class="section-loading-banner" hidden></div>
 
-                    <form id="settingsForm" class="settings-grid">
+                    <form id="settingsForm" class="settings-grid" autocomplete="off">
                         <!-- Card A: Mobile Notification Bar Delivery -->
                         <section class="card settings-card">
                             <h3>📱 Phone Notification Bar (ntfy)</h3>
@@ -2689,8 +2697,14 @@
                             <div class="form-group">
                                 <label for="setGeminiApiKey">Clave API de Google Gemini (opcional · guardada de forma cifrada):</label>
                                 <div class="settings-inline-actions">
-                                    <input type="password" id="setGeminiApiKey" maxlength="180" autocomplete="off"
-                                        placeholder="Deja vacío para conservar tu clave actual o pega AIzaSy...">
+                                    <div class="password-input-wrap secret-inline-wrap">
+                                        <input type="text" class="secret-input-masked" id="setGeminiApiKey" name="pdh_gemini_token_field" maxlength="180"
+                                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly
+                                            data-secret-mask="true" data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
+                                            placeholder="Deja vacío para conservar tu clave actual o pega AIzaSy...">
+                                        <button type="button" class="password-toggle-btn" data-toggle-password="setGeminiApiKey"
+                                            aria-label="Show password" aria-pressed="false" title="Show password"></button>
+                                    </div>
                                     <button type="button" class="agenda-chip-btn" id="btnTestGeminiConnection" title="Verificar conexión con Gemini y cargar tus modelos activos disponibles">🧪 Probar Conexión IA</button>
                                     <button type="button" class="agenda-chip-btn" id="btnClearGeminiKey" title="Quitar la clave guardada en tu cuenta">Borrar Clave</button>
                                 </div>
@@ -2819,7 +2833,7 @@
                 <h3 id="agendaModalTitle">New Activity</h3>
                 <button type="button" class="modal-close-btn" id="btnCloseAgendaModal" aria-label="Close">✕</button>
             </div>
-            <form id="agendaForm">
+            <form id="agendaForm" autocomplete="off">
                 <input type="hidden" id="agendaEditId" value="">
 
                 <div class="form-group">
@@ -3052,7 +3066,9 @@
                         <span id="e2eeKeyCharCount" class="muted-text">0 / 32 characters</span>
                     </div>
                     <div class="password-input-wrap">
-                        <input type="password" id="e2eeKeyInput" minlength="32" maxlength="32"
+                        <input type="text" class="secret-input-masked" id="e2eeKeyInput" name="pdh_e2ee_vault_field" minlength="32" maxlength="32"
+                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly
+                            data-secret-mask="true" data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
                             placeholder="Exact 32 characters matching your PC sync key" required>
                         <button type="button" class="password-toggle-btn" data-toggle-password="e2eeKeyInput"
                             aria-label="Show key" aria-pressed="false" title="Show key"></button>

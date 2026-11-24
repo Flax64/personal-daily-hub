@@ -1879,7 +1879,22 @@
         ['Save Location', 'Guardar Lugar'],
         ['✏️ Edit', '✏️ Editar'],
         ['🗺️ View on Map', '🗺️ Ver en Mapa'],
-        ['🗑️ Delete', '🗑️ Borrar']
+        ['🗑️ Delete', '🗑️ Borrar'],
+        ['Sleep Rules & Alert', 'Reglas y Alerta de Sueño'],
+        ['ITS Schedule & Commute', 'Horario ITS y Traslado'],
+        ['View Notebook (Read-Only)', 'Ver Cuaderno (Solo Lectura)'],
+        ['Private Key', 'Llave Privada'],
+        ['Secure', 'Seguro'],
+        ['Previous', 'Anterior'],
+        ['Next', 'Siguiente'],
+        ['View on Map', 'Ver en Mapa'],
+        ['Configure sleep rules and morning reminder', 'Configurar reglas de sueño y recordatorio matutino'],
+        ['Open Weekly Summary', 'Abrir Resumen Semanal'],
+        ['Open ITS Schedule & Commute', 'Abrir Horario ITS y Traslado'],
+        ['Open Visual Guide', 'Abrir Guía Visual'],
+        ['Edit campus or building', 'Editar campus o edificio'],
+        ['View location on Google Maps', 'Ver ubicación en Google Maps'],
+        ['Delete campus or building', 'Borrar campus o edificio']
     ];
 
     var EN_FROM_KEY = new Map();
