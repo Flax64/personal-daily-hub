@@ -11754,6 +11754,7 @@ app.get('/api/system/logs', apiReadLimiter.middleware, requireAdmin, (req, res) 
     });
 });
 
+<<<<<<< HEAD
 // =========================================================================
 // SINCRONIZACIÓN EN TIEMPO REAL ENTRE SESIONES Y RÉPLICAS (SSE + SyncRevisions)
 // =========================================================================
@@ -11798,20 +11799,46 @@ function filterRevisionsForRole(revisions, role) {
     const filtered = {};
     for (const s of CLINICAL_SYNC_SCOPES) {
         filtered[s] = Number(revisions[s]) || 1;
+=======
+// ==========================================
+// SINCRONIZACIÓN EN TIEMPO REAL (SSE + REVISIONES POR SCOPE)
+// ==========================================
+const SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
+const CLINICAL_SYNC_SCOPES = ['mood', 'sleep', 'crisis'];
+const localSyncRevisions = Object.fromEntries(SYNC_SCOPES.map((scope) => [scope, 1]));
+const sseSyncClients = new Set();
+let syncReplicaPollTimer = null;
+let syncReplicaPollInFlight = false;
+
+function filterSyncRevisionsForRole(revs = {}, rol = 'admin') {
+    const allowedScopes = rol === 'psiquiatra' ? CLINICAL_SYNC_SCOPES : SYNC_SCOPES;
+    const filtered = {};
+    for (const scope of allowedScopes) {
+        const val = Number(revs?.[scope]);
+        filtered[scope] = Number.isFinite(val) && val > 0 ? val : 1;
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
     }
     return filtered;
 }
 
+<<<<<<< HEAD
 async function fetchSyncRevisions({ force = false } = {}) {
     const now = Date.now();
     if (!force && syncRevisionsCacheAt > 0 && (now - syncRevisionsCacheAt) < SYNC_CACHE_TTL_MS) {
         return { ...syncRevisionsSnapshot };
+=======
+async function fetchSyncRevisions() {
+    const base = {};
+    for (const scope of SYNC_SCOPES) {
+        base[scope] = Number(localSyncRevisions[scope]) || 1;
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
     }
     try {
         const rows = await dbQueryAsync('SELECT scope, revision FROM SyncRevisions');
         if (Array.isArray(rows)) {
             for (const row of rows) {
                 const scope = String(row?.scope || '').trim();
+<<<<<<< HEAD
                 if (!SYNC_SCOPES.includes(scope)) continue;
                 const rev = Number(row.revision);
                 if (Number.isFinite(rev) && rev > syncRevisionsSnapshot[scope]) {
@@ -11824,10 +11851,102 @@ async function fetchSyncRevisions({ force = false } = {}) {
         // Keep last snapshot in RAM if DB temporarily unavailable
     }
     return { ...syncRevisionsSnapshot };
+=======
+                const rev = Number(row?.revision);
+                if (SYNC_SCOPES.includes(scope) && Number.isFinite(rev) && rev > 0) {
+                    base[scope] = rev;
+                    localSyncRevisions[scope] = rev;
+                }
+            }
+        }
+    } catch (_) {
+        // Fallback silencioso a memoria local si la tabla aún no existe
+    }
+    return base;
+}
+
+function broadcastSseSync(revs = localSyncRevisions, changedScopes = []) {
+    if (sseSyncClients.size === 0) return;
+    const normalizedChanges = Array.isArray(changedScopes)
+        ? changedScopes.filter((s) => SYNC_SCOPES.includes(s))
+        : [];
+    const ts = Date.now();
+    for (const client of Array.from(sseSyncClients)) {
+        if (!client || !client.res || client.res.writableEnded) {
+            sseSyncClients.delete(client);
+            continue;
+        }
+        const allowed = client.rol === 'psiquiatra' ? CLINICAL_SYNC_SCOPES : SYNC_SCOPES;
+        const roleChanges = normalizedChanges.filter((s) => allowed.includes(s));
+        if (normalizedChanges.length > 0 && roleChanges.length === 0) {
+            continue;
+        }
+        const payload = {
+            replicaId: REPLICA_ID,
+            revisions: filterSyncRevisionsForRole(revs, client.rol),
+            changedScopes: roleChanges,
+            ts
+        };
+        try {
+            client.res.write(`event: sync\ndata: ${JSON.stringify(payload)}\n\n`);
+        } catch (_) {
+            sseSyncClients.delete(client);
+        }
+    }
+}
+
+function ensureReplicaSyncPoller() {
+    if (syncReplicaPollTimer || sseSyncClients.size === 0 || isAutomatedTestEnv()) return;
+    syncReplicaPollTimer = setInterval(async () => {
+        if (sseSyncClients.size === 0 || syncReplicaPollInFlight) return;
+        syncReplicaPollInFlight = true;
+        try {
+            const prevSnapshot = { ...localSyncRevisions };
+            const latest = await fetchSyncRevisions();
+            const changed = SYNC_SCOPES.filter((scope) => (Number(latest[scope]) || 1) !== (Number(prevSnapshot[scope]) || 1));
+            if (changed.length > 0) {
+                broadcastSseSync(latest, changed);
+            }
+        } catch (_) {
+            // Ignorar errores transitorios de polling entre réplicas
+        } finally {
+            syncReplicaPollInFlight = false;
+        }
+    }, 4000);
+    if (typeof syncReplicaPollTimer.unref === 'function') {
+        syncReplicaPollTimer.unref();
+    }
+}
+
+function stopReplicaSyncPollerIfIdle() {
+    if (sseSyncClients.size === 0 && syncReplicaPollTimer) {
+        clearInterval(syncReplicaPollTimer);
+        syncReplicaPollTimer = null;
+    }
+}
+
+function closeAllSseClients() {
+    if (syncReplicaPollTimer) {
+        clearInterval(syncReplicaPollTimer);
+        syncReplicaPollTimer = null;
+    }
+    for (const client of Array.from(sseSyncClients)) {
+        try {
+            if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);
+            if (client.res && !client.res.writableEnded) {
+                client.res.end();
+            }
+        } catch (_) {
+            // noop
+        }
+        sseSyncClients.delete(client);
+    }
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
 }
 
 function bumpSyncRevision(scope) {
     if (!SYNC_SCOPES.includes(scope)) return;
+<<<<<<< HEAD
     syncRevisionsSnapshot[scope] = (Number(syncRevisionsSnapshot[scope]) || 1) + 1;
     syncRevisionsCacheAt = 0;
     const snapshotCopy = { ...syncRevisionsSnapshot };
@@ -11945,6 +12064,30 @@ app.get('/api/sync/revisions', syncReadLimiter.middleware, requireAuth, async (r
     res.json({
         revisions: filterRevisionsForRole(revisions, req.user.rol)
     });
+=======
+    localSyncRevisions[scope] = (Number(localSyncRevisions[scope]) || 1) + 1;
+    dbQueryAsync(
+        'INSERT INTO SyncRevisions (scope, revision) VALUES (?, 2) ON DUPLICATE KEY UPDATE revision = revision + 1, updated_at = CURRENT_TIMESTAMP',
+        [scope]
+    )
+        .then(() => fetchSyncRevisions())
+        .then((revs) => broadcastSseSync(revs, [scope]))
+        .catch(() => broadcastSseSync({ ...localSyncRevisions }, [scope]));
+}
+
+app.get('/api/sync/revisions', apiReadLimiter.middleware, requireAuth, async (req, res) => {
+    try {
+        const revs = await fetchSyncRevisions();
+        return res.json({
+            ok: true,
+            replicaId: REPLICA_ID,
+            revisions: filterSyncRevisionsForRole(revs, req.user?.rol)
+        });
+    } catch (err) {
+        console.error('[SYNC_REVISIONS_ERROR]', err);
+        return res.status(500).send('Error loading sync revisions.');
+    }
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
 });
 
 app.get('/api/sync/stream', requireAuth, async (req, res) => {
@@ -11952,6 +12095,7 @@ app.get('/api/sync/stream', requireAuth, async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
+<<<<<<< HEAD
     res.flushHeaders?.();
 
     const userId = Number(req.user.id);
@@ -11986,6 +12130,58 @@ app.get('/api/sync/stream', requireAuth, async (req, res) => {
             revisions: filterRevisionsForRole(revisions, client.role)
         });
     }
+=======
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
+
+    const client = {
+        res,
+        userId: req.user?.id || null,
+        rol: req.user?.rol || 'admin',
+        heartbeatTimer: null
+    };
+    sseSyncClients.add(client);
+    ensureReplicaSyncPoller();
+
+    client.heartbeatTimer = setInterval(() => {
+        if (res.writableEnded) return;
+        try {
+            res.write(': ping\n\n');
+        } catch (_) {
+            // noop
+        }
+    }, 25000);
+    if (typeof client.heartbeatTimer.unref === 'function') {
+        client.heartbeatTimer.unref();
+    }
+
+    try {
+        const initialRevs = await fetchSyncRevisions();
+        if (!res.writableEnded) {
+            const initialPayload = {
+                replicaId: REPLICA_ID,
+                revisions: filterSyncRevisionsForRole(initialRevs, client.rol),
+                changedScopes: [],
+                ts: Date.now()
+            };
+            res.write(`event: sync\ndata: ${JSON.stringify(initialPayload)}\n\n`);
+        }
+    } catch (_) {
+        // noop
+    }
+
+    const cleanup = () => {
+        if (client.heartbeatTimer) {
+            clearInterval(client.heartbeatTimer);
+            client.heartbeatTimer = null;
+        }
+        sseSyncClients.delete(client);
+        stopReplicaSyncPollerIfIdle();
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
 });
 
 // Manejo controlado de rutas inexistentes y errores inesperados en API (sin filtrar stack traces)

@@ -224,11 +224,19 @@ if (rawBrowserFetch && clientTransportTunnel) {
         if (!headers.has('X-UI-Lang')) {
             headers.set('X-UI-Lang', i18nGetLang());
         }
+<<<<<<< HEAD
         const methodUpper = String(init.method || 'GET').toUpperCase();
         if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
             markLocalSyncMutation(inferSyncScopeFromUrl(urlStr));
         }
         return rawBrowserFetch(input, { ...init, headers });
+=======
+        const res = await rawBrowserFetch(input, { ...init, headers });
+        if (res.ok) {
+            markLocalSyncMutation(init.method || 'GET');
+        }
+        return res;
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
     };
 }
 
@@ -1369,15 +1377,19 @@ function setMobileMenuOpen(isOpen) {
         sidebar.classList.remove('is-swiping');
         sidebar.style.transform = '';
     }
+<<<<<<< HEAD
     if (sidebarBackdrop) {
         sidebarBackdrop.style.opacity = '';
     }
+=======
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
     if (mobileMenuBtn) {
         mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
     }
 }
 
 function initSidebarSwipeGesture() {
+<<<<<<< HEAD
     if (!appShell || !sidebar || sidebar.dataset.swipeWired === '1') return;
     sidebar.dataset.swipeWired = '1';
 
@@ -1418,10 +1430,57 @@ function initSidebarSwipeGesture() {
                 sidebar.classList.add('is-swiping');
             } else {
                 swipeState.directionLocked = 'vertical';
+=======
+    if (!appShell || !sidebar || sidebar.dataset?.swipeWired === '1') return;
+    if (sidebar.dataset) sidebar.dataset.swipeWired = '1';
+
+    let tracking = false;
+    let isHorizontalSwipe = false;
+    let startX = 0;
+    let startY = 0;
+    let startTs = 0;
+    let lastDeltaX = 0;
+
+    const resetSwipeTransform = () => {
+        sidebar.classList.remove('is-swiping');
+        sidebar.style.transform = '';
+        tracking = false;
+        isHorizontalSwipe = false;
+        lastDeltaX = 0;
+    };
+
+    const handleTouchStart = (e) => {
+        if (!appShell.classList.contains('mobile-menu-open')) return;
+        const touch = e.touches && e.touches[0];
+        if (!touch) return;
+        tracking = true;
+        isHorizontalSwipe = false;
+        startX = touch.clientX;
+        startY = touch.clientY;
+        startTs = Date.now();
+        lastDeltaX = 0;
+    };
+
+    const handleTouchMove = (e) => {
+        if (!tracking || !appShell.classList.contains('mobile-menu-open')) return;
+        const touch = e.touches && e.touches[0];
+        if (!touch) return;
+        const deltaX = touch.clientX - startX;
+        const deltaY = touch.clientY - startY;
+
+        if (!isHorizontalSwipe) {
+            if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) return;
+            if (deltaX < -10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+                isHorizontalSwipe = true;
+                sidebar.classList.add('is-swiping');
+            } else {
+                tracking = false;
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
                 return;
             }
         }
 
+<<<<<<< HEAD
         if (swipeState.directionLocked !== 'horizontal') return;
         const clampedX = Math.min(0, deltaX);
         swipeState.lastX = touch.clientX;
@@ -1448,10 +1507,24 @@ function initSidebarSwipeGesture() {
         resetVisualDrag();
         if (!wasHorizontal) return;
         if (deltaX <= -65 || (deltaX <= -28 && velocityX <= -0.45)) {
+=======
+        lastDeltaX = Math.min(0, deltaX);
+        sidebar.style.transform = `translateX(${lastDeltaX}px)`;
+    };
+
+    const handleTouchEnd = () => {
+        if (!tracking) return;
+        const elapsedMs = Math.max(1, Date.now() - startTs);
+        const velocity = lastDeltaX / elapsedMs;
+        const shouldClose = isHorizontalSwipe && (lastDeltaX <= -65 || (velocity <= -0.45 && lastDeltaX <= -30));
+        resetSwipeTransform();
+        if (shouldClose) {
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
             setMobileMenuOpen(false);
         }
     };
 
+<<<<<<< HEAD
     const onTouchCancel = () => {
         if (!swipeState) return;
         swipeState = null;
@@ -1464,6 +1537,13 @@ function initSidebarSwipeGesture() {
         target.addEventListener('touchmove', onTouchMove, { passive: true });
         target.addEventListener('touchend', onTouchEnd, { passive: true });
         target.addEventListener('touchcancel', onTouchCancel, { passive: true });
+=======
+    [sidebar, sidebarBackdrop].filter(Boolean).forEach((target) => {
+        target.addEventListener('touchstart', handleTouchStart, { passive: true });
+        target.addEventListener('touchmove', handleTouchMove, { passive: true });
+        target.addEventListener('touchend', handleTouchEnd, { passive: true });
+        target.addEventListener('touchcancel', resetSwipeTransform, { passive: true });
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
     });
 }
 
@@ -13146,8 +13226,13 @@ function enterAppSession(user) {
                 showView('inicio', false);
             }
         }
+<<<<<<< HEAD
         if (typeof startRealtimeSessionSync === 'function') {
             startRealtimeSessionSync();
+=======
+        if (typeof initRealtimeSessionSync === 'function') {
+            initRealtimeSessionSync();
+>>>>>>> 68af0d2b71750aa20f91dc814763197b1ba6055b
         }
     } catch (bootErr) {
         console.error('[SESSION_INIT_WARN]', bootErr);
