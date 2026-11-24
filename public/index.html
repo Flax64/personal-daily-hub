@@ -978,6 +978,7 @@
                             </div>
                         </div>
                         <div class="view-header-actions">
+                            <button type="button" class="btn-secondary-pill" id="btnDownloadJournalWord" title="Descargar tu Diario cifrado y descifrarlo en este dispositivo como Word (.docx)" aria-label="Descargar Diario (.docx)">📥 <span class="btn-responsive-text">Descargar Diario (.docx)</span></button>
                             <button type="button" class="e2ee-key-pill icon-only-mobile" id="journalE2eePill" title="Configurar o cambiar tu llave privada de cifrado" aria-label="Configurar o cambiar tu llave privada de cifrado"><span class="btn-icon-glyph" aria-hidden="true">🔑</span><span class="btn-responsive-text">Llave Privada</span></button>
                         </div>
                     </div>
@@ -2781,6 +2782,27 @@
                                     <button type="button" class="agenda-chip-btn" id="btnClearE2eeKey" title="Quitar la llave guardada en este navegador">Quitar de este Navegador</button>
                                 </div>
                             </div>
+                            <div class="e2ee-key-box">
+                                <div style="width:100%;">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                                        <strong>Contraseña de descarga del Diario (.docx cifrado con salt):</strong>
+                                        <span id="settingsJournalDownloadPwdStatus" class="muted-text">Sin configurar</span>
+                                    </div>
+                                    <div class="settings-inline-actions">
+                                        <div class="password-input-wrap secret-inline-wrap">
+                                            <input type="text" class="secret-input-masked" id="setJournalDownloadPassword" name="pdh_journal_download_pwd_field" minlength="8" maxlength="128"
+                                                autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly
+                                                data-secret-mask="true" data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
+                                                placeholder="8–128 caracteres para descifrar descargas del Diario">
+                                            <button type="button" class="password-toggle-btn" data-toggle-password="setJournalDownloadPassword"
+                                                aria-label="Show password" aria-pressed="false" title="Show password"></button>
+                                        </div>
+                                        <button type="button" class="agenda-chip-btn" id="btnSaveJournalDownloadPassword" title="Guardar contraseña de descarga cifrada en el servidor">Guardar contraseña</button>
+                                        <button type="button" class="agenda-chip-btn" id="btnClearJournalDownloadPassword" title="Quitar contraseña de descarga configurada">Borrar contraseña</button>
+                                    </div>
+                                    <small class="form-hint">Protege las descargas de Diario.docx con capa E2EE adicional con salt (8–128 caracteres) y se descifra solo en tu dispositivo.</small>
+                                </div>
+                            </div>
                             <div class="e2ee-key-box version-settings-box">
                                 <div>
                                     <strong>Versión de la Aplicación y Cambios Recientes:</strong>
@@ -3089,6 +3111,56 @@
                         <button type="button" class="btn-cancel" id="btnCancelE2eeModal">Cancel</button>
                         <button type="submit" class="btn-submit btn-modal-save" id="btnSaveE2eeModal">Save Key</button>
                     </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- In-app Modal: Journal Encrypted (.docx) Download Password -->
+    <div class="modal-overlay" id="journalDownloadPasswordModal" hidden aria-modal="true" role="dialog" aria-labelledby="journalDownloadModalTitle">
+        <div class="modal-card modal-card-compact">
+            <div class="modal-header">
+                <h2 id="journalDownloadModalTitle">📥 Descargar Diario (.docx)</h2>
+                <button type="button" class="modal-close-btn" id="btnCloseJournalDownloadModal" aria-label="Close modal">✕</button>
+            </div>
+            <form id="journalDownloadPasswordForm" autocomplete="off">
+                <p class="modal-subtitle" id="journalDownloadModalSubtitle">
+                    Ingresa tu contraseña de descarga para recibir tu Diario cifrado con salt y descifrarlo localmente en este dispositivo como Word (.docx).
+                </p>
+                <div class="form-group">
+                    <div class="label-with-helper">
+                        <label for="journalDownloadPasswordInput" id="journalDownloadPasswordLabel">Contraseña de descarga (8–128 caracteres):</label>
+                        <button type="button" class="agenda-link-inline" id="btnSwitchChangeJournalDownloadPwd" hidden>Cambiar contraseña configurada</button>
+                        <button type="button" class="agenda-link-inline" id="btnCancelChangeJournalDownloadPwd" hidden>← Usar contraseña actual</button>
+                    </div>
+                    <div class="password-input-wrap">
+                        <input type="text" class="secret-input-masked" id="journalDownloadPasswordInput" name="pdh_journal_dl_pwd_modal" minlength="8" maxlength="128"
+                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly
+                            data-secret-mask="true" data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
+                            placeholder="8–128 caracteres" required>
+                        <button type="button" class="password-toggle-btn" data-toggle-password="journalDownloadPasswordInput"
+                            aria-label="Show password" aria-pressed="false" title="Show password"></button>
+                    </div>
+                </div>
+                <div class="form-group" id="journalDownloadConfirmGroup" hidden>
+                    <label for="journalDownloadPasswordConfirm">Confirmar contraseña:</label>
+                    <div class="password-input-wrap">
+                        <input type="text" class="secret-input-masked" id="journalDownloadPasswordConfirm" name="pdh_journal_dl_pwd_confirm" minlength="8" maxlength="128"
+                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly
+                            data-secret-mask="true" data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
+                            placeholder="Repite la contraseña">
+                        <button type="button" class="password-toggle-btn" data-toggle-password="journalDownloadPasswordConfirm"
+                            aria-label="Show password" aria-pressed="false" title="Show password"></button>
+                    </div>
+                </div>
+                <label class="switch-row" id="journalDownloadSaveGroup" hidden>
+                    <input type="checkbox" id="journalDownloadSavePassword" checked>
+                    <span>Guardar esta contraseña para futuras descargas</span>
+                </label>
+                <div id="journalDownloadModalStatus" class="inline-status-banner" hidden aria-live="polite"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-cancel" id="btnCancelJournalDownloadModal">Cancel</button>
+                    <button type="submit" class="btn-submit btn-modal-save" id="btnConfirmJournalDownloadModal">📥 Descifrar y Descargar (.docx)</button>
                 </div>
             </form>
         </div>

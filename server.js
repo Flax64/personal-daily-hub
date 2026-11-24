@@ -3080,6 +3080,128 @@ app.get('/api/journal/download', apiReadLimiter.middleware, requireAdmin, (_req,
     return res.download(status.path, 'Diario.docx');
 });
 
+async function handleEncryptedJournalDownload(req, res) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+
+    const autonomousEnabled = serverNotesService.isServerAutonomousNotesEnabled();
+    const wordPassword = String(process.env.WORD_PASSWORD || '').trim();
+    if (!autonomousEnabled || !wordPassword) {
+        return res.status(409).json({
+            ok: false,
+            reason: !autonomousEnabled ? 'AUTONOMOUS_DISABLED' : 'PASSWORD_MISSING',
+            error: !autonomousEnabled
+                ? 'Autonomous local journal is not active on this server.'
+                : 'WORD_PASSWORD is not configured on this server.'
+        });
+    }
+
+    const status = serverNotesService.getLocalJournalStatus({ rootDir: __dirname });
+    if (!status.exists) {
+        return res.status(404).json({
+            ok: false,
+            reason: 'MISSING_FILE',
+            error: 'Local encrypted Diario.docx has not been created yet.'
+        });
+    }
+    if (!status.encrypted) {
+        return res.status(403).json({
+            ok: false,
+            reason: 'UNENCRYPTED_FILE',
+            error: 'Refusing to download unencrypted Journal file.'
+        });
+    }
+
+    let downloadPassword = '';
+    if (req.method === 'POST' && req.body && req.body.password !== undefined && req.body.password !== null) {
+        if (typeof req.body.password !== 'string' || !serverNotesService.isValidJournalDownloadPassword(req.body.password)) {
+            return res.status(400).json({
+                ok: false,
+                reason: 'INVALID_DOWNLOAD_PASSWORD',
+                error: 'Download password must be between 8 and 128 characters.'
+            });
+        }
+        downloadPassword = req.body.password;
+    } else {
+        try {
+            const settings = await loadUserSettings(req.user.id);
+            downloadPassword = resolveJournalDownloadPasswordFromSettings(settings);
+        } catch (err) {
+            console.error('[JOURNAL_DOWNLOAD_SETTINGS_ERROR]', err.message);
+            return res.status(500).json({
+                ok: false,
+                reason: 'SETTINGS_LOAD_ERROR',
+                error: 'Could not load journal download settings.'
+            });
+        }
+        if (!downloadPassword) {
+            return res.status(409).json({
+                ok: false,
+                reason: 'DOWNLOAD_PASSWORD_NOT_CONFIGURED',
+                error: 'Configure or enter a download password first.'
+            });
+        }
+    }
+
+    try {
+        const localNow = await resolveAdminJournalLocalNow(req.user.id);
+        const exportRes = await runWithDocxLock('pdh_docx_journal', () =>
+            serverNotesService.exportJournalDocxEncryptedForClient({
+                wordPassword,
+                downloadPassword,
+                rootDir: __dirname
+            })
+        );
+        downloadPassword = '';
+
+        if (exportRes && exportRes.ok) {
+            serverLogger.info('JOURNAL', 'Exportación cifrada E2EE del Diario descargada', {
+                sizeBytes: exportRes.sizeBytes
+            });
+            return res.json({
+                ok: true,
+                filename: `Diario_${localNow.dateStr}.docx`,
+                scheme: 'pdh-j2-pbkdf2-hmac-binary',
+                encryptedDocx: exportRes.encryptedDocx,
+                sizeBytes: exportRes.sizeBytes,
+                updatedAt: exportRes.updatedAt
+            });
+        }
+
+        const reason = exportRes?.reason || 'EXPORT_FAILED';
+        const statusMap = {
+            MISSING_FILE: 404,
+            UNENCRYPTED_FILE: 403,
+            INVALID_DOWNLOAD_PASSWORD: 400,
+            MSOFFCRYPTO_MISSING: 409,
+            PASSWORD_MISSING: 409
+        };
+        return res.status(statusMap[reason] || 500).json({
+            ok: false,
+            reason,
+            error: exportRes?.error || 'Could not export local encrypted Diario.docx.'
+        });
+    } catch (err) {
+        downloadPassword = '';
+        if (err && err.code === 'LOCK_TIMEOUT') {
+            return res.status(503).json({
+                ok: false,
+                reason: 'LOCK_TIMEOUT',
+                error: 'Concurrent journal file write busy; please retry shortly.'
+            });
+        }
+        console.error('[JOURNAL_ENCRYPTED_DOWNLOAD_ERROR]', err.message);
+        return res.status(500).json({
+            ok: false,
+            reason: 'EXPORT_ERROR',
+            error: 'Error exporting encrypted local Journal.'
+        });
+    }
+}
+
+app.get('/api/journal/download-encrypted', apiReadLimiter.middleware, requireAdmin, handleEncryptedJournalDownload);
+app.post('/api/journal/download-encrypted', apiReadLimiter.middleware, requireAdmin, handleEncryptedJournalDownload);
+
 // Estado de cobertura diaria del Diario (solo metadatos, nunca texto privado)
 app.get('/api/journal/daily-status', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
     const localNow = await resolveAdminJournalLocalNow(req.user.id);
@@ -5252,12 +5374,53 @@ function getDefaultUserSettings() {
         preferredStudyLanguage: 'en_ko',
         geminiModel: 'gemini-2.5-flash',
         geminiApiKey: '',
+        journalDownloadPassword: '',
         studyDriveSyncEnabled: true,
         studyDriveFolder: String(process.env.STUDY_RCLONE_DIR || 'NotasIdiomas').trim(),
         crisisEpisodeTypes: getDefaultCrisisEpisodeTypes(),
         languageMemory: sanitizeLanguageMemory(),
         academicPlanner: getDefaultAcademicPlanner()
     };
+}
+
+const SETTINGS_SECRET_PREFIX = 'pdh-s1:';
+
+function getSettingsVaultKey() {
+    const seed = String(process.env.SETTINGS_ENCRYPTION_KEY || process.env.DB_PASS || process.env.ADMIN_SECRET || 'pdh-local-settings-vault');
+    return crypto.createHash('sha256').update(`pdh-settings-vault-v1:${seed}`).digest();
+}
+
+function encryptSettingSecretAtRest(plainText) {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', getSettingsVaultKey(), iv);
+    const enc = Buffer.concat([cipher.update(String(plainText), 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `${SETTINGS_SECRET_PREFIX}${iv.toString('hex')}:${tag.toString('hex')}:${enc.toString('base64')}`;
+}
+
+function decryptSettingSecretAtRest(storedValue) {
+    if (!storedValue || typeof storedValue !== 'string') return '';
+    if (!storedValue.startsWith(SETTINGS_SECRET_PREFIX)) {
+        return serverNotesService.isValidJournalDownloadPassword(storedValue) ? storedValue : '';
+    }
+    const parts = storedValue.slice(SETTINGS_SECRET_PREFIX.length).split(':');
+    if (parts.length !== 3) return '';
+    try {
+        const iv = Buffer.from(parts[0], 'hex');
+        const tag = Buffer.from(parts[1], 'hex');
+        const ct = Buffer.from(parts[2], 'base64');
+        if (iv.length !== 12 || tag.length !== 16 || ct.length === 0) return '';
+        const decipher = crypto.createDecipheriv('aes-256-gcm', getSettingsVaultKey(), iv);
+        decipher.setAuthTag(tag);
+        const plain = Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+        return serverNotesService.isValidJournalDownloadPassword(plain) ? plain : '';
+    } catch (_) {
+        return '';
+    }
+}
+
+function resolveJournalDownloadPasswordFromSettings(settings = {}) {
+    return decryptSettingSecretAtRest(settings?.journalDownloadPassword || '');
 }
 
 function maskGeminiApiKey(key) {
@@ -5268,18 +5431,22 @@ function maskGeminiApiKey(key) {
 }
 
 function sanitizeSettingsForClient(settings = {}) {
-    const { geminiApiKey, ...rest } = settings;
+    const { geminiApiKey, journalDownloadPassword, ...rest } = settings;
     const hasUserKey = Boolean(String(geminiApiKey || '').trim());
     const hasEnvKey = Boolean(String(process.env.GEMINI_API_KEY || '').trim());
+    const hasJournalDownloadPwd = Boolean(resolveJournalDownloadPasswordFromSettings({ journalDownloadPassword }));
     return {
         ...rest,
         geminiApiKeyConfigured: hasUserKey || hasEnvKey,
         geminiKeySource: hasUserKey ? 'user' : (hasEnvKey ? 'server_env' : 'none'),
         geminiApiKeyHint: hasUserKey
             ? maskGeminiApiKey(geminiApiKey)
-            : (hasEnvKey ? 'Server GEMINI_API_KEY active' : '')
+            : (hasEnvKey ? 'Server GEMINI_API_KEY active' : ''),
+        journalDownloadPasswordConfigured: hasJournalDownloadPwd
     };
 }
+
+const publicizeUserSettings = sanitizeSettingsForClient;
 
 function isBlockedPrivateHostname(hostname) {
     const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
@@ -5488,6 +5655,25 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
             return { error: 'Gemini API key exceeds maximum allowed length (180 characters).' };
         }
         next.geminiApiKey = rawKey;
+    }
+
+    if (input.clearJournalDownloadPassword === true) {
+        next.journalDownloadPassword = '';
+    } else if (input.journalDownloadPassword !== undefined) {
+        if (typeof input.journalDownloadPassword !== 'string') {
+            return { error: 'Journal download password must be a valid string (8–128 characters).' };
+        }
+        const rawDlPwd = input.journalDownloadPassword;
+        if (rawDlPwd === '') {
+            next.journalDownloadPassword = base.journalDownloadPassword || '';
+        } else if (rawDlPwd.startsWith(SETTINGS_SECRET_PREFIX)) {
+            next.journalDownloadPassword = decryptSettingSecretAtRest(rawDlPwd) ? rawDlPwd : '';
+        } else {
+            if (!serverNotesService.isValidJournalDownloadPassword(rawDlPwd)) {
+                return { error: 'Journal download password must be 8–128 characters without control characters.' };
+            }
+            next.journalDownloadPassword = encryptSettingSecretAtRest(rawDlPwd);
+        }
     }
 
     if (input.studyDriveSyncEnabled !== undefined) {
