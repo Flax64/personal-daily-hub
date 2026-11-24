@@ -2158,6 +2158,12 @@ select,
 /* =========================================
    MODAL DE AGENDA
 ========================================= */
+html.modal-scroll-locked,
+body.modal-scroll-locked {
+    overflow: hidden !important;
+    overscroll-behavior: none !important;
+}
+
 .modal-overlay {
     position: fixed;
     inset: 0;
@@ -2167,6 +2173,8 @@ select,
     justify-content: center;
     padding: 16px;
     z-index: 1200;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
 }
 
 .modal-overlay[hidden] {
@@ -2182,6 +2190,9 @@ select,
     box-shadow: 0 20px 45px rgba(0, 0, 0, 0.25);
     max-height: 92dvh;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
 }
 
 .modal-header {
@@ -6834,15 +6845,18 @@ body {
 
     .modal-overlay {
         padding: 8px;
+        overscroll-behavior: contain;
     }
 
     .modal-card {
         width: min(96vw, 680px);
-        max-height: 90dvh;
+        max-height: 92dvh;
         display: flex;
         flex-direction: column;
         padding: 0;
         overflow: hidden;
+        overscroll-behavior: contain;
+        box-sizing: border-box;
     }
 
     .modal-card > .modal-header {
@@ -6853,6 +6867,7 @@ body {
         padding: 14px 16px 10px;
         margin-bottom: 0;
         border-bottom: 1px solid var(--border-color, #e2e8f0);
+        flex-shrink: 0;
     }
 
     .modal-card > :not(.modal-header) {
@@ -6863,13 +6878,16 @@ body {
     .modal-card > form,
     .modal-card > .modal-body {
         overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
         flex: 1 1 auto;
-        padding-bottom: 16px;
+        min-height: 0;
+        padding-bottom: 22px;
         padding-top: 10px;
     }
 
     .modal-card > :last-child {
-        padding-bottom: 16px;
+        padding-bottom: 20px;
     }
 
     .mobile-topbar {
@@ -7892,6 +7910,7 @@ body {
     max-width: calc(100vw - 16px);
     max-height: 82vh;
     overflow: hidden;
+    overscroll-behavior: contain;
     box-sizing: border-box;
     padding: 15px 17px;
     border-radius: 16px;
@@ -7932,6 +7951,7 @@ body {
     overflow-y: auto;
     overflow-x: hidden;
     overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -9123,46 +9143,79 @@ input[type="password"] {
 
 /* Read-only Study Notebook Viewer Modal */
 .study-viewer-modal {
-    max-width: 920px;
-    max-height: 88vh;
+    width: min(1100px, 95vw);
+    max-width: 1100px;
+    height: 90dvh;
+    max-height: 92dvh;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     gap: 10px;
+    box-sizing: border-box;
 }
 
 .study-viewer-toolbar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-    gap: 8px;
+    display: flex;
     align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+}
+
+.study-viewer-toolbar .select-input {
+    flex: 0 0 auto;
+    min-width: 175px;
+    max-width: 240px;
 }
 
 .study-viewer-toolbar input[type="search"] {
+    flex: 1 1 auto;
+    min-width: 0;
     width: 100%;
-    padding: 8px 10px;
-    border-radius: 8px;
+    padding: 8px 12px;
+    min-height: 38px;
+    border-radius: 10px;
     border: 1px solid var(--border-color, rgba(255, 255, 255, 0.14));
     background: var(--input-bg, rgba(0, 0, 0, 0.2));
     color: inherit;
+    box-sizing: border-box;
+}
+
+.study-viewer-refresh-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 0;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
 }
 
 .study-viewer-status {
     font-size: 0.85rem;
-    padding: 4px 2px;
+    padding: 2px 2px;
+    flex-shrink: 0;
 }
 
 .study-viewer-body {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
-    display: grid;
-    gap: 10px;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
     padding-right: 4px;
-    max-height: 58vh;
 }
 
 .study-viewer-card {
-    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
-    border-radius: 10px;
-    padding: 12px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.14));
+    border-radius: 12px;
+    padding: 16px 18px;
     background: var(--card-bg-subtle, rgba(255, 255, 255, 0.03));
 }
 
@@ -9171,44 +9224,47 @@ input[type="password"] {
     justify-content: space-between;
     align-items: flex-start;
     gap: 8px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
 }
 
 .study-viewer-card-head h4 {
     margin: 0;
-    font-size: 1rem;
+    font-size: 1.04rem;
 }
 
 .study-viewer-meta {
-    margin: 0 0 6px;
-    font-size: 0.82rem;
+    margin: 0 0 8px;
+    font-size: 0.84rem;
 }
 
 .study-viewer-field {
-    margin-top: 6px;
+    margin-top: 8px;
 }
 
 .study-viewer-field summary {
     cursor: pointer;
     font-weight: 600;
-    font-size: 0.88rem;
+    font-size: 0.9rem;
 }
 
 .study-viewer-pre {
-    margin: 6px 0 0;
+    margin: 8px 0 0;
     white-space: pre-wrap;
     word-break: break-word;
     font-family: inherit;
-    font-size: 0.9rem;
-    line-height: 1.48;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    max-height: none;
+    overflow: visible;
 }
 
 .study-viewer-pagination {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-top: 6px;
+    padding-top: 8px;
     border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+    flex-shrink: 0;
 }
 
 .lyrics-lang-tabs {
@@ -10136,6 +10192,26 @@ input[type="password"] {
     color: #93c5fd;
 }
 
+@media (max-width: 1024px) {
+    .study-viewer-modal {
+        width: 98vw;
+        max-width: 98vw;
+        height: 94dvh;
+        max-height: 94dvh;
+        padding: 12px;
+        border-radius: 14px;
+    }
+
+    .study-viewer-modal > .modal-header {
+        padding: 4px 4px 10px;
+    }
+
+    .study-viewer-modal > :not(.modal-header) {
+        padding-left: 4px;
+        padding-right: 4px;
+    }
+}
+
 @media (max-width: 780px) {
     .hangul-studio-split,
     .alphabet-controls-grid,
@@ -10167,13 +10243,34 @@ input[type="password"] {
     }
 
     .study-viewer-modal {
-        max-width: 96vw;
-        max-height: 92dvh;
+        width: 98vw;
+        max-width: 98vw;
+        height: 94dvh;
+        max-height: 94dvh;
         padding: 12px;
+        border-radius: 14px;
     }
 
     .study-viewer-toolbar {
-        grid-template-columns: 1fr;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .study-viewer-toolbar .select-input {
+        flex: 1 1 calc(100% - 48px);
+        min-width: 0;
+        max-width: none;
+        order: 1;
+    }
+
+    .study-viewer-refresh-btn {
+        order: 2;
+    }
+
+    .study-viewer-toolbar input[type="search"] {
+        flex: 1 1 100%;
+        width: 100%;
+        order: 3;
     }
 }
 

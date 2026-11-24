@@ -443,7 +443,7 @@ function inicializarTablasSeguridad() {
             id INT AUTO_INCREMENT PRIMARY KEY,
             fecha DATE NOT NULL,
             hora VARCHAR(5) NOT NULL,
-            tipo_crisis VARCHAR(40) NOT NULL,
+            tipo_crisis VARCHAR(100) NOT NULL,
             intensidad TINYINT NOT NULL DEFAULT 3,
             motivo VARCHAR(1000) NOT NULL,
             fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -618,6 +618,15 @@ function inicializarTablasSeguridad() {
             }
         });
     });
+
+    db.query(
+        'ALTER TABLE RegistrosCrisis MODIFY COLUMN tipo_crisis VARCHAR(100) NOT NULL',
+        (errModCrisis) => {
+            if (errModCrisis && !/ER_NO_SUCH_TABLE/i.test(errModCrisis.message || '')) {
+                console.error('Error ampliando columna tipo_crisis en RegistrosCrisis:', errModCrisis.message);
+            }
+        }
+    );
 
     const sleepCols = [
         {
@@ -2486,9 +2495,11 @@ app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, require
         return res.status(400).send('La intensidad debe ser un entero entre 1 y 5.');
     }
 
+    let tipoCrisisFinal = tipoCrisis;
     let motivoFinal = rawMotivo;
     if (tipoCrisis === 'Otro' && detalleOtro) {
-        motivoFinal = rawMotivo ? `[${detalleOtro}] ${rawMotivo}` : `Emoción / episodio: ${detalleOtro}`;
+        tipoCrisisFinal = detalleOtro;
+        motivoFinal = rawMotivo || 'Sin descripción adicional.';
     } else if (!motivoFinal && allowOptional && tipoCrisis !== 'Otro') {
         motivoFinal = `Episodio de ${tipoCrisis} (sin descripción adicional).`;
     }
@@ -2499,7 +2510,7 @@ app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, require
     }
 
     const sql = 'INSERT INTO RegistrosCrisis (fecha, hora, tipo_crisis, intensidad, motivo) VALUES (?, ?, ?, ?, ?)';
-    db.query(sql, [fecha, hora, tipoCrisis, intensidadNum, motivoFinal], (err, result) => {
+    db.query(sql, [fecha, hora, tipoCrisisFinal, intensidadNum, motivoFinal], (err, result) => {
         if (err) {
             console.error(err);
             return res.status(500).send('Error saving crisis record.');
@@ -2510,7 +2521,7 @@ app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, require
             id: result?.insertId || null,
             fecha,
             hora,
-            tipo_crisis: tipoCrisis,
+            tipo_crisis: tipoCrisisFinal,
             intensidad: intensidadNum,
             motivo: motivoFinal
         });

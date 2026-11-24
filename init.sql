@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS RegistrosCrisis (
     id INT AUTO_INCREMENT PRIMARY KEY,
     fecha DATE NOT NULL,
     hora VARCHAR(5) NOT NULL,
-    tipo_crisis VARCHAR(40) NOT NULL,
+    tipo_crisis VARCHAR(100) NOT NULL,
     intensidad TINYINT NOT NULL DEFAULT 3,
     motivo VARCHAR(1000) NOT NULL,
     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
