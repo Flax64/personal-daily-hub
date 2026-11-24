@@ -17,14 +17,6 @@ const clientTransportTunnel = (
     : null;
 
 let lastCapturedWirePacket = null;
-let lastLocalApiMutationAt = 0;
-
-function markLocalSyncMutation(method = 'GET') {
-    const m = String(method || 'GET').toUpperCase();
-    if (m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') {
-        lastLocalApiMutationAt = Date.now();
-    }
-}
 
 function i18nGetLang() {
     return (typeof window !== 'undefined' && window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function')
@@ -145,6 +137,11 @@ if (rawBrowserFetch && clientTransportTunnel) {
             return rawBrowserFetch(input, { ...init, headers });
         }
 
+        const methodUpper = String(init.method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
+            markLocalSyncMutation(inferSyncScopeFromUrl(urlStr));
+        }
+
         const originalBody = typeof init.body === 'string' ? init.body : null;
 
         const sendAttempt = async () => {
@@ -186,9 +183,6 @@ if (rawBrowserFetch && clientTransportTunnel) {
         }
 
         const encHeader = res.headers.get('X-Transport-Encrypted');
-        if (res.ok) {
-            markLocalSyncMutation(init.method || 'GET');
-        }
         if (encHeader === clientTransportTunnel.TRANSPORT_PROTOCOL) {
             const rawEnv = await res.json();
             if (originalBody === null) {
@@ -230,11 +224,11 @@ if (rawBrowserFetch && clientTransportTunnel) {
         if (!headers.has('X-UI-Lang')) {
             headers.set('X-UI-Lang', i18nGetLang());
         }
-        const res = await rawBrowserFetch(input, { ...init, headers });
-        if (res.ok) {
-            markLocalSyncMutation(init.method || 'GET');
+        const methodUpper = String(init.method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
+            markLocalSyncMutation(inferSyncScopeFromUrl(urlStr));
         }
-        return res;
+        return rawBrowserFetch(input, { ...init, headers });
     };
 }
 
@@ -794,6 +788,10 @@ async function submitMutationRequest({
         if (bodyObj !== null && bodyObj !== undefined) {
             headers['Content-Type'] = 'application/json';
             fetchOpts.body = JSON.stringify(bodyObj);
+        }
+
+        if (typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
+            markLocalSyncMutation(inferSyncScopeFromUrl(url));
         }
 
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
@@ -1371,80 +1369,101 @@ function setMobileMenuOpen(isOpen) {
         sidebar.classList.remove('is-swiping');
         sidebar.style.transform = '';
     }
+    if (sidebarBackdrop) {
+        sidebarBackdrop.style.opacity = '';
+    }
     if (mobileMenuBtn) {
         mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
     }
 }
 
 function initSidebarSwipeGesture() {
-    if (!appShell || !sidebar || sidebar.dataset?.swipeWired === '1') return;
-    if (sidebar.dataset) sidebar.dataset.swipeWired = '1';
+    if (!appShell || !sidebar || sidebar.dataset.swipeWired === '1') return;
+    sidebar.dataset.swipeWired = '1';
 
-    let tracking = false;
-    let isHorizontalSwipe = false;
-    let startX = 0;
-    let startY = 0;
-    let startTs = 0;
-    let lastDeltaX = 0;
+    let swipeState = null;
 
-    const resetSwipeTransform = () => {
+    const resetVisualDrag = () => {
         sidebar.classList.remove('is-swiping');
         sidebar.style.transform = '';
-        tracking = false;
-        isHorizontalSwipe = false;
-        lastDeltaX = 0;
+        if (sidebarBackdrop) {
+            sidebarBackdrop.style.opacity = '';
+        }
     };
 
-    const handleTouchStart = (e) => {
+    const onTouchStart = (e) => {
         if (!appShell.classList.contains('mobile-menu-open')) return;
-        const touch = e.touches && e.touches[0];
-        if (!touch) return;
-        tracking = true;
-        isHorizontalSwipe = false;
-        startX = touch.clientX;
-        startY = touch.clientY;
-        startTs = Date.now();
-        lastDeltaX = 0;
+        if (!e.touches || e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        swipeState = {
+            startX: touch.clientX,
+            startY: touch.clientY,
+            lastX: touch.clientX,
+            lastTime: Date.now(),
+            directionLocked: null
+        };
     };
 
-    const handleTouchMove = (e) => {
-        if (!tracking || !appShell.classList.contains('mobile-menu-open')) return;
-        const touch = e.touches && e.touches[0];
-        if (!touch) return;
-        const deltaX = touch.clientX - startX;
-        const deltaY = touch.clientY - startY;
+    const onTouchMove = (e) => {
+        if (!swipeState || !appShell.classList.contains('mobile-menu-open')) return;
+        if (!e.touches || e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        const deltaX = touch.clientX - swipeState.startX;
+        const deltaY = touch.clientY - swipeState.startY;
 
-        if (!isHorizontalSwipe) {
-            if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) return;
-            if (deltaX < -10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
-                isHorizontalSwipe = true;
+        if (!swipeState.directionLocked) {
+            if (Math.abs(deltaX) < 8 && Math.abs(deltaY) < 8) return;
+            if (deltaX < 0 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+                swipeState.directionLocked = 'horizontal';
                 sidebar.classList.add('is-swiping');
             } else {
-                tracking = false;
+                swipeState.directionLocked = 'vertical';
                 return;
             }
         }
 
-        lastDeltaX = Math.min(0, deltaX);
-        sidebar.style.transform = `translateX(${lastDeltaX}px)`;
+        if (swipeState.directionLocked !== 'horizontal') return;
+        const clampedX = Math.min(0, deltaX);
+        swipeState.lastX = touch.clientX;
+        swipeState.lastTime = Date.now();
+        sidebar.style.transform = `translateX(${clampedX}px)`;
+
+        if (sidebarBackdrop) {
+            const width = sidebar.offsetWidth || 275;
+            const ratio = Math.max(0, Math.min(1, 1 + clampedX / width));
+            sidebarBackdrop.style.opacity = String(ratio);
+        }
     };
 
-    const handleTouchEnd = () => {
-        if (!tracking) return;
-        const elapsedMs = Math.max(1, Date.now() - startTs);
-        const velocity = lastDeltaX / elapsedMs;
-        const shouldClose = isHorizontalSwipe && (lastDeltaX <= -65 || (velocity <= -0.45 && lastDeltaX <= -30));
-        resetSwipeTransform();
-        if (shouldClose) {
+    const onTouchEnd = (e) => {
+        if (!swipeState) return;
+        const wasHorizontal = swipeState.directionLocked === 'horizontal';
+        const changedTouch = e.changedTouches && e.changedTouches[0];
+        const endX = changedTouch ? changedTouch.clientX : swipeState.lastX;
+        const deltaX = endX - swipeState.startX;
+        const elapsedMs = Math.max(1, Date.now() - swipeState.lastTime);
+        const velocityX = (endX - swipeState.lastX) / elapsedMs;
+        swipeState = null;
+
+        resetVisualDrag();
+        if (!wasHorizontal) return;
+        if (deltaX <= -65 || (deltaX <= -28 && velocityX <= -0.45)) {
             setMobileMenuOpen(false);
         }
     };
 
-    [sidebar, sidebarBackdrop].filter(Boolean).forEach((target) => {
-        target.addEventListener('touchstart', handleTouchStart, { passive: true });
-        target.addEventListener('touchmove', handleTouchMove, { passive: true });
-        target.addEventListener('touchend', handleTouchEnd, { passive: true });
-        target.addEventListener('touchcancel', resetSwipeTransform, { passive: true });
+    const onTouchCancel = () => {
+        if (!swipeState) return;
+        swipeState = null;
+        resetVisualDrag();
+    };
+
+    [sidebar, sidebarBackdrop].forEach((target) => {
+        if (!target || typeof target.addEventListener !== 'function') return;
+        target.addEventListener('touchstart', onTouchStart, { passive: true });
+        target.addEventListener('touchmove', onTouchMove, { passive: true });
+        target.addEventListener('touchend', onTouchEnd, { passive: true });
+        target.addEventListener('touchcancel', onTouchCancel, { passive: true });
     });
 }
 
@@ -12970,9 +12989,6 @@ function showAuthForm(formId, subtitleText) {
 function showAuthScreen(defaultForm = 'authLoginForm') {
     currentUser = null;
     currentActiveView = '';
-    if (typeof stopRealtimeSessionSync === 'function') {
-        stopRealtimeSessionSync();
-    }
     pendingMfaState = { token: '', email: '' };
     if (sundayWatcherInterval) {
         clearInterval(sundayWatcherInterval);
@@ -12981,6 +12997,9 @@ function showAuthScreen(defaultForm = 'authLoginForm') {
     if (reminderPollInterval) {
         clearInterval(reminderPollInterval);
         reminderPollInterval = null;
+    }
+    if (typeof stopRealtimeSessionSync === 'function') {
+        stopRealtimeSessionSync({ resetRevisions: true });
     }
     currentSettings = null;
     lastDesktopNotifiedKeys.clear();
@@ -13127,8 +13146,8 @@ function enterAppSession(user) {
                 showView('inicio', false);
             }
         }
-        if (typeof initRealtimeSessionSync === 'function') {
-            initRealtimeSessionSync();
+        if (typeof startRealtimeSessionSync === 'function') {
+            startRealtimeSessionSync();
         }
     } catch (bootErr) {
         console.error('[SESSION_INIT_WARN]', bootErr);
@@ -13137,189 +13156,6 @@ function enterAppSession(user) {
         if (authOverlay) authOverlay.hidden = true;
         if (appShell) appShell.hidden = false;
     }
-}
-
-// ==========================================
-// REAL-TIME MULTI-SESSION SYNC (SSE + CATCH-UP REVISIONS)
-// ==========================================
-let syncEventSource = null;
-let knownSyncRevisions = {};
-let syncRefreshDebounceTimer = null;
-let pendingSyncChangedScopes = new Set();
-let syncLifecycleWired = false;
-
-function isActivelyTypingInView(viewId) {
-    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
-    if (!activeEl) return false;
-    const tag = String(activeEl.tagName || '').toUpperCase();
-    if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !activeEl.isContentEditable) {
-        return false;
-    }
-    const viewEl = viewId ? document.getElementById(viewId) : null;
-    return viewEl ? viewEl.contains(activeEl) : true;
-}
-
-function flushRealtimeSyncRefresh() {
-    syncRefreshDebounceTimer = null;
-    if (!currentUser || document.visibilityState === 'hidden') return;
-    if (Date.now() - lastLocalApiMutationAt < 1200) {
-        pendingSyncChangedScopes.clear();
-        return;
-    }
-    const changed = Array.from(pendingSyncChangedScopes);
-    pendingSyncChangedScopes.clear();
-    if (changed.length === 0) return;
-
-    const changedSet = new Set(changed);
-    const activeView = currentActiveView || (currentUser.rol === 'psiquiatra' ? 'resumen' : 'inicio');
-
-    if (activeView === 'inicio') {
-        if (typeof cargarInicioResumen === 'function') cargarInicioResumen();
-        if (typeof cargarRecordatoriosActivos === 'function') cargarRecordatoriosActivos();
-    } else if (activeView === 'mood' && changedSet.has('mood')) {
-        if (!isActivelyTypingInView('view-mood') && typeof cargarMoodsHoy === 'function') cargarMoodsHoy();
-    } else if (activeView === 'sueno' && (changedSet.has('sleep') || changedSet.has('settings'))) {
-        if (!isActivelyTypingInView('view-sueno') && typeof cargarSuenoHoy === 'function') cargarSuenoHoy();
-    } else if (activeView === 'crisis' && changedSet.has('crisis')) {
-        if (!isActivelyTypingInView('view-crisis') && typeof cargarCrisisRecientes === 'function') cargarCrisisRecientes();
-    } else if (activeView === 'resumen' && (changedSet.has('mood') || changedSet.has('sleep') || changedSet.has('crisis'))) {
-        if (typeof cargarResumenSemanalActual === 'function') cargarResumenSemanalActual();
-    } else if (activeView === 'agenda' && (changedSet.has('agenda') || changedSet.has('planner'))) {
-        if (!isActivelyTypingInView('view-agenda') && typeof cargarAgendaSemana === 'function') cargarAgendaSemana();
-    } else if (activeView === 'horario' && changedSet.has('planner')) {
-        if (!isActivelyTypingInView('view-horario') && typeof cargarPlannerVista === 'function') cargarPlannerVista();
-    } else if (activeView === 'english' && changedSet.has('music')) {
-        if (!isActivelyTypingInView('view-english') && typeof cargarCatalogoMusical === 'function') cargarCatalogoMusical();
-    } else if (activeView === 'journal' && changedSet.has('journal')) {
-        if (!isActivelyTypingInView('view-journal') && typeof cargarEstadoDiarioJournal === 'function') {
-            cargarEstadoDiarioJournal({ silent: true });
-        }
-    } else if (activeView === 'settings' && changedSet.has('settings')) {
-        if (!isActivelyTypingInView('settingsForm')) {
-            fetch('/api/settings', { cache: 'no-store' })
-                .then((r) => (r.ok ? r.json() : null))
-                .then((data) => {
-                    if (data && data.settings) {
-                        aplicarSettingsEnEstado(data.settings, { syncAgendaDefaults: true });
-                        if (typeof populateSettingsForm === 'function') populateSettingsForm(data.settings);
-                    }
-                })
-                .catch(() => {});
-        }
-    }
-}
-
-function applyIncomingSyncRevisions(revs, changedScopes = []) {
-    if (!revs || typeof revs !== 'object') return;
-    const isInitialBaseline = Object.keys(knownSyncRevisions).length === 0;
-    const detectedChanges = [];
-
-    Object.entries(revs).forEach(([scope, rawRev]) => {
-        const nextRev = Number(rawRev);
-        if (!Number.isFinite(nextRev)) return;
-        const prevRev = Number(knownSyncRevisions[scope]);
-        if (!isInitialBaseline && Number.isFinite(prevRev) && nextRev > prevRev) {
-            detectedChanges.push(scope);
-        }
-        knownSyncRevisions[scope] = nextRev;
-    });
-
-    if (Array.isArray(changedScopes) && !isInitialBaseline) {
-        changedScopes.forEach((s) => {
-            if (s && !detectedChanges.includes(s)) detectedChanges.push(s);
-        });
-    }
-
-    if (detectedChanges.length === 0) return;
-    if (Date.now() - lastLocalApiMutationAt < 1200) return;
-
-    detectedChanges.forEach((s) => pendingSyncChangedScopes.add(s));
-    if (syncRefreshDebounceTimer) clearTimeout(syncRefreshDebounceTimer);
-    syncRefreshDebounceTimer = setTimeout(flushRealtimeSyncRefresh, 350);
-}
-
-async function fetchSyncRevisionsCatchUp() {
-    if (!currentUser || document.visibilityState === 'hidden') return;
-    try {
-        const res = await fetch('/api/sync/revisions', { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data && data.revisions) {
-            applyIncomingSyncRevisions(data.revisions);
-        }
-    } catch (_) {
-        // noop
-    }
-}
-
-function connectSyncEventSource() {
-    if (!currentUser || typeof EventSource !== 'function' || document.visibilityState === 'hidden') return;
-    if (syncEventSource) return;
-
-    try {
-        const es = new EventSource('/api/sync/stream');
-        syncEventSource = es;
-        es.addEventListener('sync', (ev) => {
-            try {
-                const data = JSON.parse(ev.data || '{}');
-                if (data && data.revisions) {
-                    applyIncomingSyncRevisions(data.revisions, data.changedScopes || []);
-                }
-            } catch (_) {
-                // noop
-            }
-        });
-        es.onerror = () => {
-            if (syncEventSource) {
-                syncEventSource.close();
-                syncEventSource = null;
-            }
-            if (currentUser && document.visibilityState !== 'hidden') {
-                setTimeout(() => {
-                    if (currentUser && document.visibilityState !== 'hidden') {
-                        fetchSyncRevisionsCatchUp();
-                        connectSyncEventSource();
-                    }
-                }, 4000);
-            }
-        };
-    } catch (_) {
-        syncEventSource = null;
-    }
-}
-
-function stopRealtimeSessionSync() {
-    if (syncRefreshDebounceTimer) {
-        clearTimeout(syncRefreshDebounceTimer);
-        syncRefreshDebounceTimer = null;
-    }
-    pendingSyncChangedScopes.clear();
-    knownSyncRevisions = {};
-    if (syncEventSource) {
-        try { syncEventSource.close(); } catch (_) {}
-        syncEventSource = null;
-    }
-}
-
-function initRealtimeSessionSync() {
-    if (!currentUser) return;
-    if (!syncLifecycleWired && typeof document !== 'undefined') {
-        syncLifecycleWired = true;
-        document.addEventListener('visibilitychange', () => {
-            if (!currentUser) return;
-            if (document.visibilityState === 'hidden') {
-                if (syncEventSource) {
-                    try { syncEventSource.close(); } catch (_) {}
-                    syncEventSource = null;
-                }
-            } else {
-                fetchSyncRevisionsCatchUp();
-                connectSyncEventSource();
-            }
-        });
-    }
-    fetchSyncRevisionsCatchUp();
-    connectSyncEventSource();
 }
 
 function resetMedicoAutofillShield({ forceClear = false } = {}) {
@@ -18657,6 +18493,257 @@ function applyDeepLinkParamsFromUrl(searchStr = '', hashStr = '') {
     return false;
 }
 
+// ==========================================
+// REAL-TIME CROSS-SESSION SYNC (SSE + /api/sync/revisions)
+// ==========================================
+const REALTIME_SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
+const lastAppliedSyncRevisions = {};
+const localSyncWriteTimestamps = {};
+const pendingSyncScopes = new Set();
+let syncEventSource = null;
+let syncReconnectTimer = null;
+let syncDebounceTimer = null;
+let syncReconnectAttempt = 0;
+let realtimeSyncInitialized = false;
+
+function inferSyncScopeFromUrl(urlStr = '') {
+    const clean = String(urlStr || '');
+    if (/\/api\/(insert-mood)/i.test(clean)) return 'mood';
+    if (/\/api\/(insert-sleep|update-sleep|delete-sleep)/i.test(clean)) return 'sleep';
+    if (/\/api\/(insert-crisis|delete-crisis)/i.test(clean)) return 'crisis';
+    if (/\/api\/(insert-agenda|update-agenda|toggle-agenda|postpone-agenda|delete-agenda|planner\/sync-agenda)/i.test(clean)) return 'agenda';
+    if (/\/api\/planner/i.test(clean)) return 'planner';
+    if (/\/api\/(settings|language\/memory)/i.test(clean)) return 'settings';
+    if (/\/api\/(english\/music|send-english|language\/lessons)/i.test(clean)) return 'music';
+    if (/\/api\/(send-to-pc|journal\/)/i.test(clean)) return 'journal';
+    return '';
+}
+
+function markLocalSyncMutation(scope) {
+    if (!scope) return;
+    localSyncWriteTimestamps[scope] = Date.now();
+}
+
+function isUserEditingActiveViewOrModal() {
+    if (typeof document === 'undefined') return false;
+    const openModal = document.querySelector('.modal-overlay:not([hidden])');
+    if (openModal) return true;
+
+    const activeView = document.querySelector('.app-view.active');
+    const activeEl = document.activeElement;
+    if (activeView && activeEl && activeView.contains(activeEl)) {
+        const tag = String(activeEl.tagName || '').toUpperCase();
+        if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (tag === 'INPUT') {
+            const type = String(activeEl.type || 'text').toLowerCase();
+            if (!['button', 'submit', 'reset', 'checkbox', 'radio'].includes(type)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function applySyncScopesToActiveView(scopesToApply) {
+    if (!currentUser || isCurrentTabSuspended || !scopesToApply.length) return;
+    const scopeSet = new Set(scopesToApply);
+    const activeViewId = document.querySelector('.app-view.active')?.id || '';
+
+    if (scopeSet.has('settings') && activeViewId !== 'view-settings' && currentUser.rol === 'admin') {
+        fetch('/api/settings', { cache: 'no-store' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+                if (data && data.settings && typeof aplicarSettingsEnEstado === 'function') {
+                    aplicarSettingsEnEstado(data.settings);
+                }
+            })
+            .catch(() => { });
+    }
+
+    if (activeViewId === 'view-inicio' && (scopeSet.has('mood') || scopeSet.has('sleep') || scopeSet.has('agenda'))) {
+        if (typeof cargarInicioResumen === 'function') cargarInicioResumen();
+    } else if (activeViewId === 'view-mood' && scopeSet.has('mood')) {
+        if (typeof cargarMoodsHoy === 'function') cargarMoodsHoy();
+    } else if (activeViewId === 'view-sueno' && scopeSet.has('sleep')) {
+        if (typeof cargarSuenoHoy === 'function') cargarSuenoHoy();
+    } else if (activeViewId === 'view-crisis' && scopeSet.has('crisis')) {
+        if (typeof cargarCrisisRecientes === 'function') cargarCrisisRecientes();
+    } else if (activeViewId === 'view-agenda' && scopeSet.has('agenda')) {
+        if (typeof cargarAgendaSemana === 'function') cargarAgendaSemana();
+    } else if (activeViewId === 'view-horario' && scopeSet.has('planner')) {
+        if (typeof cargarPlannerVista === 'function') cargarPlannerVista();
+    } else if (activeViewId === 'view-settings' && scopeSet.has('settings')) {
+        if (typeof cargarSettingsVista === 'function') cargarSettingsVista();
+    } else if (activeViewId === 'view-english' && scopeSet.has('music')) {
+        if (typeof cargarCatalogoMusical === 'function') cargarCatalogoMusical();
+    } else if (activeViewId === 'view-journal' && scopeSet.has('journal')) {
+        if (typeof cargarEstadoDiarioJournal === 'function') cargarEstadoDiarioJournal({ silent: true });
+    } else if (activeViewId === 'view-resumen' && (scopeSet.has('mood') || scopeSet.has('sleep') || scopeSet.has('crisis'))) {
+        if (typeof cargarResumenSemanalActual === 'function') cargarResumenSemanalActual();
+    }
+}
+
+function flushPendingSyncScopes() {
+    if (syncDebounceTimer) {
+        clearTimeout(syncDebounceTimer);
+        syncDebounceTimer = null;
+    }
+    if (pendingSyncScopes.size === 0 || !currentUser || isCurrentTabSuspended) return;
+    if (isUserEditingActiveViewOrModal()) return;
+    const scopes = Array.from(pendingSyncScopes);
+    pendingSyncScopes.clear();
+    applySyncScopesToActiveView(scopes);
+}
+
+function schedulePendingSyncFlush() {
+    if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = setTimeout(flushPendingSyncScopes, 400);
+}
+
+function handleIncomingSyncRevisions(nextRevisions = {}, { candidateScopes = null, initialBaseline = false } = {}) {
+    if (!nextRevisions || typeof nextRevisions !== 'object') return;
+    const now = Date.now();
+    const changed = [];
+
+    for (const scope of REALTIME_SYNC_SCOPES) {
+        if (nextRevisions[scope] === undefined) continue;
+        const incomingRev = Number(nextRevisions[scope]) || 0;
+        const prevRev = Number(lastAppliedSyncRevisions[scope]) || 0;
+        if (initialBaseline && prevRev === 0) {
+            lastAppliedSyncRevisions[scope] = incomingRev;
+            continue;
+        }
+        if (incomingRev > prevRev) {
+            lastAppliedSyncRevisions[scope] = incomingRev;
+            const isExplicitCandidate = !Array.isArray(candidateScopes) || candidateScopes.includes(scope);
+            const recentLocalAt = Number(localSyncWriteTimestamps[scope]) || 0;
+            const isSelfEcho = recentLocalAt > 0 && (now - recentLocalAt) < 2200;
+            if (isExplicitCandidate && !isSelfEcho) {
+                changed.push(scope);
+            }
+        }
+    }
+
+    if (changed.length > 0) {
+        changed.forEach((s) => pendingSyncScopes.add(s));
+        schedulePendingSyncFlush();
+    }
+}
+
+function stopRealtimeSessionSync({ resetRevisions = false } = {}) {
+    if (syncReconnectTimer) {
+        clearTimeout(syncReconnectTimer);
+        syncReconnectTimer = null;
+    }
+    if (syncDebounceTimer) {
+        clearTimeout(syncDebounceTimer);
+        syncDebounceTimer = null;
+    }
+    if (syncEventSource) {
+        try { syncEventSource.close(); } catch (_) { }
+        syncEventSource = null;
+    }
+    if (resetRevisions) {
+        pendingSyncScopes.clear();
+        for (const k of Object.keys(lastAppliedSyncRevisions)) {
+            delete lastAppliedSyncRevisions[k];
+        }
+        syncReconnectAttempt = 0;
+    }
+}
+
+function fetchLatestSyncRevisionsCatchup() {
+    if (!currentUser || isCurrentTabSuspended) return Promise.resolve();
+    return fetch('/api/sync/revisions', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+            if (data && data.revisions) {
+                handleIncomingSyncRevisions(data.revisions, { initialBaseline: false });
+            }
+        })
+        .catch(() => { });
+}
+
+function startRealtimeSessionSync() {
+    if (typeof EventSource !== 'function' || typeof document === 'undefined') return;
+    if (!currentUser || isCurrentTabSuspended || document.visibilityState !== 'visible') return;
+    if (syncEventSource) return;
+
+    if (syncReconnectTimer) {
+        clearTimeout(syncReconnectTimer);
+        syncReconnectTimer = null;
+    }
+
+    try {
+        const es = new EventSource('/api/sync/stream');
+        syncEventSource = es;
+
+        es.addEventListener('ready', (ev) => {
+            syncReconnectAttempt = 0;
+            try {
+                const payload = JSON.parse(ev.data || '{}');
+                handleIncomingSyncRevisions(payload.revisions, { initialBaseline: true });
+            } catch (_) { }
+        });
+
+        es.addEventListener('sync', (ev) => {
+            syncReconnectAttempt = 0;
+            try {
+                const payload = JSON.parse(ev.data || '{}');
+                handleIncomingSyncRevisions(payload.revisions, {
+                    candidateScopes: Array.isArray(payload.scopes) ? payload.scopes : null,
+                    initialBaseline: false
+                });
+            } catch (_) { }
+        });
+
+        es.onerror = () => {
+            if (syncEventSource === es) {
+                try { es.close(); } catch (_) { }
+                syncEventSource = null;
+            }
+            if (!currentUser || isCurrentTabSuspended || document.visibilityState !== 'visible') return;
+            const delayMs = Math.min(30000, 2000 * (2 ** syncReconnectAttempt));
+            syncReconnectAttempt = Math.min(4, syncReconnectAttempt + 1);
+            if (!syncReconnectTimer) {
+                syncReconnectTimer = setTimeout(() => {
+                    syncReconnectTimer = null;
+                    if (currentUser && !isCurrentTabSuspended && document.visibilityState === 'visible') {
+                        fetchLatestSyncRevisionsCatchup().finally(() => startRealtimeSessionSync());
+                    }
+                }, delayMs);
+            }
+        };
+    } catch (_) {
+        syncEventSource = null;
+    }
+}
+
+function initRealtimeSessionSync() {
+    if (realtimeSyncInitialized || typeof document === 'undefined') return;
+    realtimeSyncInitialized = true;
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            stopRealtimeSessionSync({ resetRevisions: false });
+        } else if (document.visibilityState === 'visible' && currentUser && !isCurrentTabSuspended) {
+            fetchLatestSyncRevisionsCatchup().finally(() => startRealtimeSessionSync());
+        }
+    });
+
+    document.addEventListener('focusout', () => {
+        if (pendingSyncScopes.size > 0) {
+            setTimeout(flushPendingSyncScopes, 150);
+        }
+    });
+
+    document.addEventListener('click', () => {
+        if (pendingSyncScopes.size > 0 && !isUserEditingActiveViewOrModal()) {
+            setTimeout(flushPendingSyncScopes, 150);
+        }
+    });
+}
+
 function initSingleTabAndNtfyHandover() {
     if (typeof window === 'undefined' || typeof BroadcastChannel !== 'function') return;
 
@@ -18678,6 +18765,7 @@ function initSingleTabAndNtfyHandover() {
             clearInterval(sundayWatcherInterval);
             sundayWatcherInterval = null;
         }
+        stopRealtimeSessionSync({ resetRevisions: false });
         if (titleEl && customTitle) titleEl.textContent = customTitle;
         if (msgEl && customMsg) msgEl.textContent = customMsg;
         if (modal) modal.hidden = false;
@@ -18697,6 +18785,9 @@ function initSingleTabAndNtfyHandover() {
                     cargarRecordatoriosActivos();
                 }
             }, 60 * 1000);
+        }
+        if (currentUser) {
+            fetchLatestSyncRevisionsCatchup().finally(() => startRealtimeSessionSync());
         }
     };
 
@@ -18790,6 +18881,7 @@ function initApp() {
     actualizarCabecerasDeFecha();
     initPasswordToggles();
     initSingleTabAndNtfyHandover();
+    initRealtimeSessionSync();
     initAuthHandlers();
     initSettingsHandlers();
     initLanguageAiStudio();

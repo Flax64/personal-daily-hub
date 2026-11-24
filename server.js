@@ -11644,6 +11644,7 @@ app.patch('/api/language/lessons/:id/complete', apiWriteLimiter.middleware, requ
         );
         bumpSyncRevision('music');
 
+        bumpSyncRevision('music');
         res.json({ ok: true, id: lesson.id, completed: true });
     } catch (err) {
         console.error('[LANGUAGE_LESSON_COMPLETE_ERROR]', err);
@@ -11753,151 +11754,197 @@ app.get('/api/system/logs', apiReadLimiter.middleware, requireAdmin, (req, res) 
     });
 });
 
-// ==========================================
-// SINCRONIZACIÓN EN TIEMPO REAL (SSE + REVISIONES POR SCOPE)
-// ==========================================
+// =========================================================================
+// SINCRONIZACIÓN EN TIEMPO REAL ENTRE SESIONES Y RÉPLICAS (SSE + SyncRevisions)
+// =========================================================================
 const SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
 const CLINICAL_SYNC_SCOPES = ['mood', 'sleep', 'crisis'];
-const localSyncRevisions = Object.fromEntries(SYNC_SCOPES.map((scope) => [scope, 1]));
-const sseSyncClients = new Set();
-let syncReplicaPollTimer = null;
-let syncReplicaPollInFlight = false;
+const SYNC_CACHE_TTL_MS = 1500;
+const SYNC_POLL_INTERVAL_MS = 3000;
+const SYNC_HEARTBEAT_INTERVAL_MS = 25000;
+const MAX_SSE_CLIENTS_PER_USER = 5;
 
-function filterSyncRevisionsForRole(revs = {}, rol = 'admin') {
-    const allowedScopes = rol === 'psiquiatra' ? CLINICAL_SYNC_SCOPES : SYNC_SCOPES;
+const syncBus = new EventEmitter();
+syncBus.setMaxListeners(100);
+
+const syncRevisionsSnapshot = {
+    mood: 1,
+    sleep: 1,
+    crisis: 1,
+    agenda: 1,
+    planner: 1,
+    settings: 1,
+    music: 1,
+    journal: 1
+};
+let syncRevisionsCacheAt = 0;
+
+const sseClients = new Set();
+const sseClientsByUser = new Map();
+let syncPollerTimer = null;
+let syncHeartbeatTimer = null;
+let syncPollerInFlight = false;
+
+const syncReadLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 180,
+    message: 'Too many sync requests. Please slow down briefly.'
+});
+
+function filterRevisionsForRole(revisions, role) {
+    if (role !== 'psiquiatra') {
+        return { ...revisions };
+    }
     const filtered = {};
-    for (const scope of allowedScopes) {
-        const val = Number(revs?.[scope]);
-        filtered[scope] = Number.isFinite(val) && val > 0 ? val : 1;
+    for (const s of CLINICAL_SYNC_SCOPES) {
+        filtered[s] = Number(revisions[s]) || 1;
     }
     return filtered;
 }
 
-async function fetchSyncRevisions() {
-    const base = {};
-    for (const scope of SYNC_SCOPES) {
-        base[scope] = Number(localSyncRevisions[scope]) || 1;
+async function fetchSyncRevisions({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && syncRevisionsCacheAt > 0 && (now - syncRevisionsCacheAt) < SYNC_CACHE_TTL_MS) {
+        return { ...syncRevisionsSnapshot };
     }
     try {
         const rows = await dbQueryAsync('SELECT scope, revision FROM SyncRevisions');
         if (Array.isArray(rows)) {
             for (const row of rows) {
                 const scope = String(row?.scope || '').trim();
-                const rev = Number(row?.revision);
-                if (SYNC_SCOPES.includes(scope) && Number.isFinite(rev) && rev > 0) {
-                    base[scope] = rev;
-                    localSyncRevisions[scope] = rev;
+                if (!SYNC_SCOPES.includes(scope)) continue;
+                const rev = Number(row.revision);
+                if (Number.isFinite(rev) && rev > syncRevisionsSnapshot[scope]) {
+                    syncRevisionsSnapshot[scope] = rev;
                 }
             }
         }
+        syncRevisionsCacheAt = Date.now();
     } catch (_) {
-        // Fallback silencioso a memoria local si la tabla aún no existe
+        // Keep last snapshot in RAM if DB temporarily unavailable
     }
-    return base;
-}
-
-function broadcastSseSync(revs = localSyncRevisions, changedScopes = []) {
-    if (sseSyncClients.size === 0) return;
-    const normalizedChanges = Array.isArray(changedScopes)
-        ? changedScopes.filter((s) => SYNC_SCOPES.includes(s))
-        : [];
-    const ts = Date.now();
-    for (const client of Array.from(sseSyncClients)) {
-        if (!client || !client.res || client.res.writableEnded) {
-            sseSyncClients.delete(client);
-            continue;
-        }
-        const allowed = client.rol === 'psiquiatra' ? CLINICAL_SYNC_SCOPES : SYNC_SCOPES;
-        const roleChanges = normalizedChanges.filter((s) => allowed.includes(s));
-        if (normalizedChanges.length > 0 && roleChanges.length === 0) {
-            continue;
-        }
-        const payload = {
-            replicaId: REPLICA_ID,
-            revisions: filterSyncRevisionsForRole(revs, client.rol),
-            changedScopes: roleChanges,
-            ts
-        };
-        try {
-            client.res.write(`event: sync\ndata: ${JSON.stringify(payload)}\n\n`);
-        } catch (_) {
-            sseSyncClients.delete(client);
-        }
-    }
-}
-
-function ensureReplicaSyncPoller() {
-    if (syncReplicaPollTimer || sseSyncClients.size === 0 || isAutomatedTestEnv()) return;
-    syncReplicaPollTimer = setInterval(async () => {
-        if (sseSyncClients.size === 0 || syncReplicaPollInFlight) return;
-        syncReplicaPollInFlight = true;
-        try {
-            const prevSnapshot = { ...localSyncRevisions };
-            const latest = await fetchSyncRevisions();
-            const changed = SYNC_SCOPES.filter((scope) => (Number(latest[scope]) || 1) !== (Number(prevSnapshot[scope]) || 1));
-            if (changed.length > 0) {
-                broadcastSseSync(latest, changed);
-            }
-        } catch (_) {
-            // Ignorar errores transitorios de polling entre réplicas
-        } finally {
-            syncReplicaPollInFlight = false;
-        }
-    }, 4000);
-    if (typeof syncReplicaPollTimer.unref === 'function') {
-        syncReplicaPollTimer.unref();
-    }
-}
-
-function stopReplicaSyncPollerIfIdle() {
-    if (sseSyncClients.size === 0 && syncReplicaPollTimer) {
-        clearInterval(syncReplicaPollTimer);
-        syncReplicaPollTimer = null;
-    }
-}
-
-function closeAllSseClients() {
-    if (syncReplicaPollTimer) {
-        clearInterval(syncReplicaPollTimer);
-        syncReplicaPollTimer = null;
-    }
-    for (const client of Array.from(sseSyncClients)) {
-        try {
-            if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);
-            if (client.res && !client.res.writableEnded) {
-                client.res.end();
-            }
-        } catch (_) {
-            // noop
-        }
-        sseSyncClients.delete(client);
-    }
+    return { ...syncRevisionsSnapshot };
 }
 
 function bumpSyncRevision(scope) {
     if (!SYNC_SCOPES.includes(scope)) return;
-    localSyncRevisions[scope] = (Number(localSyncRevisions[scope]) || 1) + 1;
-    dbQueryAsync(
-        'INSERT INTO SyncRevisions (scope, revision) VALUES (?, 2) ON DUPLICATE KEY UPDATE revision = revision + 1, updated_at = CURRENT_TIMESTAMP',
-        [scope]
-    )
-        .then(() => fetchSyncRevisions())
-        .then((revs) => broadcastSseSync(revs, [scope]))
-        .catch(() => broadcastSseSync({ ...localSyncRevisions }, [scope]));
+    syncRevisionsSnapshot[scope] = (Number(syncRevisionsSnapshot[scope]) || 1) + 1;
+    syncRevisionsCacheAt = 0;
+    const snapshotCopy = { ...syncRevisionsSnapshot };
+    syncBus.emit('change', { scopes: [scope], revisions: snapshotCopy });
+
+    db.query(
+        'INSERT INTO SyncRevisions (scope, revision) VALUES (?, 2) ON DUPLICATE KEY UPDATE revision = revision + 1',
+        [scope],
+        (err) => {
+            if (err && !/ER_NO_SUCH_TABLE/i.test(err.message || '')) {
+                console.error(`[SYNC_BUMP_ERROR] (${scope}):`, err.message);
+            }
+        }
+    );
 }
 
-app.get('/api/sync/revisions', apiReadLimiter.middleware, requireAuth, async (req, res) => {
+function writeSseEvent(client, eventName, payload) {
+    if (!client || client.closed || client.res.writableEnded) return;
     try {
-        const revs = await fetchSyncRevisions();
-        return res.json({
-            ok: true,
-            replicaId: REPLICA_ID,
-            revisions: filterSyncRevisionsForRole(revs, req.user?.rol)
-        });
-    } catch (err) {
-        console.error('[SYNC_REVISIONS_ERROR]', err);
-        return res.status(500).send('Error loading sync revisions.');
+        client.res.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+    } catch (_) {
+        unregisterSseClient(client);
     }
+}
+
+function broadcastSseChange(changedScopes, revisions) {
+    if (!Array.isArray(changedScopes) || changedScopes.length === 0 || sseClients.size === 0) return;
+    for (const client of sseClients) {
+        const allowedScopes = client.role === 'psiquiatra'
+            ? changedScopes.filter((s) => CLINICAL_SYNC_SCOPES.includes(s))
+            : changedScopes;
+        if (allowedScopes.length === 0) continue;
+        writeSseEvent(client, 'sync', {
+            scopes: allowedScopes,
+            revisions: filterRevisionsForRole(revisions, client.role)
+        });
+    }
+}
+
+syncBus.on('change', ({ scopes, revisions }) => {
+    broadcastSseChange(scopes, revisions);
+});
+
+function stopSyncTimersIfIdle() {
+    if (sseClients.size > 0) return;
+    if (syncPollerTimer) {
+        clearInterval(syncPollerTimer);
+        syncPollerTimer = null;
+    }
+    if (syncHeartbeatTimer) {
+        clearInterval(syncHeartbeatTimer);
+        syncHeartbeatTimer = null;
+    }
+}
+
+function ensureSyncTimersStarted() {
+    if (sseClients.size === 0) return;
+    if (!syncPollerTimer) {
+        syncPollerTimer = setInterval(async () => {
+            if (sseClients.size === 0 || syncPollerInFlight) return;
+            syncPollerInFlight = true;
+            try {
+                const prev = { ...syncRevisionsSnapshot };
+                const next = await fetchSyncRevisions({ force: true });
+                const changedScopes = SYNC_SCOPES.filter((s) => Number(next[s]) > Number(prev[s]));
+                if (changedScopes.length > 0) {
+                    broadcastSseChange(changedScopes, next);
+                }
+            } finally {
+                syncPollerInFlight = false;
+            }
+        }, SYNC_POLL_INTERVAL_MS);
+        syncPollerTimer.unref?.();
+    }
+    if (!syncHeartbeatTimer) {
+        syncHeartbeatTimer = setInterval(() => {
+            if (sseClients.size === 0) return;
+            for (const client of sseClients) {
+                if (client.closed || client.res.writableEnded) continue;
+                try {
+                    client.res.write(': ping\n\n');
+                } catch (_) {
+                    unregisterSseClient(client);
+                }
+            }
+        }, SYNC_HEARTBEAT_INTERVAL_MS);
+        syncHeartbeatTimer.unref?.();
+    }
+}
+
+function unregisterSseClient(client) {
+    if (!client || client.closed) return;
+    client.closed = true;
+    sseClients.delete(client);
+    const userSet = sseClientsByUser.get(client.userId);
+    if (userSet) {
+        userSet.delete(client);
+        if (userSet.size === 0) sseClientsByUser.delete(client.userId);
+    }
+    try {
+        if (!client.res.writableEnded) client.res.end();
+    } catch (_) {}
+    stopSyncTimersIfIdle();
+}
+
+function closeAllSseClients() {
+    for (const client of Array.from(sseClients)) {
+        unregisterSseClient(client);
+    }
+    stopSyncTimersIfIdle();
+}
+
+app.get('/api/sync/revisions', syncReadLimiter.middleware, requireAuth, async (req, res) => {
+    const revisions = await fetchSyncRevisions();
+    res.json({
+        revisions: filterRevisionsForRole(revisions, req.user.rol)
+    });
 });
 
 app.get('/api/sync/stream', requireAuth, async (req, res) => {
@@ -11905,56 +11952,40 @@ app.get('/api/sync/stream', requireAuth, async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-    if (typeof res.flushHeaders === 'function') {
-        res.flushHeaders();
+    res.flushHeaders?.();
+
+    const userId = Number(req.user.id);
+    let userSet = sseClientsByUser.get(userId);
+    if (!userSet) {
+        userSet = new Set();
+        sseClientsByUser.set(userId, userSet);
+    }
+    while (userSet.size >= MAX_SSE_CLIENTS_PER_USER) {
+        const oldest = userSet.values().next().value;
+        if (!oldest) break;
+        unregisterSseClient(oldest);
     }
 
     const client = {
+        userId,
+        role: req.user.rol,
         res,
-        userId: req.user?.id || null,
-        rol: req.user?.rol || 'admin',
-        heartbeatTimer: null
+        closed: false
     };
-    sseSyncClients.add(client);
-    ensureReplicaSyncPoller();
+    sseClients.add(client);
+    userSet.add(client);
+    ensureSyncTimersStarted();
 
-    client.heartbeatTimer = setInterval(() => {
-        if (res.writableEnded) return;
-        try {
-            res.write(': ping\n\n');
-        } catch (_) {
-            // noop
-        }
-    }, 25000);
-    if (typeof client.heartbeatTimer.unref === 'function') {
-        client.heartbeatTimer.unref();
+    req.on('close', () => {
+        unregisterSseClient(client);
+    });
+
+    const revisions = await fetchSyncRevisions();
+    if (!client.closed) {
+        writeSseEvent(client, 'ready', {
+            revisions: filterRevisionsForRole(revisions, client.role)
+        });
     }
-
-    try {
-        const initialRevs = await fetchSyncRevisions();
-        if (!res.writableEnded) {
-            const initialPayload = {
-                replicaId: REPLICA_ID,
-                revisions: filterSyncRevisionsForRole(initialRevs, client.rol),
-                changedScopes: [],
-                ts: Date.now()
-            };
-            res.write(`event: sync\ndata: ${JSON.stringify(initialPayload)}\n\n`);
-        }
-    } catch (_) {
-        // noop
-    }
-
-    const cleanup = () => {
-        if (client.heartbeatTimer) {
-            clearInterval(client.heartbeatTimer);
-            client.heartbeatTimer = null;
-        }
-        sseSyncClients.delete(client);
-        stopReplicaSyncPollerIfIdle();
-    };
-    req.on('close', cleanup);
-    res.on('close', cleanup);
 });
 
 // Manejo controlado de rutas inexistentes y errores inesperados en API (sin filtrar stack traces)
@@ -11994,12 +12025,12 @@ const httpServer = app.listen(PORT, () => {
         }
     }
 });
-httpServer.on('close', closeAllSseClients);
 // Protección anti-Slowloris / agotamiento de sockets HTTP
 httpServer.keepAliveTimeout = 15000;
 httpServer.headersTimeout = 20000;
 httpServer.requestTimeout = 90000;
 httpServer.maxHeadersCount = 64;
+httpServer.on('close', closeAllSseClients);
 
 // Capturar errores imprevistos para saber por qué se cayó
 process.on('uncaughtException', (err) => {
