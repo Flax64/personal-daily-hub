@@ -5761,8 +5761,17 @@ body.modal-scroll-locked {
     }
 
     .journal-submit-row .btn-submit,
+    .journal-submit-row .btn-journal-ntr,
     .btn-journal-ntr {
+        flex: 0 0 auto;
+        height: auto;
         width: 100%;
+        min-height: 46px;
+        padding: 12px 16px;
+        margin-bottom: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
     }
 }
 
@@ -6991,6 +7000,12 @@ body {
         gap: 12px;
     }
 
+    .view-header-main {
+        flex: 0 0 auto;
+        height: auto;
+        width: 100%;
+    }
+
     .view-header-actions {
         width: 100%;
         display: flex;
@@ -7110,8 +7125,23 @@ body {
         align-items: stretch;
     }
 
+    .yt-platform-info {
+        flex: 0 0 auto;
+        height: auto;
+        width: 100%;
+    }
+
+    .music-yt-finder-bar input,
+    .music-inline-input input {
+        flex: 0 0 auto;
+        height: auto;
+        width: 100%;
+    }
+
     .music-yt-finder-bar > button:not(.password-toggle-btn),
     .music-inline-input > button:not(.password-toggle-btn) {
+        flex: 0 0 auto;
+        height: auto;
         width: 100%;
     }
 
@@ -8352,6 +8382,8 @@ body {
     }
 
     .floating-translator-drawer .gt-lang-group {
+        flex: 0 0 auto;
+        height: auto;
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 3px;
@@ -10421,6 +10453,13 @@ input[type="password"] {
         align-items: flex-start;
     }
 
+    .hangul-detail-info,
+    .hangul-builder-meta {
+        flex: 0 0 auto;
+        height: auto;
+        width: 100%;
+    }
+
     .hangul-symbol-grid {
         grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
         gap: 6px;
@@ -11364,6 +11403,7 @@ input[type="password"] {
     .rule-row-split > .switch-row,
     .sleep-rule-field > span {
         flex: 0 0 auto;
+        height: auto;
         width: 100%;
         min-width: 0;
     }
@@ -11530,8 +11570,10 @@ input[type="password"] {
     }
 
     .modal-card-compact .modal-actions button,
-    .modal-actions-split > button {
+    .modal-actions-split > button,
+    .modal-actions-split .modal-actions button {
         flex: 0 0 auto;
+        height: auto;
         width: 100%;
     }
 }

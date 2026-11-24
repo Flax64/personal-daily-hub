@@ -164,6 +164,70 @@ describe('Sintaxis de código (JS, HTML, CSS, Python, Bash)', () => {
         assert.strictEqual(opens, closes, `Llaves desbalanceadas en style.css: ${opens} vs ${closes}`);
     });
 
+    it('evita estiramiento vertical en columna móvil reseteando flex/height en .journal-submit-row y contenedores flex auditados', () => {
+        const css = readText('public/style.css');
+
+        function extractMediaBlocks(source, mediaHeaderRegex) {
+            const blocks = [];
+            let match;
+            const globalRegex = new RegExp(mediaHeaderRegex.source, 'g');
+            while ((match = globalRegex.exec(source)) !== null) {
+                const openIdx = source.indexOf('{', match.index);
+                if (openIdx === -1) continue;
+                let depth = 0;
+                let endIdx = -1;
+                for (let i = openIdx; i < source.length; i++) {
+                    if (source[i] === '{') depth++;
+                    else if (source[i] === '}') {
+                        depth--;
+                        if (depth === 0) {
+                            endIdx = i;
+                            break;
+                        }
+                    }
+                }
+                if (endIdx !== -1) {
+                    blocks.push(source.slice(openIdx + 1, endIdx));
+                }
+            }
+            return blocks;
+        }
+
+        // Escritorio (> 640px) mantiene flex: 1 1 240px en .journal-submit-row .btn-submit
+        assert.match(css, /\.journal-submit-row\s+\.btn-submit\s*\{[^}]*flex:\s*1\s+1\s+240px;/);
+
+        const media640 = extractMediaBlocks(css, /@media\s*\(\s*max-width:\s*640px\s*\)/).join('\n');
+        const media480 = extractMediaBlocks(css, /@media\s*\(\s*max-width:\s*480px\s*\)/).join('\n');
+
+        // Regresión principal: .journal-submit-row en columna móvil debe resetear flex/height
+        const journalMobileMatch = media640.match(/\.journal-submit-row\s*\{[^}]*flex-direction:\s*column;[\s\S]*?\}(\s*\.journal-submit-row\s+\.btn-submit[\s\S]*?\{[^}]*\})/);
+        assert.ok(journalMobileMatch, 'Debe existir el bloque móvil de .journal-submit-row y .journal-submit-row .btn-submit en @media (max-width: 640px)');
+        const journalBtnRule = journalMobileMatch[1];
+        assert.match(journalBtnRule, /\.journal-submit-row\s+\.btn-submit/);
+        assert.match(journalBtnRule, /\.journal-submit-row\s+\.btn-journal-ntr/);
+        assert.match(journalBtnRule, /(?:flex:\s*(?:0\s+0\s+auto|none)|flex-basis:\s*auto)\s*;/);
+        assert.match(journalBtnRule, /height:\s*auto\s*;/);
+        assert.match(journalBtnRule, /width:\s*100%\s*;/);
+        assert.match(journalBtnRule, /min-height:\s*46px\s*;/);
+        assert.match(journalBtnRule, /padding:\s*12px\s+16px\s*;/);
+
+        // Contenedores flex auditados que pasan a columna en móvil
+        for (const [label, regex] of [
+            ['.view-header-main en 640px', /\.view-header-main\s*\{[^}]*flex:\s*0\s+0\s+auto;[^}]*height:\s*auto;/],
+            ['.yt-platform-info en 640px', /\.yt-platform-info\s*\{[^}]*flex:\s*0\s+0\s+auto;[^}]*height:\s*auto;/],
+            ['.music-yt-finder-bar input y .music-inline-input input en 640px', /\.music-yt-finder-bar\s+input,\s*\.music-inline-input\s+input\s*\{[^}]*flex:\s*0\s+0\s+auto;[^}]*height:\s*auto;/],
+            ['.rule-row-split > .switch-row en 640px', /\.rule-row-split\s*>\s*\.switch-row[\s\S]*?\{[^}]*flex:\s*0\s+0\s+auto;[^}]*height:\s*auto;/]
+        ]) {
+            assert.match(media640, regex, `Falta reseteo flex/height en ${label}`);
+        }
+
+        assert.match(
+            media480,
+            /\.modal-actions-split\s+\.modal-actions\s+button\s*\{[^}]*flex:\s*0\s+0\s+auto;[^}]*height:\s*auto;/,
+            'Falta reseteo flex/height en .modal-actions-split .modal-actions button en @media (max-width: 480px)'
+        );
+    });
+
     it('valida sintaxis Python de sincronitation/*.py y lib/docx_writer.py', () => {
         const DOCX_WRITER_PY_PATH = path.resolve(ROOT, 'lib', 'docx_writer.py');
         const pyFiles = [SYNC_PY_PATH, YT_HELPER_PY_PATH, DOCX_WRITER_PY_PATH];
