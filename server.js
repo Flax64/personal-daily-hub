@@ -688,9 +688,9 @@ db.getConnection((err, connection) => {
     inicializarTablasSeguridad();
 });
 
-// ==========================================
+// 
 // UTILIDADES DE SEGURIDAD, SESIONES Y CORREO
-// ==========================================
+// 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const BCRYPT_ROUNDS = 12;
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
@@ -1164,9 +1164,9 @@ function requireAdmin(req, res, next) {
     });
 }
 
-// ==========================================
+// 
 // PROTECCIÓN CONTRA DOBLE ENVÍO, CONCURRENCIA E IDEMPOTENCIA
-// ==========================================
+// 
 const MAX_IDEMPOTENCY_ENTRIES = 300;
 const IN_FLIGHT_MAX_AGE_MS = 60 * 1000;
 const DEFAULT_IDEMPOTENCY_TTL_MS = 2 * 60 * 1000;
@@ -1366,9 +1366,9 @@ function issueUserSession(res, user, { statusCode = 200, message, errorMessage =
     );
 }
 
-// ==========================================
+// 
 // RUTAS DE AUTENTICACIÓN Y SEGURIDAD
-// ==========================================
+// 
 
 // Consultar sesión activa
 app.get('/api/auth/me', apiReadLimiter.middleware, requireAuth, (req, res) => {
@@ -1890,9 +1890,9 @@ app.delete('/api/auth/medicos/:id', apiWriteLimiter.middleware, requireAdmin, pr
     });
 });
 
-// ==========================================
+// 
 // RUTAS DE MOOD Y SUEÑO (PROTEGIDAS POR ROL)
-// ==========================================
+// 
 const MOMENTOS_VALIDOS = new Set(['Madrugada', 'Morning', 'Noon', 'Afternoon', 'Night']);
 const CALIDADES_SUENO_VALIDAS = new Set(['Good', 'Regular', 'Bad']);
 const SLEEP_TIPOS_VALIDOS = new Set(['normal', 'siesta', 'desvelo_tarde', 'desvelo_total']);
@@ -2259,9 +2259,9 @@ app.delete('/api/delete-sleep/:id', apiWriteLimiter.middleware, requireAdmin, pr
     });
 });
 
-// =========================================================================
+// ===
 // EXTRACTOR TEMPORAL EN MEMORIA RAM DESDE GOOGLE DRIVE (ZERO-DISK BLOAT)
-// =========================================================================
+// ===
 let _driveArchiveRamCache = {
     loadedAt: 0,
     data: null
@@ -2447,9 +2447,9 @@ app.get('/api/get-sleep', apiReadLimiter.middleware, requireAuth, (req, res) => 
     });
 });
 
-// =======================================================
+// ======
 // REGISTRO DE CRISIS (SOLO ADMIN ESCRIBE; PSIQUIATRA SOLO LECTURA)
-// =======================================================
+// ======
 const CRISIS_TIPOS_VALIDOS = new Set([
     'Estrés',
     'Ira / Rabia',
@@ -3286,9 +3286,9 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
 // Ruta para que tu PC consulte entradas de inglés pendientes (compatibilidad puente PC)
 app.get('/api/pull-english', pcPullLimiter.middleware, requirePcBridgeAuthIfConfigured, englishQueue.pull);
 
-// ==========================================
+// 
 // RUTAS PARA LA AGENDA PERSONAL SEMANAL (SOLO ADMIN)
-// ==========================================
+// 
 const BLOQUES_VALIDOS = new Set(['manana', 'cole', 'tarde', 'noche']);
 const AGENDA_TIPOS_VALIDOS = new Set(['evento', 'tarea']);
 const AGENDA_CATEGORIAS_VALIDAS = new Set(['universidad', 'personal']);
@@ -3914,9 +3914,9 @@ app.delete('/api/delete-agenda/:id', apiWriteLimiter.middleware, requireAdmin, p
     });
 });
 
-// ==========================================
+// 
 // CONFIGURACIÓN PERSONAL, RECORDATORIOS Y NOTIFICACIONES MÓVILES
-// ==========================================
+// 
 function dbQueryAsync(sql, params = []) {
     return new Promise((resolve, reject) => {
         db.query(sql, params, (err, rows) => {
@@ -3926,9 +3926,9 @@ function dbQueryAsync(sql, params = []) {
     });
 }
 
-// ==========================================
+// 
 // DIRECTORIO DE CROQUIS TEC DE SALTILLO (ITS), UBICACIONES Y TRÁFICO
-// ==========================================
+// 
 const ITS_CAMPUS_DIRECTORY = {
     principal: {
         id: 'principal',
@@ -7704,10 +7704,10 @@ const handleReminderExternalAction = async (req, res) => {
 app.post('/api/reminders/action', reminderActionLimiter.middleware, handleReminderExternalAction);
 app.get('/api/reminders/action', reminderActionLimiter.middleware, handleReminderExternalAction);
 
-// =========================================================================
+// ===
 // APRENDIZAJE DE INGLÉS CON MÚSICA (SÓLO METADATOS EN MYSQL + YOUTUBE MUSIC)
 // Las notas largas y fragmentos de estudio se envían cifrados E2EE a Word (.docx).
-// =========================================================================
+// ===
 const MUSIC_RELEASE_TYPES = new Set(['album', 'mini_album', 'ep', 'single', 'ost', 'collab_single']);
 const MUSIC_STUDY_STATES = new Set(['to_study', 'in_progress', 'mastered']);
 const MUSIC_ARTIST_ROLES = new Set(['main', 'feat', 'collab', 'producer']);
@@ -9080,9 +9080,9 @@ async function fetchOwnedMusicSongForMediaOrLyrics(songId, uid) {
     return rows[0] || null;
 }
 
-// ==========================================
+// 
 // PUENTE CIFRADO SITE-TO-SITE (EC2 RAM <-> SINCRONIZADOR PC)
-// ==========================================
+// 
 const MAX_PC_MUSIC_JOBS = 25;
 const PC_MUSIC_JOB_TTL_MS = 5 * 60 * 1000;
 const PC_HEARTBEAT_ONLINE_MS = 65 * 1000;
@@ -10438,9 +10438,9 @@ app.delete('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireA
     }
 });
 
-// =========================================================================
+// ===
 // SIMULATED HTTPS HYBRID TRANSPORT LAYER (X25519 + AES-256-CTR + HMAC-SHA256)
-// =========================================================================
+// ===
 app.post('/api/transport/handshake', transportHandshakeLimiter.middleware, requireNonEmptyBody, (req, res) => {
     try {
         const result = transportManager.createHandshakeResponse(req.body.clientPub);
@@ -10481,9 +10481,9 @@ app.post('/api/transport/benchmark', apiWriteLimiter.middleware, requireAuth, re
     });
 });
 
-// =========================================================================
+// ===
 // MULTI-LANGUAGE STUDY & AI LYRICS ENGINE (English, Korean, K-Pop EN+KR)
-// =========================================================================
+// ===
 app.get('/api/language/registry', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
     try {
         const settings = await loadUserSettings(req.user.id);
@@ -11755,9 +11755,9 @@ app.get('/api/system/logs', apiReadLimiter.middleware, requireAdmin, (req, res) 
 });
 
 
-// =========================================================================
+// ===
 // SINCRONIZACIÓN EN TIEMPO REAL ENTRE SESIONES Y RÉPLICAS (SSE + SyncRevisions)
-// =========================================================================
+// ===
 const SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
 const CLINICAL_SYNC_SCOPES = ['mood', 'sleep', 'crisis'];
 const SYNC_CACHE_TTL_MS = 1500;
@@ -11799,10 +11799,10 @@ function filterRevisionsForRole(revisions, role) {
     const filtered = {};
     for (const s of CLINICAL_SYNC_SCOPES) {
         filtered[s] = Number(revisions[s]) || 1;
-=======
-// ==========================================
+
+// 
 // SINCRONIZACIÓN EN TIEMPO REAL (SSE + REVISIONES POR SCOPE)
-// ==========================================
+// 
 const SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
 const CLINICAL_SYNC_SCOPES = ['mood', 'sleep', 'crisis'];
 const localSyncRevisions = Object.fromEntries(SYNC_SCOPES.map((scope) => [scope, 1]));
@@ -11826,7 +11826,7 @@ async function fetchSyncRevisions({ force = false } = {}) {
     const now = Date.now();
     if (!force && syncRevisionsCacheAt > 0 && (now - syncRevisionsCacheAt) < SYNC_CACHE_TTL_MS) {
         return { ...syncRevisionsSnapshot };
-=======
+
 async function fetchSyncRevisions() {
     const base = {};
     for (const scope of SYNC_SCOPES) {
@@ -11851,7 +11851,7 @@ async function fetchSyncRevisions() {
         // Keep last snapshot in RAM if DB temporarily unavailable
     }
     return { ...syncRevisionsSnapshot };
-=======
+
                 const rev = Number(row?.revision);
                 if (SYNC_SCOPES.includes(scope) && Number.isFinite(rev) && rev > 0) {
                     base[scope] = rev;
@@ -12064,7 +12064,7 @@ app.get('/api/sync/revisions', syncReadLimiter.middleware, requireAuth, async (r
     res.json({
         revisions: filterRevisionsForRole(revisions, req.user.rol)
     });
-=======
+
     localSyncRevisions[scope] = (Number(localSyncRevisions[scope]) || 1) + 1;
     dbQueryAsync(
         'INSERT INTO SyncRevisions (scope, revision) VALUES (?, 2) ON DUPLICATE KEY UPDATE revision = revision + 1, updated_at = CURRENT_TIMESTAMP',
@@ -12130,7 +12130,7 @@ app.get('/api/sync/stream', requireAuth, async (req, res) => {
             revisions: filterRevisionsForRole(revisions, client.role)
         });
     }
-=======
+
     if (typeof res.flushHeaders === 'function') {
         res.flushHeaders();
     }

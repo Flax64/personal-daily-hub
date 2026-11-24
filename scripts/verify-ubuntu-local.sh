@@ -38,9 +38,9 @@ if [ -f "$PROJECT_DIR/.env" ]; then
     [ -n "$ENV_TZ" ] && EXPECTED_TZ="$ENV_TZ"
 fi
 
-echo "======================================================================"
+echo ""
 echo " Verificación Local Ubuntu Server + Tailscale (8 GB RAM / i7 / ~500 GB HDD)"
-echo "======================================================================"
+echo ""
 
 # 1. Hardware y sistema operativo
 echo ""
@@ -482,9 +482,9 @@ else
 fi
 
 echo ""
-echo "======================================================================"
+echo ""
 echo " Resumen: PASS=${PASS_COUNT} | WARN=${WARN_COUNT} | FAIL=${FAIL_COUNT}"
-echo "======================================================================"
+echo ""
 
 if [ "$FAIL_COUNT" -gt 0 ]; then
     exit 1

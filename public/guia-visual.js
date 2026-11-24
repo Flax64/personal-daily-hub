@@ -1,8 +1,8 @@
-/* ==========================================================================
+/* ====
    public/guia-visual.js — Visual-First Interactive Guide (EN <-> ES · Dark)
    Renders scannable diagrams, color keys, shortcut chips, and 3-step cards
    inside #view-guia (SPA) OR standalone public/guia-visual.html.
-   ========================================================================== */
+   ==== */
 (function (root) {
     'use strict';
 
