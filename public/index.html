@@ -1828,7 +1828,6 @@
                         </div>
                         <div class="view-header-actions">
                             <button type="button" class="btn-secondary-pill" id="btnUpdateLiveGps">📍 Update My GPS</button>
-                            <button type="button" class="btn-primary-pill" id="btnSyncScheduleToAgenda">🗓️ Sync Week to Agenda</button>
                         </div>
                     </div>
 
@@ -2706,34 +2705,6 @@
                                 <small class="form-hint" id="settingsGeminiKeyStatus">Checking Gemini key status...</small>
                                 <div id="settingsGeminiTestResult" class="inline-status-banner" hidden aria-live="polite"></div>
                             </div>
-                        </section>
-
-                        <!-- Card E: Connection Privacy & Security Status -->
-                        <section class="card settings-card settings-card-wide" id="transportSecurityCard">
-                            <h3>🔐 Privacidad y Protección de Conexión</h3>
-                            <p class="muted-text" data-i18n-html="x25519_desc">
-                                Toda la información entre tu teléfono, tu computadora y tu cuenta viaja cifrada para proteger tus notas y datos personales.
-                            </p>
-                            <div class="transport-diag-grid" id="transportDiagSummary">
-                                <div class="transport-stat-box">
-                                    <span class="transport-stat-label">Identificador de Sesión Segura</span>
-                                    <strong id="transportDiagKid" data-no-i18n="true">Conectando...</strong>
-                                </div>
-                                <div class="transport-stat-box">
-                                    <span class="transport-stat-label">Nivel de Protección</span>
-                                    <strong id="transportDiagCipher" data-no-i18n="true">Cifrado de Extremo a Extremo Activo</strong>
-                                </div>
-                                <div class="transport-stat-box">
-                                    <span class="transport-stat-label">Actividad Protegida</span>
-                                    <strong id="transportDiagStats" data-no-i18n="true">0 reqs · 0 KB</strong>
-                                </div>
-                            </div>
-                            <div class="settings-inline-actions transport-action-bar">
-                                <button type="button" class="agenda-chip-btn" id="btnTransportRotateKey" title="Generar nuevas llaves temporales de sesión segura">🔄 Renovar Llave de Sesión</button>
-                                <button type="button" class="agenda-chip-btn" id="btnTransportBenchmark" title="Verificar velocidad de cifrado en este dispositivo">⚡ Probar Velocidad de Cifrado</button>
-                                <button type="button" class="agenda-chip-btn" id="btnTransportInspectPacket" title="Ver ejemplo de datos cifrados enviados por la red">🔍 Verificar Datos Cifrados</button>
-                            </div>
-                            <div id="transportBenchmarkResult" class="transport-benchmark-box" hidden></div>
                         </section>
 
                         <!-- Card C: Workspace, Agenda Defaults & Security Shortcuts -->

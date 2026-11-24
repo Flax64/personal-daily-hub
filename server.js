@@ -12,6 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
+const { EventEmitter } = require('node:events');
 const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const {
@@ -226,7 +227,7 @@ app.use((err, req, res, next) => {
     return next(err);
 });
 app.use('/api', (req, res, next) => {
-    if (req.path === '/transport/handshake') {
+    if (req.path === '/transport/handshake' || req.path === '/sync/stream') {
         return next();
     }
 
@@ -462,6 +463,11 @@ function inicializarTablasSeguridad() {
             UNIQUE KEY uniq_usuario_leccion (usuario_id, codigo_leccion),
             INDEX idx_leccion_orden (usuario_id, idioma, orden_secuencia),
             FOREIGN KEY (usuario_id) REFERENCES Usuarios(id) ON DELETE CASCADE
+        )`,
+        `CREATE TABLE IF NOT EXISTS SyncRevisions (
+            scope VARCHAR(40) PRIMARY KEY,
+            revision BIGINT NOT NULL DEFAULT 1,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )`
     ];
     tablasSql.forEach(sql => {
@@ -2021,6 +2027,7 @@ app.post('/api/insert-mood', apiWriteLimiter.middleware, requireAdmin, requireNo
                         return res.status(500).send('Error updating record.');
                     }
                     res.send('Record updated successfully\nYou were still within the edit window.');
+                    bumpSyncRevision('mood');
                 });
             } else {
                 res.status(400).send('The time window to edit this time of day has already expired.');
@@ -2033,6 +2040,7 @@ app.post('/api/insert-mood', apiWriteLimiter.middleware, requireAdmin, requireNo
                     return res.status(500).send('Error saving to database.');
                 }
 
+                bumpSyncRevision('mood');
                 res.send('Mood saved successfully.');
             });
         }
@@ -2120,6 +2128,7 @@ app.post('/api/insert-sleep', apiWriteLimiter.middleware, requireAdmin, requireN
             console.error(err);
             return res.status(500).send('Error saving sleep record.');
         }
+        bumpSyncRevision('sleep');
         if (isAllNighter) {
             return res.send('All-nighter / desvelo log saved successfully (0 hrs · visible to psychiatrist).');
         }
@@ -2217,6 +2226,7 @@ app.patch('/api/update-sleep/:id', apiWriteLimiter.middleware, requireAdmin, req
             id
         ]);
 
+        bumpSyncRevision('sleep');
         res.json({
             ok: true,
             id,
@@ -2244,6 +2254,7 @@ app.delete('/api/delete-sleep/:id', apiWriteLimiter.middleware, requireAdmin, pr
         if (!result || Number(result.affectedRows) === 0) {
             return res.status(404).send('Sleep record not found.');
         }
+        bumpSyncRevision('sleep');
         res.json({ ok: true, id, message: 'Sleep record removed.' });
     });
 });
@@ -2493,6 +2504,7 @@ app.post('/api/insert-crisis', apiWriteLimiter.middleware, requireAdmin, require
             console.error(err);
             return res.status(500).send('Error saving crisis record.');
         }
+        bumpSyncRevision('crisis');
         res.json({
             ok: true,
             id: result?.insertId || null,
@@ -2592,6 +2604,7 @@ app.delete('/api/delete-crisis/:id', apiWriteLimiter.middleware, requireAdmin, p
         if (!result || result.affectedRows === 0) {
             return res.status(404).send('Crisis record not found.');
         }
+        bumpSyncRevision('crisis');
         res.json({ ok: true, id });
     });
 });
@@ -2879,6 +2892,7 @@ app.post('/api/send-to-pc', pcQueueWriteLimiter.middleware, requireAdmin, requir
                     if (writeRes.skipped) {
                         return res.send(`Today already has a journal entry (${writeRes.heading}); "Nothing to report." was skipped.`);
                     }
+                    bumpSyncRevision('journal');
                     return res.send(`Note encrypted with password and saved locally (${writeRes.heading}).`);
                 }
                 if (writeRes && writeRes.reason === 'WRONG_PASSWORD') {
@@ -2897,6 +2911,7 @@ app.post('/api/send-to-pc', pcQueueWriteLimiter.middleware, requireAdmin, requir
         }
     }
 
+    bumpSyncRevision('journal');
     return journalQueue.enqueue(req, res);
 });
 
@@ -3077,6 +3092,9 @@ app.post('/api/journal/verify-days', apiWriteLimiter.middleware, requireAdmin, p
             const message = filledCount > 0
                 ? `Filled ${filledCount} missing day(s) with "Nothing to report.".`
                 : 'All past days are already filled.';
+            if (filledCount > 0 || verifyRes.modified) {
+                bumpSyncRevision('journal');
+            }
             return res.json({
                 ok: true,
                 exists: true,
@@ -3157,6 +3175,9 @@ app.post('/api/journal/nothing-to-report', apiWriteLimiter.middleware, requireAd
             const message = writeRes.skipped
                 ? `Today already has a journal entry (${writeRes.heading}); "Nothing to report." was skipped.`
                 : `Marked "${writeRes.heading}" as "Nothing to report.".`;
+            if (!writeRes.skipped) {
+                bumpSyncRevision('journal');
+            }
             return res.json({
                 ok: true,
                 skipped: Boolean(writeRes.skipped),
@@ -3230,6 +3251,7 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
                         error: saveRes.error
                     });
                     scheduleStudyDriveRetry();
+                    bumpSyncRevision('music');
                     return res.send('Saved to local mirror; Google Drive upload scheduled for retry.');
                 }
                 _englishDriveRetryCount = 0;
@@ -3239,6 +3261,7 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
                     deduplicated: saveRes.deduplicated,
                     verified: saveRes.verified
                 });
+                bumpSyncRevision('music');
                 return res.send(
                     saveRes.mode === 'cloud_drive'
                         ? 'Saved directly to English Notebook on Google Drive.'
@@ -3256,6 +3279,7 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
         }
     }
 
+    bumpSyncRevision('music');
     return englishQueue.enqueue(req, res);
 });
 
@@ -3621,6 +3645,7 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
             }
         }
 
+        bumpSyncRevision('agenda');
         res.status(201).json({
             message: targetDates.length > 1
                 ? `Activity saved and scheduled for ${targetDates.length} dates.`
@@ -3704,6 +3729,7 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
         if (estado === 'done' || estado === 'skipped') {
             db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
         }
+        bumpSyncRevision('agenda');
         res.json({
             message: 'Activity updated successfully.',
             item: {
@@ -3766,10 +3792,12 @@ app.patch('/api/toggle-agenda/:id', apiWriteLimiter.middleware, requireAdmin, pr
             if (resolvedEstado === 'done' || resolvedEstado === 'skipped') {
                 db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
             }
+            bumpSyncRevision('agenda');
             return res.json({ message: 'Status updated.', id, completada: resolvedCompletada, estado: resolvedEstado });
         }
         db.query('SELECT completada, estado FROM RegistrosAgenda WHERE id = ? LIMIT 1', [id], (selErr, rows) => {
             if (selErr || !Array.isArray(rows) || rows.length === 0) {
+                bumpSyncRevision('agenda');
                 return res.json({ message: 'Status updated.', id, completada: resolvedCompletada, estado: resolvedEstado });
             }
             const toggledCompletada = rows[0].completada ? 1 : 0;
@@ -3777,6 +3805,7 @@ app.patch('/api/toggle-agenda/:id', apiWriteLimiter.middleware, requireAdmin, pr
             if (toggledEstado === 'done' || toggledEstado === 'skipped') {
                 db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
             }
+            bumpSyncRevision('agenda');
             res.json({ message: 'Status updated.', id, completada: toggledCompletada, estado: toggledEstado });
         });
     });
@@ -3850,6 +3879,7 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
             estado: nextEstado,
             completada: nextCompletada
         });
+        bumpSyncRevision('agenda');
         res.json({
             message: 'Activity postponed successfully.',
             id,
@@ -3879,6 +3909,7 @@ app.delete('/api/delete-agenda/:id', apiWriteLimiter.middleware, requireAdmin, p
             return res.status(404).send('Activity not found.');
         }
         db.query("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
+        bumpSyncRevision('agenda');
         res.json({ message: 'Activity deleted successfully.', id });
     });
 });
@@ -6051,6 +6082,7 @@ app.put('/api/settings', apiWriteLimiter.middleware, requireAdmin, requireNonEmp
             return res.status(400).send(result.error);
         }
         await saveUserSettings(req.user.id, result.settings);
+        bumpSyncRevision('settings');
         res.json({
             message: 'Settings saved successfully.',
             settings: sanitizeSettingsForClient(result.settings)
@@ -6243,6 +6275,7 @@ app.put('/api/planner', apiWriteLimiter.middleware, requireAdmin, requireNonEmpt
             academicPlanner: nextPlanner
         };
         await saveUserSettings(req.user.id, nextSettings);
+        bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
         res.json({
             message: 'Academic, Residencias & Work schedule saved.',
@@ -6429,6 +6462,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             };
             const nextSettings = { ...current, academicPlanner: planner };
             await saveUserSettings(req.user.id, nextSettings);
+            bumpSyncRevision('planner');
             const localNow = getLocalNowParts(nextSettings.timezone);
             const preview = buildLiveCommutePreview(planner, localNow);
             return res.json({
@@ -6467,6 +6501,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
             }
             const nextSettings = { ...current, academicPlanner: planner };
             await saveUserSettings(req.user.id, nextSettings);
+            bumpSyncRevision('planner');
             const localNow = getLocalNowParts(nextSettings.timezone);
             const preview = buildLiveCommutePreview(planner, localNow);
             return res.json({
@@ -6590,6 +6625,7 @@ app.post('/api/planner/location', apiWriteLimiter.middleware, requireAdmin, requ
 
         const nextSettings = { ...current, academicPlanner: planner };
         await saveUserSettings(req.user.id, nextSettings);
+        bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
         const preview = buildLiveCommutePreview(planner, localNow);
         res.json({
@@ -6642,6 +6678,7 @@ app.post('/api/planner/phone-gps-token/rotate', apiWriteLimiter.middleware, requ
         const nonce = crypto.randomBytes(16).toString('hex');
         planner.phoneGpsNonce = nonce;
         await saveUserSettings(req.user.id, { ...current, academicPlanner: planner });
+        bumpSyncRevision('planner');
 
         const token = signPhoneGpsToken({ userId: req.user.id, email: req.user.email, nonce });
         const baseUrl = buildPublicBaseUrlForUser(current, req);
@@ -6717,6 +6754,7 @@ async function handlePhoneLocationWebhook(req, res) {
 
         const nextSettings = { ...settings, academicPlanner: planner };
         await saveUserSettings(parsed.userId, nextSettings);
+        bumpSyncRevision('planner');
         const localNow = getLocalNowParts(nextSettings.timezone);
         const preview = buildLiveCommutePreview(planner, localNow);
 
@@ -7442,6 +7480,9 @@ app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, p
             }
         }
 
+        if (insertedCount > 0) {
+            bumpSyncRevision('agenda');
+        }
         res.json({
             message: `Synced ${insertedCount} schedule item(s) to Weekly Agenda${skippedVacationDays ? ` (${skippedVacationDays} vacation day(s) skipped)` : ''}.`,
             inserted: insertedCount,
@@ -8807,6 +8848,7 @@ app.post('/api/english/music/songs', apiWriteLimiter.middleware, requireAdmin, r
                 await syncMusicaCancionArtistas(uid, cur.id, mainArtistId, mergedCollabs, true);
             }
 
+            bumpSyncRevision('music');
             return res.status(200).json({
                 ok: true,
                 deduplicated: true,
@@ -8833,6 +8875,7 @@ app.post('/api/english/music/songs', apiWriteLimiter.middleware, requireAdmin, r
         ]);
         const songId = insertedSong.insertId;
         await syncMusicaCancionArtistas(uid, songId, mainArtistId, d.collaborators, false);
+        bumpSyncRevision('music');
 
         res.status(201).json({
             message: 'Song registered in your English Music catalog.',
@@ -8900,6 +8943,7 @@ app.put('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAdmin
         });
 
         await syncMusicaCancionArtistas(uid, songId, mainArtistId, d.collaborators, true);
+        bumpSyncRevision('music');
 
         res.json({ message: 'Song metadata updated.' });
     } catch (err) {
@@ -8940,6 +8984,7 @@ app.patch('/api/english/music/songs/:id/status', apiWriteLimiter.middleware, req
              WHERE id = ? AND usuario_id = ?`,
             [nextState, nextWord, formatMySqlDateTime(new Date()), songId, uid]
         );
+        bumpSyncRevision('music');
 
         res.json({ message: 'Song study state updated.', estado_estudio: nextState, word_sincronizado: Boolean(nextWord) });
     } catch (err) {
@@ -9008,6 +9053,7 @@ app.delete('/api/english/music/songs/:id', apiWriteLimiter.middleware, requireAd
         );
         if (!result.affectedRows) return res.status(404).send('Song not found.');
 
+        bumpSyncRevision('music');
         res.json({ message: 'Song deleted from music catalog.' });
     } catch (err) {
         console.error(err);
@@ -10248,6 +10294,7 @@ app.patch('/api/english/music/artists/:id', apiWriteLimiter.middleware, requireA
             'UPDATE MusicaArtistas SET nombre = ?, nombre_normalizado = ?, tipo_artista = ?, notas_cortas = ? WHERE id = ? AND usuario_id = ?',
             [cleanName, norm, tipo, notasCortas, artistId, uid]
         );
+        bumpSyncRevision('music');
         res.json({ message: 'Artist updated successfully.', id: artistId, nombre: cleanName, tipo_artista: tipo, notas_cortas: notasCortas });
     } catch (err) {
         console.error(err);
@@ -10292,6 +10339,7 @@ app.patch('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireAd
             'UPDATE MusicaAlbumes SET titulo = ?, titulo_normalizado = ?, tipo_lanzamiento = ?, anio = ? WHERE id = ? AND usuario_id = ?',
             [cleanTitle, norm, tipo, anio, albumId, uid]
         );
+        bumpSyncRevision('music');
         res.json({ message: 'Album updated successfully.', id: albumId, titulo: cleanTitle, tipo_lanzamiento: tipo, anio });
     } catch (err) {
         console.error(err);
@@ -10347,6 +10395,7 @@ app.post('/api/english/music/albums', apiWriteLimiter.middleware, requireAdmin, 
             );
         }
 
+        bumpSyncRevision('music');
         res.status(201).json({
             message: 'Album / Mini Album saved to catalog.',
             album: {
@@ -10381,6 +10430,7 @@ app.delete('/api/english/music/albums/:id', apiWriteLimiter.middleware, requireA
         );
         if (!del.affectedRows) return res.status(404).send('Album not found.');
 
+        bumpSyncRevision('music');
         res.json({ message: 'Album deleted successfully (its songs were preserved as standalone tracks).', id: albumId });
     } catch (err) {
         console.error(err);
@@ -10485,6 +10535,7 @@ app.post('/api/language/memory', apiWriteLimiter.middleware, requireAdmin, requi
             });
         }
         await saveUserSettings(req.user.id, settings);
+        bumpSyncRevision('settings');
         res.json({
             message: 'AI Learning Memory updated.',
             languageMemory: settings.languageMemory
@@ -11479,281 +11530,4 @@ app.patch('/api/language/learning-toggle', apiWriteLimiter.middleware, requireAd
             settings: sanitizeSettingsForClient(nextSettings)
         });
     } catch (err) {
-        console.error('[LANGUAGE_TOGGLE_ERROR]', err);
-        res.status(500).send('Error toggling language learning state.');
-    }
-});
-
-app.post('/api/language/word-activity', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
-    try {
-        const uid = req.user.id;
-        const nowSql = formatMySqlDateTime(new Date());
-        const requestedId = parsePositiveInt(req.body?.lessonId);
-        const lessons = await ensureDefaultStudyLessonsForUser(uid);
-        const targetLesson = requestedId
-            ? lessons.find((l) => Number(l.id) === Number(requestedId))
-            : (lessons.find((l) => !l.completada) || lessons[lessons.length - 1] || null);
-
-        if (targetLesson) {
-            await dbQueryAsync(
-                'UPDATE EstudioLecciones SET word_leido_en = COALESCE(word_leido_en, ?) WHERE id = ? AND usuario_id = ?',
-                [nowSql, targetLesson.id, uid]
-            );
-        }
-
-        const current = await loadUserSettings(uid);
-        await saveUserSettings(uid, {
-            ...current,
-            lastWordActivityAt: new Date().toISOString(),
-            lastWordAction: String(req.body?.action || 'word_activity').trim().slice(0, 64)
-        });
-
-        res.json({
-            ok: true,
-            recordedAt: nowSql,
-            lessonId: targetLesson ? targetLesson.id : null
-        });
-    } catch (err) {
-        console.error('[WORD_ACTIVITY_ERROR]', err);
-        res.status(500).send('Error recording Word study activity.');
-    }
-});
-
-app.post('/api/language/lessons/:id/generate-practice', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
-    const lessonId = parsePositiveInt(req.params.id);
-    if (!lessonId) return res.status(400).send('Invalid lesson ID.');
-
-    try {
-        const uid = req.user.id;
-        const lessons = await ensureDefaultStudyLessonsForUser(uid);
-        const targetIdx = lessons.findIndex((l) => Number(l.id) === Number(lessonId));
-        if (targetIdx === -1) return res.status(404).send('Lesson not found.');
-
-        const prevIncomplete = lessons.slice(0, targetIdx).find((l) => !l.completada);
-        if (prevIncomplete) {
-            return res.status(409).json({
-                locked: true,
-                message: `Debes completar primero la lección previa: "${prevIncomplete.nombre_practica}".`
-            });
-        }
-
-        const lesson = lessons[targetIdx];
-        const settings = await loadUserSettings(uid);
-        const effectiveKey = String(settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
-        const generated = await generatePracticalLessonForWord({
-            apiKey: effectiveKey,
-            model: settings.geminiModel || 'gemini-2.5-flash',
-            lessonCode: lesson.codigo_leccion,
-            lessonName: lesson.nombre_practica,
-            language: lesson.idioma,
-            learningMemory: settings.languageMemory
-        });
-
-        await dbQueryAsync(
-            'UPDATE EstudioLecciones SET word_leido_en = COALESCE(word_leido_en, ?) WHERE id = ? AND usuario_id = ?',
-            [formatMySqlDateTime(new Date()), lesson.id, uid]
-        );
-
-        res.json({
-            ok: true,
-            lessonId: lesson.id,
-            pcOnline: isPcBridgeOnline(),
-            practice: generated
-        });
-    } catch (err) {
-        console.error('[LANGUAGE_LESSON_GENERATE_ERROR]', err);
-        res.status(500).send('Error generating practical lesson.');
-    }
-});
-
-app.patch('/api/language/lessons/:id/complete', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
-    const lessonId = parsePositiveInt(req.params.id);
-    if (!lessonId) return res.status(400).send('Invalid lesson ID.');
-
-    try {
-        const uid = req.user.id;
-        const lessons = await ensureDefaultStudyLessonsForUser(uid);
-        const targetIdx = lessons.findIndex((l) => Number(l.id) === Number(lessonId));
-        if (targetIdx === -1) return res.status(404).send('Lesson not found.');
-
-        const lesson = lessons[targetIdx];
-        const prevIncomplete = lessons.slice(0, targetIdx).find((l) => !l.completada);
-        if (prevIncomplete) {
-            return res.status(409).send(`No puedes avanzar sin terminar antes: "${prevIncomplete.nombre_practica}".`);
-        }
-        if (!lesson.word_leido_en && req.body?.wordReadConfirmed !== true) {
-            return res.status(409).send('Aún no has abierto ni practicado el contenido de esta lección en tu documento Word (mínimo 10-15 min).');
-        }
-
-        const nowSql = formatMySqlDateTime(new Date());
-        await dbQueryAsync(
-            'UPDATE EstudioLecciones SET completada = 1, word_leido_en = COALESCE(word_leido_en, ?), completada_en = ? WHERE id = ? AND usuario_id = ?',
-            [nowSql, nowSql, lesson.id, uid]
-        );
-
-        res.json({ ok: true, id: lesson.id, completed: true });
-    } catch (err) {
-        console.error('[LANGUAGE_LESSON_COMPLETE_ERROR]', err);
-        res.status(500).send('Error updating lesson completion.');
-    }
-});
-
-app.post('/api/language/pronunciation', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
-    try {
-        const targetText = String(req.body.targetText || '').trim();
-        const spokenText = String(req.body.spokenText || '').trim();
-        if (!targetText || !spokenText) {
-            return res.status(400).send('Provide both target phrase and microphone spoken transcript.');
-        }
-        const settings = await loadUserSettings(req.user.id);
-        const effectiveKey = String(settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
-        const evaluation = await evaluatePronunciation({
-            apiKey: effectiveKey,
-            model: settings.geminiModel || 'gemini-2.5-flash',
-            targetText,
-            spokenText,
-            language: req.body.language || settings.preferredStudyLanguage || 'en'
-        });
-        res.json(evaluation);
-    } catch (err) {
-        console.error('[PRONUNCIATION_EVAL_ERROR]', err);
-        res.status(500).send('Error evaluating pronunciation.');
-    }
-});
-
-function loadVersionMetadata() {
-    const rawEnvVersion = String(process.env.APP_VERSION || '').trim().replace(/^v/i, '');
-    const envVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(rawEnvVersion) ? rawEnvVersion : '';
-
-    let pkgVersion = '1.0.0';
-    try {
-        const pkgPath = path.join(__dirname, 'package.json');
-        if (fs.existsSync(pkgPath)) {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) {
-                pkgVersion = pkg.version.trim();
-            }
-        }
-    } catch (_) {
-        pkgVersion = '1.0.0';
-    }
-    const fallbackVersion = envVersion || pkgVersion || '1.0.0';
-
-    let historyData = null;
-    try {
-        const historyPath = path.join(__dirname, 'version-history.json');
-        if (fs.existsSync(historyPath)) {
-            historyData = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
-        }
-    } catch (_) {
-        historyData = null;
-    }
-
-    const releases = Array.isArray(historyData?.releases)
-        ? historyData.releases
-        : [{
-            version: fallbackVersion,
-            tag: `v${fallbackVersion}`,
-            bumpType: 'initial',
-            previousVersion: '0.0.0',
-            releasedAt: null,
-            commitSha: 'baseline',
-            trigger: 'baseline',
-            summary: 'Current application release',
-            counts: { breaking: 0, features: 0, fixes: 0, maintenance: 0 },
-            changes: { breaking: [], features: [], fixes: [], maintenance: [] }
-        }];
-
-    const latest = releases[0] || null;
-    const currentVersion = (historyData && typeof historyData.currentVersion === 'string' && historyData.currentVersion.trim())
-        ? historyData.currentVersion.trim()
-        : (latest?.version || fallbackVersion);
-
-    return {
-        currentVersion,
-        tag: latest?.tag || `v${currentVersion}`,
-        bumpType: latest?.bumpType || 'initial',
-        releasedAt: latest?.releasedAt || historyData?.updatedAt || null,
-        commitSha: latest?.commitSha || '',
-        summary: latest?.summary || '',
-        standard: (historyData && historyData.standard) || 'SemVer 2.0.0 + Conventional Commits',
-        totalReleases: releases.length,
-        history: releases
-    };
-}
-
-app.get('/api/version', apiReadLimiter.middleware, requireAuth, (req, res) => {
-    try {
-        return res.json(loadVersionMetadata());
-    } catch (err) {
-        console.error('[VERSION_ENDPOINT_ERROR]', err);
-        return res.status(500).send('Failed to load version history.');
-    }
-});
-
-app.get('/api/system/logs', apiReadLimiter.middleware, requireAdmin, (req, res) => {
-    const kind = String(req.query.kind || 'server').trim().toLowerCase();
-    const lines = Number.parseInt(String(req.query.lines || '120'), 10) || 120;
-    return res.json({
-        replicaId: REPLICA_ID,
-        ...serverLogger.getRecentLogTail({ kind, lines })
-    });
-});
-
-// Manejo controlado de rutas inexistentes y errores inesperados en API (sin filtrar stack traces)
-app.use('/api', (req, res) => {
-    res.status(404).send('API endpoint not found.');
-});
-
-app.use((err, req, res, _next) => {
-    console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err && err.message ? err.message : err);
-    if (res.headersSent) return;
-    res.status(500).send('An internal server error occurred.');
-});
-
-const PORT = process.env.PORT || 3000;
-const httpServer = app.listen(PORT, () => {
-    console.log(`Backend server running at http://localhost:${PORT}`);
-    serverLogger.info('SYSTEM', 'Servidor iniciado', {
-        replicaId: REPLICA_ID,
-        port: PORT,
-        tz: process.env.TZ || 'system',
-        trustProxy: process.env.TRUST_PROXY || 'off',
-        requireHttps: String(process.env.REQUIRE_HTTPS || '').toLowerCase() === 'true',
-        autonomousNotes: serverNotesService.isServerAutonomousNotesEnabled(),
-        fileLogs: serverLogger.fileEnabled,
-        logDir: serverLogger.logDir
-    });
-    if (!isAutomatedTestEnv() && serverNotesService.isServerAutonomousNotesEnabled()) {
-        const pendingDrive = serverNotesService.readEnglishDrivePendingMarker(
-            serverNotesService.resolveLocalEnglishPath({ rootDir: __dirname })
-        );
-        if (pendingDrive) {
-            serverLogger.warn('DRIVE_NOTES', 'Respaldo local de cuaderno pendiente de subir a Google Drive detectado al iniciar; programando reintento', {
-                pendingSince: pendingDrive.pendingSince,
-                attempts: pendingDrive.attempts
-            });
-            scheduleStudyDriveRetry();
-        }
-    }
-});
-// Protección anti-Slowloris / agotamiento de sockets HTTP
-httpServer.keepAliveTimeout = 15000;
-httpServer.headersTimeout = 20000;
-httpServer.requestTimeout = 90000;
-httpServer.maxHeadersCount = 64;
-
-// Capturar errores imprevistos para saber por qué se cayó
-process.on('uncaughtException', (err) => {
-    serverLogger.crash('PROCESS', 'Server crashed with uncaughtException', {
-        error: err && err.stack ? err.stack : String(err)
-    });
-    process.exit(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-    serverLogger.crash('PROCESS', 'Unhandled promise rejection', {
-        reason: reason && reason.stack ? reason.stack : String(reason)
-    });
-    process.exit(1);
-});
+... [truncated for diff preview]

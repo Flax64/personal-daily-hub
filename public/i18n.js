@@ -763,7 +763,6 @@
         ['Tec de Saltillo (ITS) · Residencias · Work & Maps Commute', 'Tec de Saltillo (ITS) · Residencias · Trabajo y Tráfico Maps'],
         ['Manage your semester class schedule by classroom (R02, R11, N21, etc.), vacation breaks, Residencias Profesionales, full/part-time work shifts, and smart traffic notifications.', 'Administra tu horario semestral por salón (R02, R11, N21, etc.), periodos vacacionales, Residencias Profesionales, turnos de trabajo y notificaciones inteligentes de tráfico.'],
         ['📍 Update My GPS', '📍 Actualizar mi GPS'],
-        ['🗓️ Sync Week to Agenda', '🗓️ Sincronizar Semana a Agenda'],
         ['Academic and Work Planner Tabs', 'Pestañas de Horario Académico y Trabajo'],
         ['🎓 ITS Semester & Croquis', '🎓 Semestre ITS y Croquis'],
         ['🏖️ Vacations & Breaks', '🏖️ Vacaciones y Descansos'],
@@ -990,16 +989,6 @@
         ['Leave blank to keep your current key or paste AIzaSy...', 'Deja vacío para conservar tu clave actual o pega AIzaSy...'],
         ['Verify Gemini connection and load your active models', 'Verificar conexión con Gemini y cargar tus modelos activos disponibles'],
         ['Remove the key saved in your account', 'Quitar la clave guardada en tu cuenta'],
-        ['🔐 Privacy & Connection Protection', '🔐 Privacidad y Protección de Conexión'],
-        ['Secure Session Identifier', 'Identificador de Sesión Segura'],
-        ['Protection Level', 'Nivel de Protección'],
-        ['Protected Activity', 'Actividad Protegida'],
-        ['🔄 Renew Session Key', '🔄 Renovar Llave de Sesión'],
-        ['⚡ Test Encryption Speed', '⚡ Probar Velocidad de Cifrado'],
-        ['🔍 Inspect Encrypted Data', '🔍 Verificar Datos Cifrados'],
-        ['Generate new temporary secure session keys', 'Generar nuevas llaves temporales de sesión segura'],
-        ['Check encryption speed on this device', 'Verificar velocidad de cifrado en este dispositivo'],
-        ['View sample of encrypted network payload', 'Ver ejemplo de datos cifrados enviados por la red'],
         ['🎛️ Workspace Defaults & Security', '🎛️ Preferencias del Espacio y Seguridad'],
         ['Interface Language (English / Español):', 'Idioma de la Interfaz (English / Español):'],
         ['🌐 Switch to Español', '🌐 Cambiar a Inglés'],
@@ -2015,10 +2004,6 @@
         gemini_step_3: {
             en: 'Click <strong>Save All Settings</strong> at the bottom to store it securely encrypted.',
             es: 'Presiona <strong>Guardar Todos los Ajustes</strong> al final de la página para guardarla de forma cifrada.'
-        },
-        x25519_desc: {
-            en: 'All information traveling between your phone, computer, and account is protected with end-to-end encryption to safeguard your private notes.',
-            es: 'Toda la información entre tu teléfono, tu computadora y tu cuenta viaja cifrada para proteger tus notas y datos personales.'
         },
         e2ee_modal_subtitle: {
             en: 'Your Journal and English Notebook entries are encrypted in your browser before leaving this device. Enter your exact <strong>32-character AES key</strong> (stored only in this browser, never sent to the server).',
