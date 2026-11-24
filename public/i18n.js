@@ -1,9 +1,9 @@
-/* ====
+/* ==========================================================================
    public/i18n.js — Full Bilingual Engine (English <-> Español)
    Synchronizes UI language across index.html, translator-popup.html,
    dynamic JS renderers, widgets, and server/AI feedback while keeping
    database keys & user-entered notes 100% untouched.
-   ==== */
+   ========================================================================== */
 (function (root) {
     'use strict';
 

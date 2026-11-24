@@ -1,9 +1,9 @@
-/* ======
+/* ============================================================================
    Simulated HTTPS Hybrid Transport Layer (Client Engine)
    - Key Exchange: Ephemeral X25519 (Curve25519 ECDH) + HKDF-SHA256
    - Bulk Cipher: AES-256-CTR + HMAC-SHA256 (Encrypt-then-MAC, OpenSSL compatible)
    - Works over plain HTTP without window.crypto.subtle (uses CSPRNG getRandomValues)
-   ====== */
+   ============================================================================ */
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) {
         module.exports = factory(root);

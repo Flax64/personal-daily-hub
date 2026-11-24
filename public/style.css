@@ -1,6 +1,6 @@
-/* ======
+/* =========================================
    RESET Y BASE GENERAL
-====== */
+========================================= */
 *,
 *::before,
 *::after {
@@ -48,9 +48,9 @@ body {
     overflow-x: hidden;
 }
 
-/* ======
+/* =========================================
    PANTALLA DE LOGIN, REGISTRO, BOOT Y RECUPERACIÓN
-====== */
+========================================= */
 .auth-screen,
 .boot-screen {
     min-height: 100dvh;
@@ -495,9 +495,9 @@ body {
     background: #fecaca;
 }
 
-/* ======
+/* =========================================
    SHELL DE APLICACIÓN + BARRA LATERAL FIJA
-====== */
+========================================= */
 .app-shell {
     display: flex;
     min-height: 100dvh;
@@ -870,9 +870,9 @@ body {
     }
 }
 
-/* ======
+/* =========================================
    VISTA INICIO (INTERFAZ PRINCIPAL)
-====== */
+========================================= */
 .home-container {
     max-width: 1050px;
     margin: 0 auto;
@@ -1129,9 +1129,9 @@ body {
     line-height: 1.35;
 }
 
-/* ======
+/* =========================================
    FORMULARIOS SEPARADOS (MOOD, SUEÑO, JOURNAL)
-====== */
+========================================= */
 .card {
     background-color: var(--bg-surface);
     padding: 26px;
@@ -1237,9 +1237,9 @@ select,
     flex-shrink: 0;
 }
 
-/* ======
+/* =========================================
    BOTONES
-====== */
+========================================= */
 .btn-submit,
 .btn-view {
     display: block;
@@ -1288,9 +1288,9 @@ select,
     opacity: 0.65;
 }
 
-/* ======
+/* =========================================
    LOADING SPINNERS (RED LENTA / PETICIONES)
-====== */
+========================================= */
 @keyframes mtSpin {
     to {
         transform: rotate(360deg);
@@ -1416,9 +1416,9 @@ select,
     padding: 8px 12px;
 }
 
-/* ======
+/* =========================================
    DISEÑO DEL JOURNAL (NOTAS EN INGLÉS)
-====== */
+========================================= */
 #journalText {
     width: 100%;
     min-height: 250px;
@@ -1439,9 +1439,9 @@ select,
     box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
 }
 
-/* ======
+/* =========================================
    ENGLISH LEARNING NOTEBOOK
-====== */
+========================================= */
 .english-card {
     max-width: 100%;
 }
@@ -1573,9 +1573,9 @@ select,
     white-space: nowrap;
 }
 
-/* ======
+/* =========================================
    AGENDA PERSONAL SEMANAL ("ORGANIZA TU SEMANA")
-====== */
+========================================= */
 .agenda-wrapper {
     max-width: 1440px;
     margin: 0 auto;
@@ -2155,9 +2155,9 @@ select,
     font-style: italic;
 }
 
-/* ======
+/* =========================================
    MODAL DE AGENDA
-====== */
+========================================= */
 .modal-overlay {
     position: fixed;
     inset: 0;
@@ -2258,9 +2258,9 @@ select,
     margin-bottom: 0;
 }
 
-/* ======
+/* =========================================
    VISUALIZADOR SEMANAL (RESUMEN MOOD & SUEÑO)
-====== */
+========================================= */
 .tracker-container {
     width: 100%;
     max-width: 960px;
@@ -2392,9 +2392,9 @@ select,
     display: inline-block;
 }
 
-/* ======
+/* =========================================
    DISEÑO DEL CONTROL DE SUEÑO
-====== */
+========================================= */
 .sleep-container {
     display: grid;
     grid-template-columns: 1fr;
@@ -2467,9 +2467,9 @@ select,
     opacity: 1;
 }
 
-/* ======
+/* =========================================
    RESPONSIVIDAD PARA CELULAR (<= 640px) Y TABLET (<= 1024px)
-====== */
+========================================= */
 @media (max-width: 1024px) {
     .app-shell {
         flex-direction: column;
@@ -2704,9 +2704,9 @@ select,
     }
 }
 
-/* ======
+/* =========================================
    TEMA OSCURO (DARK MODE)
-====== */
+========================================= */
 :root,
 :root[data-theme="dark"] {
     color-scheme: dark;
@@ -2825,9 +2825,9 @@ select,
     letter-spacing: 0.03em;
 }
 
-/* ======
+/* =========================================
    VISUAL USER GUIDE (LOW-TEXT INTERACTIVE)
-   ====== */
+   ========================================= */
 .vg-standalone-body {
     background: #0b1120;
     color: #e2e8f0;
@@ -3587,9 +3587,9 @@ select,
     background: rgba(148, 163, 184, 0.14);
 }
 
-/* ======
+/* =========================================
    PERSONAL CONTROL EMBLEM & BRANDING
-====== */
+========================================= */
 .brand-emblem {
     display: inline-flex;
     align-items: center;
@@ -3613,9 +3613,9 @@ select,
     border-radius: 10px;
 }
 
-/* ======
+/* =========================================
    REMINDER NOTIFICATION TRAY (IN-APP + SNOOZE)
-====== */
+========================================= */
 .reminder-tray {
     max-width: 1220px;
     margin: 0 auto 20px;
@@ -3713,9 +3713,9 @@ select,
     font-weight: 600;
 }
 
-/* ======
+/* =========================================
    AGENDA FILTERS, CATEGORIES & JIRA WORKFLOW
-====== */
+========================================= */
 .agenda-filter-bar {
     display: flex;
     align-items: center;
@@ -3945,9 +3945,9 @@ select,
     border-color: #86efac;
 }
 
-/* ======
+/* =========================================
    SETTINGS & PHONE REMINDER CONFIGURATION
-====== */
+========================================= */
 .settings-container {
     max-width: 1120px;
     margin: 0 auto;
@@ -4356,9 +4356,9 @@ select,
     border-color: #475569;
 }
 
-/* ======
+/* =========================================
    ENGLISH LEARN WITH MUSIC STUDIO
-====== */
+========================================= */
 .english-card.music-wide {
     max-width: 1140px;
 }
@@ -5065,9 +5065,9 @@ select,
     color: #67e8f9;
 }
 
-/* ======
+/* =========================================
    UNIFIED DESIGN SYSTEM, MODALS, TOASTS & UX POLISH
-====== */
+========================================= */
 .sr-only {
     position: absolute;
     width: 1px;
@@ -5941,9 +5941,9 @@ select,
     }
 }
 
-/* ======
+/* =========================================
    WORD-STYLE ENGLISH SPELLING & GRAMMAR PROOFING + ITS PLANNER
-====== */
+========================================= */
 .word-proofing-panel {
     border: 1px solid #e2e8f0;
     background: #f8fafc;
@@ -6102,9 +6102,9 @@ select,
     color: #93c5fd;
 }
 
-/* ====
+/* ============================================================
    SIMULATED HTTPS TUNNEL PILL & DIAGNOSTICS
-   ==== */
+   ============================================================ */
 .tunnel-pill {
     display: inline-flex;
     align-items: center;
@@ -6199,9 +6199,9 @@ select,
     word-break: break-all;
 }
 
-/* ====
+/* ============================================================
    MULTILINGUAL & AI LANGUAGE STUDIO (EN · KR · K-POP)
-   ==== */
+   ============================================================ */
 .study-language-bar {
     display: flex;
     flex-wrap: wrap;
@@ -6457,9 +6457,9 @@ select,
     color: #93c5fd;
 }
 
-/* ======
+/* =========================================
    CRISIS LOG & INTERACTIVE REPERTOIRE NAVIGATOR
-====== */
+========================================= */
 .crisis-type-pills,
 .crisis-intensity-pills {
     display: flex;
@@ -6708,9 +6708,9 @@ select,
     color: #ffffff;
 }
 
-/* ======
+/* =========================================
    MUSIC ENTITY EDIT CONTROLS & UNIVERSAL OVERFLOW SAFETY
-====== */
+========================================= */
 html,
 body {
     max-width: 100%;
@@ -8315,9 +8315,9 @@ body {
     }
 }
 
-/* ======
+/* =========================================
    VERSION HISTORY & SEMVER 2.0.0 MODAL
-====== */
+========================================= */
 .sidebar-version-btn {
     width: 100%;
     display: flex;
@@ -8521,9 +8521,9 @@ body {
     margin-top: 2px;
 }
 
-/* ===
+/* =========================================================================
    CARPETAS VISUALES ESTILO WINDOWS 11 + SCROLL FLUIDO + CERO RECORTES
-   === */
+   ========================================================================= */
 .music-catalog-container,
 .music-lyrics-viewer-card,
 .lyrics-readonly-full-view,
@@ -8721,9 +8721,9 @@ body {
     margin-bottom: 6px;
 }
 
-/* ===
+/* =========================================================================
    DISEÑO UNIFICADO Y RESPONSIVO PARA TODAS LAS CAJAS DE TEXTO (TEXTAREA)
-   === */
+   ========================================================================= */
 textarea:not([hidden]),
 .english-textarea:not([hidden]),
 .music-lyrics-textarea:not([hidden]),
@@ -8973,9 +8973,9 @@ textarea:focus,
     }
 }
 
-/* ===
+/* =========================================================================
    FASE 1 & 2: UNIFICACIÓN GLOBAL, CARPETAS MUSICALES, ACOPLADO Y LANDSCAPE
-   === */
+   ========================================================================= */
 .card,
 .music-panel-card,
 .view-header-card,
@@ -9272,9 +9272,9 @@ input[type="password"] {
     padding-left: 6px;
 }
 
-/* ===
+/* =========================================================================
    PLANIFICADOR SEMANAL V2: JERARQUÍA, SKIP, POSPONER, REPETICIONES Y CALENDARIOS
-   === */
+   ========================================================================= */
 .agenda-item.is-skipped {
     border: 1.5px dashed rgba(148, 163, 184, 0.55) !important;
     background: rgba(241, 245, 249, 0.48) !important;
@@ -9773,9 +9773,9 @@ input[type="password"] {
     }
 }
 
-/* ====
+/* ============================================================
    HANGUL PRACTICE STUDIO, ALPHABETS + AI & LANGUAGE APARTMENTS
-   ==== */
+   ============================================================ */
 .english-practice-studio,
 .english-alphabet-studio {
     display: flex;
@@ -10199,9 +10199,9 @@ input[type="password"] {
     }
 }
 
-/* ====
+/* ============================================================
    KOREAN READ-ONLY DRIVE NOTES & ZERO-SAVE SYMBOL COMPARATOR
-   ==== */
+   ============================================================ */
 .is-readonly-pill,
 .is-nosave-pill {
     background: rgba(16, 185, 129, 0.14);
@@ -10501,9 +10501,9 @@ input[type="password"] {
     color: #93c5fd;
 }
 
-/* ======
+/* =========================================
    ITS PLANNER LOCATION PICKER & INTERACTIVE MINI-MAP MODAL
-====== */
+========================================= */
 .planner-location-picker-card {
     display: flex;
     flex-direction: column;

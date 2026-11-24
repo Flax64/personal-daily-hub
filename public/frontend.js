@@ -1,6 +1,6 @@
-// 
+// ==========================================
 // SIMULATED HTTPS HYBRID TRANSPORT LAYER (X25519 + AES-256-CTR + HMAC-SHA256)
-// 
+// ==========================================
 const rawBrowserFetch = typeof window !== 'undefined' && typeof window.fetch === 'function'
     ? window.fetch.bind(window)
     : null;
@@ -224,25 +224,17 @@ if (rawBrowserFetch && clientTransportTunnel) {
         if (!headers.has('X-UI-Lang')) {
             headers.set('X-UI-Lang', i18nGetLang());
         }
-
         const methodUpper = String(init.method || 'GET').toUpperCase();
         if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && typeof markLocalSyncMutation === 'function' && typeof inferSyncScopeFromUrl === 'function') {
             markLocalSyncMutation(inferSyncScopeFromUrl(urlStr));
         }
         return rawBrowserFetch(input, { ...init, headers });
-
-        const res = await rawBrowserFetch(input, { ...init, headers });
-        if (res.ok) {
-            markLocalSyncMutation(init.method || 'GET');
-        }
-        return res;
- 68af0d2b71750aa20f91dc814763197b1ba6055b
     };
 }
 
-// 
+// ==========================================
 // GENERAL DATE & MOOD STATE UTILITIES
-// 
+// ==========================================
 function formatLocalDate(date) {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -274,9 +266,9 @@ const MOMENTOS_LABELS = {
     Night: 'Night'
 };
 
-// 
+// ==========================================
 // ANTI-DOUBLE-CLICK, IDEMPOTENCY & STALE-FETCH GUARDS
-// 
+// ==========================================
 const busyActionElements = new WeakSet();
 const pendingSubmissions = new Map();
 
@@ -870,9 +862,9 @@ function nextAgendaStatus(currentStatus) {
     return 'todo';
 }
 
-// 
+// ==========================================
 // UX HELPERS: TOASTS, BANNERS, MODALS & E2EE KEY
-// 
+// ==========================================
 const MOOD_COLOR_LABELS = {
     '#FDE047': 'Happy',
     '#4ADE80': 'Calm',
@@ -991,9 +983,9 @@ function openConfirmDialog({ title, message, confirmText, danger = false } = {})
     });
 }
 
-// 
+// ==========================================
 // E2EE CLIENT CRYPTO HELPERS (SHARED BY JOURNAL & ENGLISH NOTEBOOK)
-// 
+// ==========================================
 let activeE2eeResolver = null;
 function closeE2eeModal(resultKey = null) {
     const modal = document.getElementById('e2eeKeyModal');
@@ -1189,9 +1181,9 @@ async function autoQueueAiLearningToWord({ entry, hintEl, songToMarkSynced = nul
     }
 }
 
-// 
+// ==========================================
 // DEVICE-AWARE YOUTUBE HELPERS (PC YOUTUBE VS MOBILE YT MUSIC)
-// 
+// ==========================================
 const YT_PLATFORM_STORAGE_KEY = 'mt_yt_platform_mode';
 
 function isMobileYouTubeDevice() {
@@ -1351,9 +1343,9 @@ function updateYouTubePlatformUI() {
     }
 }
 
-// 
+// ==========================================
 // MAIN NAVIGATION & FIXED SIDEBAR
-// 
+// ==========================================
 const VALID_VIEWS = new Set(['inicio', 'mood', 'crisis', 'sueno', 'journal', 'english', 'agenda', 'horario', 'resumen', 'medico', 'settings', 'guia']);
 let currentUser = null;
 let sundayWatcherInterval = null;
@@ -1377,19 +1369,15 @@ function setMobileMenuOpen(isOpen) {
         sidebar.classList.remove('is-swiping');
         sidebar.style.transform = '';
     }
-
     if (sidebarBackdrop) {
         sidebarBackdrop.style.opacity = '';
     }
-
- 68af0d2b71750aa20f91dc814763197b1ba6055b
     if (mobileMenuBtn) {
         mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
     }
 }
 
 function initSidebarSwipeGesture() {
-
     if (!appShell || !sidebar || sidebar.dataset.swipeWired === '1') return;
     sidebar.dataset.swipeWired = '1';
 
@@ -1430,56 +1418,9 @@ function initSidebarSwipeGesture() {
                 sidebar.classList.add('is-swiping');
             } else {
                 swipeState.directionLocked = 'vertical';
-
-    if (!appShell || !sidebar || sidebar.dataset?.swipeWired === '1') return;
-    if (sidebar.dataset) sidebar.dataset.swipeWired = '1';
-
-    let tracking = false;
-    let isHorizontalSwipe = false;
-    let startX = 0;
-    let startY = 0;
-    let startTs = 0;
-    let lastDeltaX = 0;
-
-    const resetSwipeTransform = () => {
-        sidebar.classList.remove('is-swiping');
-        sidebar.style.transform = '';
-        tracking = false;
-        isHorizontalSwipe = false;
-        lastDeltaX = 0;
-    };
-
-    const handleTouchStart = (e) => {
-        if (!appShell.classList.contains('mobile-menu-open')) return;
-        const touch = e.touches && e.touches[0];
-        if (!touch) return;
-        tracking = true;
-        isHorizontalSwipe = false;
-        startX = touch.clientX;
-        startY = touch.clientY;
-        startTs = Date.now();
-        lastDeltaX = 0;
-    };
-
-    const handleTouchMove = (e) => {
-        if (!tracking || !appShell.classList.contains('mobile-menu-open')) return;
-        const touch = e.touches && e.touches[0];
-        if (!touch) return;
-        const deltaX = touch.clientX - startX;
-        const deltaY = touch.clientY - startY;
-
-        if (!isHorizontalSwipe) {
-            if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) return;
-            if (deltaX < -10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
-                isHorizontalSwipe = true;
-                sidebar.classList.add('is-swiping');
-            } else {
-                tracking = false;
- 68af0d2b71750aa20f91dc814763197b1ba6055b
                 return;
             }
         }
-
 
         if (swipeState.directionLocked !== 'horizontal') return;
         const clampedX = Math.min(0, deltaX);
@@ -1507,23 +1448,9 @@ function initSidebarSwipeGesture() {
         resetVisualDrag();
         if (!wasHorizontal) return;
         if (deltaX <= -65 || (deltaX <= -28 && velocityX <= -0.45)) {
-
-        lastDeltaX = Math.min(0, deltaX);
-        sidebar.style.transform = `translateX(${lastDeltaX}px)`;
-    };
-
-    const handleTouchEnd = () => {
-        if (!tracking) return;
-        const elapsedMs = Math.max(1, Date.now() - startTs);
-        const velocity = lastDeltaX / elapsedMs;
-        const shouldClose = isHorizontalSwipe && (lastDeltaX <= -65 || (velocity <= -0.45 && lastDeltaX <= -30));
-        resetSwipeTransform();
-        if (shouldClose) {
- 68af0d2b71750aa20f91dc814763197b1ba6055b
             setMobileMenuOpen(false);
         }
     };
-
 
     const onTouchCancel = () => {
         if (!swipeState) return;
@@ -1537,13 +1464,6 @@ function initSidebarSwipeGesture() {
         target.addEventListener('touchmove', onTouchMove, { passive: true });
         target.addEventListener('touchend', onTouchEnd, { passive: true });
         target.addEventListener('touchcancel', onTouchCancel, { passive: true });
-
-    [sidebar, sidebarBackdrop].filter(Boolean).forEach((target) => {
-        target.addEventListener('touchstart', handleTouchStart, { passive: true });
-        target.addEventListener('touchmove', handleTouchMove, { passive: true });
-        target.addEventListener('touchend', handleTouchEnd, { passive: true });
-        target.addEventListener('touchcancel', resetSwipeTransform, { passive: true });
- 68af0d2b71750aa20f91dc814763197b1ba6055b
     });
 }
 
@@ -1995,9 +1915,9 @@ if (appShell) {
     });
 }
 
-// 
+// ==========================================
 // HOME DASHBOARD LOGIC
-// 
+// ==========================================
 function actualizarCabecerasDeFecha() {
     const now = new Date();
     const info = getMomentoInfo(now.getHours());
@@ -2187,9 +2107,9 @@ function cargarInicioResumen() {
         });
 }
 
-// 
+// ==========================================
 // MOOD TRACKER FORM LOGIC
-// 
+// ==========================================
 const formRegistro = document.getElementById('moodForm');
 
 function renderMoodChecklist(rows = []) {
@@ -2403,9 +2323,9 @@ if (formRegistro) {
     });
 }
 
-// 
+// ==========================================
 // WEEKLY SUMMARY LOGIC (INTERACTIVE VISUAL CALENDAR PICKER)
-// 
+// ==========================================
 const resumenCalendarState = {
     anchorDate: new Date(),
     weekStartDay: 0, // 0 = Domingo a Sábado, 1 = Lunes a Domingo
@@ -2852,9 +2772,9 @@ function cargarResumenSemanalActual() {
     renderResumenVisualWeekStrip();
 })();
 
-// 
+// ==========================================
 // SLEEP & DESVELO TRACKER FORM LOGIC
-// 
+// ==========================================
 const SLEEP_BEDTIME_DRAFT_KEY = 'mt_sleep_bedtime_draft';
 let editingSleepSessionId = null;
 
@@ -3724,9 +3644,9 @@ if (formSleep) {
     }
 }
 
-// 
+// ==========================================
 // JOURNAL NOTES (ENCRYPTED NOTES & DAILY COVERAGE)
-// 
+// ==========================================
 const JOURNAL_DRAFT_KEY = 'mt_journal_draft';
 let lastJournalDailyStatus = null;
 
@@ -4123,9 +4043,9 @@ if (journalForm) {
     });
 }
 
-// 
+// ==========================================
 // ENGLISH LEARNING NOTEBOOK (WORD DOCX IN english-notes/)
-// 
+// ==========================================
 const englishForm = document.getElementById('englishForm');
 
 if (englishForm) {
@@ -7459,9 +7379,9 @@ function initGlobalFloatingTranslator() {
     window.addEventListener('focus', consumePendingPopupTranslatorVocab);
 }
 
-// 
+// ==========================================
 // ENGLISH LEARN WITH MUSIC STUDIO (MYSQL METADATA + E2EE WORD NOTES)
-// 
+// ==========================================
 let musicCatalogLoadRequested = false;
 
 function ensureEnglishMusicCatalogLoaded() {
@@ -11075,9 +10995,9 @@ if (englishMusicStudioRoot) {
     }
 }
 
-// 
+// ==========================================
 // WEEKLY PERSONAL AGENDA LOGIC
-// 
+// ==========================================
 const AGENDA_BLOQUES = [
     {
         id: 'manana',
@@ -13031,9 +12951,9 @@ if (agendaForm) {
     });
 }
 
-// 
+// ==========================================
 // AUTHENTICATION, ROLES, SESSION & PSYCHIATRIST ACCESS
-// 
+// ==========================================
 let pendingMfaState = { token: '', email: '' };
 
 function validateEmailClient(email) {
@@ -13226,13 +13146,8 @@ function enterAppSession(user) {
                 showView('inicio', false);
             }
         }
-
         if (typeof startRealtimeSessionSync === 'function') {
             startRealtimeSessionSync();
-
-        if (typeof initRealtimeSessionSync === 'function') {
-            initRealtimeSessionSync();
- 68af0d2b71750aa20f91dc814763197b1ba6055b
         }
     } catch (bootErr) {
         console.error('[SESSION_INIT_WARN]', bootErr);
@@ -13804,9 +13719,9 @@ function initAuthHandlers() {
     });
 }
 
-// 
+// ==========================================
 // PERMANENT DARK THEME
-// 
+// ==========================================
 function applyTheme() {
     document.documentElement.setAttribute('data-theme', 'dark');
     try {
@@ -13819,9 +13734,9 @@ function initTheme() {
     applyTheme();
 }
 
-// 
+// ==========================================
 // IN-APP REMINDER TRAY, SNOOZE & PHONE SETTINGS
-// 
+// ==========================================
 function renderReminderTray(data) {
     const tray = document.getElementById('reminderTray');
     if (!tray) return;
@@ -14652,9 +14567,9 @@ function initSettingsHandlers() {
     });
 }
 
-// 
+// ==========================================
 // WORD-STYLE ENGLISH SPELLING & GRAMMAR PROOFING ENGINE
-// 
+// ==========================================
 const WORD_SPELLING_DICTIONARY = {
     accomodate: 'accommodate',
     acheive: 'achieve',
@@ -15095,9 +15010,9 @@ function initWordStyleProofing() {
     });
 }
 
-// 
+// ==========================================
 // ITS SALTILLO ACADEMIC PLANNER, CROQUIS, VACATIONS, RESIDENCIAS, WORK & GPS
-// 
+// ==========================================
 let academicPlannerState = null;
 let academicPlannerDirectory = null;
 let academicPlannerCommutePreview = null;
@@ -17864,9 +17779,9 @@ function initAcademicPlannerHandlers() {
     }
 }
 
-// 
+// ==========================================
 // INTERACTIVE REPERTOIRE BROWSER (ARTIST -> ALBUM -> SONG)
-// 
+// ==========================================
 function buildMusicRepertoireBuckets() {
     const artistMap = new Map();
     const ensureArtist = (id, nombre) => {
@@ -17927,9 +17842,9 @@ function renderMusicRepertoireNavigator() {
     if (navWrap) navWrap.hidden = true;
 }
 
-// 
+// ==========================================
 // CRISIS LOG (BITÁCORA CLÍNICA PARA PSIQUIATRA)
-// 
+// ==========================================
 function prefillCrisisCurrentTimestamp() {
     const now = new Date();
     const fechaEl = document.getElementById('crisisFecha');
@@ -18165,9 +18080,9 @@ function initCrisisHandlers() {
     });
 }
 
-// 
+// ==========================================
 // OPTIMAL KEYBOARD SHORTCUTS (ENTER / CTRL+ENTER)
-// 
+// ==========================================
 function initKeyboardShortcuts() {
     const bindEnterToButton = (inputId, buttonId, { ctrlOrCmd = false, multilinePlainEnter = false } = {}) => {
         const input = document.getElementById(inputId);
@@ -18287,9 +18202,9 @@ function refreshDynamicLanguageViews() {
     }
 }
 
-// 
+// ==========================================
 // AUTOMATIC SEMVER 2.0.0 VERSION HISTORY UI
-// 
+// ==========================================
 let cachedVersionData = null;
 
 function formatVersionTimestamp(rawIso) {
@@ -18507,9 +18422,9 @@ function initVersionHistoryHandlers() {
     }
 }
 
-// 
+// ==========================================
 // APP INITIALIZATION
-// 
+// ==========================================
 function autoResizeTextareaElement(el) {
     if (!el || el.hidden || el.id === 'musicSongLyricsViewer') return;
     const minH = el.id === 'journalText' ? 220 : 92;
@@ -18578,9 +18493,9 @@ function applyDeepLinkParamsFromUrl(searchStr = '', hashStr = '') {
     return false;
 }
 
-// 
+// ==========================================
 // REAL-TIME CROSS-SESSION SYNC (SSE + /api/sync/revisions)
-// 
+// ==========================================
 const REALTIME_SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
 const lastAppliedSyncRevisions = {};
 const localSyncWriteTimestamps = {};
