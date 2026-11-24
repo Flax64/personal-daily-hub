@@ -11521,6 +11521,7 @@ app.patch('/api/language/learning-toggle', apiWriteLimiter.middleware, requireAd
         };
         await saveUserSettings(uid, nextSettings);
 
+        bumpSyncRevision('settings');
         res.json({
             ok: true,
             studyEnabled: nextActive,
@@ -11530,4 +11531,487 @@ app.patch('/api/language/learning-toggle', apiWriteLimiter.middleware, requireAd
             settings: sanitizeSettingsForClient(nextSettings)
         });
     } catch (err) {
-... [truncated for diff preview]
+        console.error('[LANGUAGE_TOGGLE_ERROR]', err);
+        res.status(500).send('Error toggling language learning state.');
+    }
+});
+
+app.post('/api/language/word-activity', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
+    try {
+        const uid = req.user.id;
+        const nowSql = formatMySqlDateTime(new Date());
+        const requestedId = parsePositiveInt(req.body?.lessonId);
+        const lessons = await ensureDefaultStudyLessonsForUser(uid);
+        const targetLesson = requestedId
+            ? lessons.find((l) => Number(l.id) === Number(requestedId))
+            : (lessons.find((l) => !l.completada) || lessons[lessons.length - 1] || null);
+
+        if (targetLesson) {
+            await dbQueryAsync(
+                'UPDATE EstudioLecciones SET word_leido_en = COALESCE(word_leido_en, ?) WHERE id = ? AND usuario_id = ?',
+                [nowSql, targetLesson.id, uid]
+            );
+        }
+
+        const current = await loadUserSettings(uid);
+        await saveUserSettings(uid, {
+            ...current,
+            lastWordActivityAt: new Date().toISOString(),
+            lastWordAction: String(req.body?.action || 'word_activity').trim().slice(0, 64)
+        });
+
+        res.json({
+            ok: true,
+            recordedAt: nowSql,
+            lessonId: targetLesson ? targetLesson.id : null
+        });
+    } catch (err) {
+        console.error('[WORD_ACTIVITY_ERROR]', err);
+        res.status(500).send('Error recording Word study activity.');
+    }
+});
+
+app.post('/api/language/lessons/:id/generate-practice', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
+    const lessonId = parsePositiveInt(req.params.id);
+    if (!lessonId) return res.status(400).send('Invalid lesson ID.');
+
+    try {
+        const uid = req.user.id;
+        const lessons = await ensureDefaultStudyLessonsForUser(uid);
+        const targetIdx = lessons.findIndex((l) => Number(l.id) === Number(lessonId));
+        if (targetIdx === -1) return res.status(404).send('Lesson not found.');
+
+        const prevIncomplete = lessons.slice(0, targetIdx).find((l) => !l.completada);
+        if (prevIncomplete) {
+            return res.status(409).json({
+                locked: true,
+                message: `Debes completar primero la lección previa: "${prevIncomplete.nombre_practica}".`
+            });
+        }
+
+        const lesson = lessons[targetIdx];
+        const settings = await loadUserSettings(uid);
+        const effectiveKey = String(settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
+        const generated = await generatePracticalLessonForWord({
+            apiKey: effectiveKey,
+            model: settings.geminiModel || 'gemini-2.5-flash',
+            lessonCode: lesson.codigo_leccion,
+            lessonName: lesson.nombre_practica,
+            language: lesson.idioma,
+            learningMemory: settings.languageMemory
+        });
+
+        await dbQueryAsync(
+            'UPDATE EstudioLecciones SET word_leido_en = COALESCE(word_leido_en, ?) WHERE id = ? AND usuario_id = ?',
+            [formatMySqlDateTime(new Date()), lesson.id, uid]
+        );
+
+        res.json({
+            ok: true,
+            lessonId: lesson.id,
+            pcOnline: isPcBridgeOnline(),
+            practice: generated
+        });
+    } catch (err) {
+        console.error('[LANGUAGE_LESSON_GENERATE_ERROR]', err);
+        res.status(500).send('Error generating practical lesson.');
+    }
+});
+
+app.patch('/api/language/lessons/:id/complete', apiWriteLimiter.middleware, requireAdmin, async (req, res) => {
+    const lessonId = parsePositiveInt(req.params.id);
+    if (!lessonId) return res.status(400).send('Invalid lesson ID.');
+
+    try {
+        const uid = req.user.id;
+        const lessons = await ensureDefaultStudyLessonsForUser(uid);
+        const targetIdx = lessons.findIndex((l) => Number(l.id) === Number(lessonId));
+        if (targetIdx === -1) return res.status(404).send('Lesson not found.');
+
+        const lesson = lessons[targetIdx];
+        const prevIncomplete = lessons.slice(0, targetIdx).find((l) => !l.completada);
+        if (prevIncomplete) {
+            return res.status(409).send(`No puedes avanzar sin terminar antes: "${prevIncomplete.nombre_practica}".`);
+        }
+        if (!lesson.word_leido_en && req.body?.wordReadConfirmed !== true) {
+            return res.status(409).send('Aún no has abierto ni practicado el contenido de esta lección en tu documento Word (mínimo 10-15 min).');
+        }
+
+        const nowSql = formatMySqlDateTime(new Date());
+        await dbQueryAsync(
+            'UPDATE EstudioLecciones SET completada = 1, word_leido_en = COALESCE(word_leido_en, ?), completada_en = ? WHERE id = ? AND usuario_id = ?',
+            [nowSql, nowSql, lesson.id, uid]
+        );
+        bumpSyncRevision('music');
+
+        res.json({ ok: true, id: lesson.id, completed: true });
+    } catch (err) {
+        console.error('[LANGUAGE_LESSON_COMPLETE_ERROR]', err);
+        res.status(500).send('Error updating lesson completion.');
+    }
+});
+
+app.post('/api/language/pronunciation', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
+    try {
+        const targetText = String(req.body.targetText || '').trim();
+        const spokenText = String(req.body.spokenText || '').trim();
+        if (!targetText || !spokenText) {
+            return res.status(400).send('Provide both target phrase and microphone spoken transcript.');
+        }
+        const settings = await loadUserSettings(req.user.id);
+        const effectiveKey = String(settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
+        const evaluation = await evaluatePronunciation({
+            apiKey: effectiveKey,
+            model: settings.geminiModel || 'gemini-2.5-flash',
+            targetText,
+            spokenText,
+            language: req.body.language || settings.preferredStudyLanguage || 'en'
+        });
+        res.json(evaluation);
+    } catch (err) {
+        console.error('[PRONUNCIATION_EVAL_ERROR]', err);
+        res.status(500).send('Error evaluating pronunciation.');
+    }
+});
+
+function loadVersionMetadata() {
+    const rawEnvVersion = String(process.env.APP_VERSION || '').trim().replace(/^v/i, '');
+    const envVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(rawEnvVersion) ? rawEnvVersion : '';
+
+    let pkgVersion = '1.0.0';
+    try {
+        const pkgPath = path.join(__dirname, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) {
+                pkgVersion = pkg.version.trim();
+            }
+        }
+    } catch (_) {
+        pkgVersion = '1.0.0';
+    }
+    const fallbackVersion = envVersion || pkgVersion || '1.0.0';
+
+    let historyData = null;
+    try {
+        const historyPath = path.join(__dirname, 'version-history.json');
+        if (fs.existsSync(historyPath)) {
+            historyData = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+        }
+    } catch (_) {
+        historyData = null;
+    }
+
+    const releases = Array.isArray(historyData?.releases)
+        ? historyData.releases
+        : [{
+            version: fallbackVersion,
+            tag: `v${fallbackVersion}`,
+            bumpType: 'initial',
+            previousVersion: '0.0.0',
+            releasedAt: null,
+            commitSha: 'baseline',
+            trigger: 'baseline',
+            summary: 'Current application release',
+            counts: { breaking: 0, features: 0, fixes: 0, maintenance: 0 },
+            changes: { breaking: [], features: [], fixes: [], maintenance: [] }
+        }];
+
+    const latest = releases[0] || null;
+    const currentVersion = (historyData && typeof historyData.currentVersion === 'string' && historyData.currentVersion.trim())
+        ? historyData.currentVersion.trim()
+        : (latest?.version || fallbackVersion);
+
+    return {
+        currentVersion,
+        tag: latest?.tag || `v${currentVersion}`,
+        bumpType: latest?.bumpType || 'initial',
+        releasedAt: latest?.releasedAt || historyData?.updatedAt || null,
+        commitSha: latest?.commitSha || '',
+        summary: latest?.summary || '',
+        standard: (historyData && historyData.standard) || 'SemVer 2.0.0 + Conventional Commits',
+        totalReleases: releases.length,
+        history: releases
+    };
+}
+
+app.get('/api/version', apiReadLimiter.middleware, requireAuth, (req, res) => {
+    try {
+        return res.json(loadVersionMetadata());
+    } catch (err) {
+        console.error('[VERSION_ENDPOINT_ERROR]', err);
+        return res.status(500).send('Failed to load version history.');
+    }
+});
+
+app.get('/api/system/logs', apiReadLimiter.middleware, requireAdmin, (req, res) => {
+    const kind = String(req.query.kind || 'server').trim().toLowerCase();
+    const lines = Number.parseInt(String(req.query.lines || '120'), 10) || 120;
+    return res.json({
+        replicaId: REPLICA_ID,
+        ...serverLogger.getRecentLogTail({ kind, lines })
+    });
+});
+
+// ==========================================
+// SINCRONIZACIÓN EN TIEMPO REAL (SSE + REVISIONES POR SCOPE)
+// ==========================================
+const SYNC_SCOPES = ['mood', 'sleep', 'crisis', 'agenda', 'planner', 'settings', 'music', 'journal'];
+const CLINICAL_SYNC_SCOPES = ['mood', 'sleep', 'crisis'];
+const localSyncRevisions = Object.fromEntries(SYNC_SCOPES.map((scope) => [scope, 1]));
+const sseSyncClients = new Set();
+let syncReplicaPollTimer = null;
+let syncReplicaPollInFlight = false;
+
+function filterSyncRevisionsForRole(revs = {}, rol = 'admin') {
+    const allowedScopes = rol === 'psiquiatra' ? CLINICAL_SYNC_SCOPES : SYNC_SCOPES;
+    const filtered = {};
+    for (const scope of allowedScopes) {
+        const val = Number(revs?.[scope]);
+        filtered[scope] = Number.isFinite(val) && val > 0 ? val : 1;
+    }
+    return filtered;
+}
+
+async function fetchSyncRevisions() {
+    const base = {};
+    for (const scope of SYNC_SCOPES) {
+        base[scope] = Number(localSyncRevisions[scope]) || 1;
+    }
+    try {
+        const rows = await dbQueryAsync('SELECT scope, revision FROM SyncRevisions');
+        if (Array.isArray(rows)) {
+            for (const row of rows) {
+                const scope = String(row?.scope || '').trim();
+                const rev = Number(row?.revision);
+                if (SYNC_SCOPES.includes(scope) && Number.isFinite(rev) && rev > 0) {
+                    base[scope] = rev;
+                    localSyncRevisions[scope] = rev;
+                }
+            }
+        }
+    } catch (_) {
+        // Fallback silencioso a memoria local si la tabla aún no existe
+    }
+    return base;
+}
+
+function broadcastSseSync(revs = localSyncRevisions, changedScopes = []) {
+    if (sseSyncClients.size === 0) return;
+    const normalizedChanges = Array.isArray(changedScopes)
+        ? changedScopes.filter((s) => SYNC_SCOPES.includes(s))
+        : [];
+    const ts = Date.now();
+    for (const client of Array.from(sseSyncClients)) {
+        if (!client || !client.res || client.res.writableEnded) {
+            sseSyncClients.delete(client);
+            continue;
+        }
+        const allowed = client.rol === 'psiquiatra' ? CLINICAL_SYNC_SCOPES : SYNC_SCOPES;
+        const roleChanges = normalizedChanges.filter((s) => allowed.includes(s));
+        if (normalizedChanges.length > 0 && roleChanges.length === 0) {
+            continue;
+        }
+        const payload = {
+            replicaId: REPLICA_ID,
+            revisions: filterSyncRevisionsForRole(revs, client.rol),
+            changedScopes: roleChanges,
+            ts
+        };
+        try {
+            client.res.write(`event: sync\ndata: ${JSON.stringify(payload)}\n\n`);
+        } catch (_) {
+            sseSyncClients.delete(client);
+        }
+    }
+}
+
+function ensureReplicaSyncPoller() {
+    if (syncReplicaPollTimer || sseSyncClients.size === 0 || isAutomatedTestEnv()) return;
+    syncReplicaPollTimer = setInterval(async () => {
+        if (sseSyncClients.size === 0 || syncReplicaPollInFlight) return;
+        syncReplicaPollInFlight = true;
+        try {
+            const prevSnapshot = { ...localSyncRevisions };
+            const latest = await fetchSyncRevisions();
+            const changed = SYNC_SCOPES.filter((scope) => (Number(latest[scope]) || 1) !== (Number(prevSnapshot[scope]) || 1));
+            if (changed.length > 0) {
+                broadcastSseSync(latest, changed);
+            }
+        } catch (_) {
+            // Ignorar errores transitorios de polling entre réplicas
+        } finally {
+            syncReplicaPollInFlight = false;
+        }
+    }, 4000);
+    if (typeof syncReplicaPollTimer.unref === 'function') {
+        syncReplicaPollTimer.unref();
+    }
+}
+
+function stopReplicaSyncPollerIfIdle() {
+    if (sseSyncClients.size === 0 && syncReplicaPollTimer) {
+        clearInterval(syncReplicaPollTimer);
+        syncReplicaPollTimer = null;
+    }
+}
+
+function closeAllSseClients() {
+    if (syncReplicaPollTimer) {
+        clearInterval(syncReplicaPollTimer);
+        syncReplicaPollTimer = null;
+    }
+    for (const client of Array.from(sseSyncClients)) {
+        try {
+            if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);
+            if (client.res && !client.res.writableEnded) {
+                client.res.end();
+            }
+        } catch (_) {
+            // noop
+        }
+        sseSyncClients.delete(client);
+    }
+}
+
+function bumpSyncRevision(scope) {
+    if (!SYNC_SCOPES.includes(scope)) return;
+    localSyncRevisions[scope] = (Number(localSyncRevisions[scope]) || 1) + 1;
+    dbQueryAsync(
+        'INSERT INTO SyncRevisions (scope, revision) VALUES (?, 2) ON DUPLICATE KEY UPDATE revision = revision + 1, updated_at = CURRENT_TIMESTAMP',
+        [scope]
+    )
+        .then(() => fetchSyncRevisions())
+        .then((revs) => broadcastSseSync(revs, [scope]))
+        .catch(() => broadcastSseSync({ ...localSyncRevisions }, [scope]));
+}
+
+app.get('/api/sync/revisions', apiReadLimiter.middleware, requireAuth, async (req, res) => {
+    try {
+        const revs = await fetchSyncRevisions();
+        return res.json({
+            ok: true,
+            replicaId: REPLICA_ID,
+            revisions: filterSyncRevisionsForRole(revs, req.user?.rol)
+        });
+    } catch (err) {
+        console.error('[SYNC_REVISIONS_ERROR]', err);
+        return res.status(500).send('Error loading sync revisions.');
+    }
+});
+
+app.get('/api/sync/stream', requireAuth, async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
+
+    const client = {
+        res,
+        userId: req.user?.id || null,
+        rol: req.user?.rol || 'admin',
+        heartbeatTimer: null
+    };
+    sseSyncClients.add(client);
+    ensureReplicaSyncPoller();
+
+    client.heartbeatTimer = setInterval(() => {
+        if (res.writableEnded) return;
+        try {
+            res.write(': ping\n\n');
+        } catch (_) {
+            // noop
+        }
+    }, 25000);
+    if (typeof client.heartbeatTimer.unref === 'function') {
+        client.heartbeatTimer.unref();
+    }
+
+    try {
+        const initialRevs = await fetchSyncRevisions();
+        if (!res.writableEnded) {
+            const initialPayload = {
+                replicaId: REPLICA_ID,
+                revisions: filterSyncRevisionsForRole(initialRevs, client.rol),
+                changedScopes: [],
+                ts: Date.now()
+            };
+            res.write(`event: sync\ndata: ${JSON.stringify(initialPayload)}\n\n`);
+        }
+    } catch (_) {
+        // noop
+    }
+
+    const cleanup = () => {
+        if (client.heartbeatTimer) {
+            clearInterval(client.heartbeatTimer);
+            client.heartbeatTimer = null;
+        }
+        sseSyncClients.delete(client);
+        stopReplicaSyncPollerIfIdle();
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+});
+
+// Manejo controlado de rutas inexistentes y errores inesperados en API (sin filtrar stack traces)
+app.use('/api', (req, res) => {
+    res.status(404).send('API endpoint not found.');
+});
+
+app.use((err, req, res, _next) => {
+    console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err && err.message ? err.message : err);
+    if (res.headersSent) return;
+    res.status(500).send('An internal server error occurred.');
+});
+
+const PORT = process.env.PORT || 3000;
+const httpServer = app.listen(PORT, () => {
+    console.log(`Backend server running at http://localhost:${PORT}`);
+    serverLogger.info('SYSTEM', 'Servidor iniciado', {
+        replicaId: REPLICA_ID,
+        port: PORT,
+        tz: process.env.TZ || 'system',
+        trustProxy: process.env.TRUST_PROXY || 'off',
+        requireHttps: String(process.env.REQUIRE_HTTPS || '').toLowerCase() === 'true',
+        autonomousNotes: serverNotesService.isServerAutonomousNotesEnabled(),
+        fileLogs: serverLogger.fileEnabled,
+        logDir: serverLogger.logDir
+    });
+    if (!isAutomatedTestEnv() && serverNotesService.isServerAutonomousNotesEnabled()) {
+        const pendingDrive = serverNotesService.readEnglishDrivePendingMarker(
+            serverNotesService.resolveLocalEnglishPath({ rootDir: __dirname })
+        );
+        if (pendingDrive) {
+            serverLogger.warn('DRIVE_NOTES', 'Respaldo local de cuaderno pendiente de subir a Google Drive detectado al iniciar; programando reintento', {
+                pendingSince: pendingDrive.pendingSince,
+                attempts: pendingDrive.attempts
+            });
+            scheduleStudyDriveRetry();
+        }
+    }
+});
+httpServer.on('close', closeAllSseClients);
+// Protección anti-Slowloris / agotamiento de sockets HTTP
+httpServer.keepAliveTimeout = 15000;
+httpServer.headersTimeout = 20000;
+httpServer.requestTimeout = 90000;
+httpServer.maxHeadersCount = 64;
+
+// Capturar errores imprevistos para saber por qué se cayó
+process.on('uncaughtException', (err) => {
+    serverLogger.crash('PROCESS', 'Server crashed with uncaughtException', {
+        error: err && err.stack ? err.stack : String(err)
+    });
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    serverLogger.crash('PROCESS', 'Unhandled promise rejection', {
+        reason: reason && reason.stack ? reason.stack : String(reason)
+    });
+    process.exit(1);
+});

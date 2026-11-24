@@ -379,6 +379,7 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             assert.ok(indexHtml.includes(requiredId), `public/index.html debe incluir ${requiredId}`);
         }
         for (const removedId of [
+            'id="btnBackToHome"',
             'id="transportSecurityCard"',
             'id="btnTransportBenchmark"',
             'id="btnSyncScheduleToAgenda"',
@@ -431,6 +432,21 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
         assert.ok(serverSrcCheck.includes("app.get('/api/sync/revisions'") && serverSrcCheck.includes("app.get('/api/sync/stream'"));
         assert.match(serverSrcCheck, /script-src 'self'/);
         assert.match(serverSrcCheck, /connect-src 'self'/);
+
+        // Regresiones de diseño simétrico #sleepGrid, anti-autofill #medicoForm, recarga en #inicio e historial popstate
+        assert.match(styleCssText, /\.sleep-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/);
+        assert.match(styleCssText, /\.sleep-card\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;[\s\S]*?justify-content:\s*space-between/);
+        assert.match(styleCssText, /\.sleep-card\s+\.sleep-hours\s*\{[\s\S]*?white-space:\s*nowrap/);
+
+        assert.match(indexHtml, /<form\s+id="medicoForm"\s+autocomplete="off">/);
+        assert.match(indexHtml, /id="medicoEmail"[^>]*data-no-autofill="true"/);
+        assert.match(indexHtml, /id="medicoPassword"[^>]*autocomplete="new-password"[^>]*data-no-autofill="true"/);
+        assert.ok(indexHtml.includes('data-toggle-password="medicoPassword"'));
+
+        assert.ok(frontendSrcCheck.includes('history.pushState({ view: targetView }, \'\', targetHash)'));
+        assert.ok(frontendSrcCheck.includes("window.addEventListener('popstate'"));
+        assert.ok(frontendSrcCheck.includes("history.replaceState({ view: 'inicio' }, '', `${window.location.pathname}#inicio`)"));
+        assert.ok(frontendSrcCheck.includes('initMedicoAutofillShield') && frontendSrcCheck.includes('resetMedicoAutofillShield'));
 
         const dockerfileText = readText('Dockerfile');
         assert.ok(dockerfileText.includes('COPY lib ./lib'), 'Dockerfile debe copiar carpeta lib/');

@@ -194,3 +194,12 @@ CREATE TABLE IF NOT EXISTS EstudioLecciones (
     INDEX idx_leccion_orden (usuario_id, idioma, orden_secuencia),
     FOREIGN KEY (usuario_id) REFERENCES Usuarios(id) ON DELETE CASCADE
 );
+
+-- =========================================================================
+-- CONTROL DE REVISIONES EN TIEMPO REAL ENTRE SESIONES Y RÉPLICAS (SSE)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS SyncRevisions (
+    scope VARCHAR(40) PRIMARY KEY,
+    revision BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);

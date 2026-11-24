@@ -890,7 +890,6 @@
         // --- Weekly Summary & Psychiatrist ---
         ['Weekly Mood & Sleep Summary', 'Resumen Semanal de Ánimo y Sueño'],
         ['Review emotional patterns across all five daily time blocks alongside restorative sleep metrics.', 'Revisa patrones emocionales en los cinco bloques diarios junto con métricas de descanso, desvelos y crisis.'],
-        ['⬅ Back to Home', '⬅ Volver al Inicio'],
         ['Select a week:', 'Selecciona una semana:'],
         ['Sunday', 'Domingo'],
         ['Monday', 'Lunes'],

@@ -2269,9 +2269,6 @@
                                 <p class="view-header-subtitle">Review emotional patterns across all five daily time blocks alongside restorative sleep metrics.</p>
                             </div>
                         </div>
-                        <div class="view-header-actions">
-                            <button type="button" class="btn-back admin-only-nav" id="btnBackToHome" data-go-view="inicio">⬅ Back to Home</button>
-                        </div>
                     </div>
 
                     <div class="card resumen-filter-card">
@@ -2433,21 +2430,21 @@
                     </div>
 
                     <div class="card view-main-card">
-                        <form id="medicoForm">
+                        <form id="medicoForm" autocomplete="off">
                             <div class="form-row-2">
                                 <div class="form-group">
                                     <label for="medicoNombre">Doctor's name:</label>
-                                    <input type="text" id="medicoNombre" minlength="2" maxlength="80" placeholder="e.g. Dr. Garcia" required>
+                                    <input type="text" id="medicoNombre" name="psych_fullname" autocomplete="off" data-lpignore="true" data-1p-ignore="true" minlength="2" maxlength="80" placeholder="e.g. Dr. Garcia" required>
                                 </div>
                                 <div class="form-group">
                                     <label for="medicoEmail">Doctor's email address:</label>
-                                    <input type="email" id="medicoEmail" maxlength="150" placeholder="doctor@email.com" required>
+                                    <input type="email" id="medicoEmail" name="psych_contact_mail" autocomplete="off" readonly data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" maxlength="150" placeholder="doctor@email.com" required>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label for="medicoPassword">Assigned password (8–128 chars, letters &amp; numbers):</label>
                                 <div class="password-input-wrap">
-                                    <input type="password" id="medicoPassword" minlength="8" maxlength="128"
+                                    <input type="password" id="medicoPassword" name="psych_assigned_secret" autocomplete="new-password" readonly data-no-autofill="true" data-lpignore="true" data-1p-ignore="true" minlength="8" maxlength="128"
                                         placeholder="At least 8 characters with letters and numbers" required>
                                     <button type="button" class="password-toggle-btn" data-toggle-password="medicoPassword"
                                         aria-label="Show password" aria-pressed="false" title="Show password"></button>

@@ -17,6 +17,14 @@ const clientTransportTunnel = (
     : null;
 
 let lastCapturedWirePacket = null;
+let lastLocalApiMutationAt = 0;
+
+function markLocalSyncMutation(method = 'GET') {
+    const m = String(method || 'GET').toUpperCase();
+    if (m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') {
+        lastLocalApiMutationAt = Date.now();
+    }
+}
 
 function i18nGetLang() {
     return (typeof window !== 'undefined' && window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function')
@@ -61,8 +69,6 @@ function updateTransportStatusBadges() {
     const authPill = document.getElementById('authTunnelPill');
     const mobilePill = document.getElementById('mobileTunnelPill');
     const sidebarBadge = document.getElementById('sidebarTunnelBadge');
-    const diagKid = document.getElementById('transportDiagKid');
-    const diagStats = document.getElementById('transportDiagStats');
 
     const setSidebarBadge = (iconText, labelText) => {
         if (!sidebarBadge) return;
@@ -89,8 +95,6 @@ function updateTransportStatusBadges() {
     }
 
     const diag = clientTransportTunnel.getDiagnostics();
-    const totalBytes = (diag.metrics.totalBytesEncrypted || 0) + (diag.metrics.totalBytesDecrypted || 0);
-    const totalReqs = Math.max(diag.metrics.encryptedRequests || 0, diag.metrics.decryptedResponses || 0);
 
     if (diag.ready && diag.kid) {
         if (authPill) {
@@ -102,20 +106,12 @@ function updateTransportStatusBadges() {
             mobilePill.classList.remove('is-pending');
         }
         setSidebarBadge('🔐', tUi('Encryption: Active', 'Cifrado: Activo'));
-        if (diagKid) diagKid.textContent = `${diag.kid.slice(0, 12)}… (${diag.metrics.lastHandshakeMs} ms)`;
-        if (diagStats) {
-            diagStats.textContent = tUi(
-                `${totalReqs} protected msgs · ${formatCompactBytes(totalBytes)}`,
-                `${totalReqs} mensajes protegidos · ${formatCompactBytes(totalBytes)}`
-            );
-        }
     } else {
         if (authPill) {
             authPill.textContent = tUi('🔐 Securing Connection...', '🔐 Protegiendo Conexión...');
             authPill.classList.add('is-pending');
         }
         setSidebarBadge('🔐', tUi('Encryption: Connecting...', 'Cifrado: Conectando...'));
-        if (diagKid) diagKid.textContent = tUi('Establishing private key...', 'Preparando sesión segura...');
     }
 }
 
@@ -190,6 +186,9 @@ if (rawBrowserFetch && clientTransportTunnel) {
         }
 
         const encHeader = res.headers.get('X-Transport-Encrypted');
+        if (res.ok) {
+            markLocalSyncMutation(init.method || 'GET');
+        }
         if (encHeader === clientTransportTunnel.TRANSPORT_PROTOCOL) {
             const rawEnv = await res.json();
             if (originalBody === null) {
@@ -231,7 +230,11 @@ if (rawBrowserFetch && clientTransportTunnel) {
         if (!headers.has('X-UI-Lang')) {
             headers.set('X-UI-Lang', i18nGetLang());
         }
-        return rawBrowserFetch(input, { ...init, headers });
+        const res = await rawBrowserFetch(input, { ...init, headers });
+        if (res.ok) {
+            markLocalSyncMutation(init.method || 'GET');
+        }
+        return res;
     };
 }
 
@@ -1364,9 +1367,85 @@ const mobileViewTitle = document.getElementById('mobileViewTitle');
 function setMobileMenuOpen(isOpen) {
     if (!appShell) return;
     appShell.classList.toggle('mobile-menu-open', isOpen);
+    if (sidebar) {
+        sidebar.classList.remove('is-swiping');
+        sidebar.style.transform = '';
+    }
     if (mobileMenuBtn) {
         mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
     }
+}
+
+function initSidebarSwipeGesture() {
+    if (!appShell || !sidebar || sidebar.dataset?.swipeWired === '1') return;
+    if (sidebar.dataset) sidebar.dataset.swipeWired = '1';
+
+    let tracking = false;
+    let isHorizontalSwipe = false;
+    let startX = 0;
+    let startY = 0;
+    let startTs = 0;
+    let lastDeltaX = 0;
+
+    const resetSwipeTransform = () => {
+        sidebar.classList.remove('is-swiping');
+        sidebar.style.transform = '';
+        tracking = false;
+        isHorizontalSwipe = false;
+        lastDeltaX = 0;
+    };
+
+    const handleTouchStart = (e) => {
+        if (!appShell.classList.contains('mobile-menu-open')) return;
+        const touch = e.touches && e.touches[0];
+        if (!touch) return;
+        tracking = true;
+        isHorizontalSwipe = false;
+        startX = touch.clientX;
+        startY = touch.clientY;
+        startTs = Date.now();
+        lastDeltaX = 0;
+    };
+
+    const handleTouchMove = (e) => {
+        if (!tracking || !appShell.classList.contains('mobile-menu-open')) return;
+        const touch = e.touches && e.touches[0];
+        if (!touch) return;
+        const deltaX = touch.clientX - startX;
+        const deltaY = touch.clientY - startY;
+
+        if (!isHorizontalSwipe) {
+            if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) return;
+            if (deltaX < -10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+                isHorizontalSwipe = true;
+                sidebar.classList.add('is-swiping');
+            } else {
+                tracking = false;
+                return;
+            }
+        }
+
+        lastDeltaX = Math.min(0, deltaX);
+        sidebar.style.transform = `translateX(${lastDeltaX}px)`;
+    };
+
+    const handleTouchEnd = () => {
+        if (!tracking) return;
+        const elapsedMs = Math.max(1, Date.now() - startTs);
+        const velocity = lastDeltaX / elapsedMs;
+        const shouldClose = isHorizontalSwipe && (lastDeltaX <= -65 || (velocity <= -0.45 && lastDeltaX <= -30));
+        resetSwipeTransform();
+        if (shouldClose) {
+            setMobileMenuOpen(false);
+        }
+    };
+
+    [sidebar, sidebarBackdrop].filter(Boolean).forEach((target) => {
+        target.addEventListener('touchstart', handleTouchStart, { passive: true });
+        target.addEventListener('touchmove', handleTouchMove, { passive: true });
+        target.addEventListener('touchend', handleTouchEnd, { passive: true });
+        target.addEventListener('touchcancel', resetSwipeTransform, { passive: true });
+    });
 }
 
 function updateDesktopSidebarState(collapsed) {
@@ -1501,6 +1580,9 @@ function parseIsoDateToDayIndex(rawFecha) {
     return Number.isNaN(d.getTime()) ? -1 : d.getUTCDay();
 }
 
+let currentActiveView = '';
+let suppressNextHashChange = false;
+
 function showView(viewName, updateHash = true, options = {}) {
     let targetView = VALID_VIEWS.has(viewName) ? viewName : 'inicio';
 
@@ -1508,6 +1590,9 @@ function showView(viewName, updateHash = true, options = {}) {
     if (currentUser && currentUser.rol === 'psiquiatra') {
         targetView = 'resumen';
     }
+
+    const previousView = currentActiveView;
+    currentActiveView = targetView;
 
     actualizarCabecerasDeFecha();
 
@@ -1526,8 +1611,13 @@ function showView(viewName, updateHash = true, options = {}) {
         btn.classList.toggle('active', btn.getAttribute('data-view') === targetView);
     });
 
-    if (updateHash && window.location.hash !== `#${targetView}`) {
-        history.replaceState(null, '', `#${targetView}`);
+    if (updateHash && typeof history !== 'undefined') {
+        const targetHash = `#${targetView}`;
+        if (options.historyMode === 'replace' || !previousView) {
+            history.replaceState({ view: targetView }, '', targetHash);
+        } else if (targetView !== previousView || window.location.hash !== targetHash) {
+            history.pushState({ view: targetView }, '', targetHash);
+        }
     }
 
     setMobileMenuOpen(false);
@@ -1747,6 +1837,8 @@ if (appShell) {
         sidebarBackdrop.addEventListener('click', () => setMobileMenuOpen(false));
     }
 
+    initSidebarSwipeGesture();
+
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             setMobileMenuOpen(false);
@@ -1781,11 +1873,24 @@ if (appShell) {
         });
     });
 
-    // URL hash navigation support
-    window.addEventListener('hashchange', () => {
+    // Browser Back/Forward & URL hash navigation support
+    window.addEventListener('popstate', (event) => {
         if (!currentUser) return;
+        suppressNextHashChange = true;
+        setTimeout(() => { suppressNextHashChange = false; }, 0);
+        const rawView = (event && event.state && event.state.view)
+            || window.location.hash.replace('#', '')
+            || 'inicio';
+        const resolvedView = currentUser.rol === 'psiquiatra'
+            ? 'resumen'
+            : (VALID_VIEWS.has(rawView) ? rawView : 'inicio');
+        showView(resolvedView, false);
+    });
+
+    window.addEventListener('hashchange', () => {
+        if (!currentUser || suppressNextHashChange) return;
         const hashView = window.location.hash.replace('#', '');
-        if (VALID_VIEWS.has(hashView)) {
+        if (VALID_VIEWS.has(hashView) && hashView !== currentActiveView) {
             showView(hashView, false);
         }
     });
@@ -12864,6 +12969,10 @@ function showAuthForm(formId, subtitleText) {
 
 function showAuthScreen(defaultForm = 'authLoginForm') {
     currentUser = null;
+    currentActiveView = '';
+    if (typeof stopRealtimeSessionSync === 'function') {
+        stopRealtimeSessionSync();
+    }
     pendingMfaState = { token: '', email: '' };
     if (sundayWatcherInterval) {
         clearInterval(sundayWatcherInterval);
@@ -12965,7 +13074,10 @@ function enterAppSession(user) {
         }
 
         if (isPsiquiatra) {
-            showView('resumen', true);
+            if (typeof history !== 'undefined' && typeof history.replaceState === 'function') {
+                history.replaceState({ view: 'resumen' }, '', `${window.location.pathname}#resumen`);
+            }
+            showView('resumen', false);
         } else {
             fetch('/api/settings', { cache: 'no-store' })
                 .then(r => (r.ok ? r.json() : null))
@@ -12992,7 +13104,6 @@ function enterAppSession(user) {
             const urlParams = new URLSearchParams(window.location.search);
             const rView = urlParams.get('rView');
             const shouldCaptureGps = urlParams.get('captureGps') === '1';
-            const initialHash = window.location.hash.replace('#', '');
             if (rView && VALID_VIEWS.has(rView)) {
                 openReminderTarget({
                     targetView: rView,
@@ -13003,18 +13114,21 @@ function enterAppSession(user) {
                     targetTab: urlParams.get('rTab') || '',
                     refId: urlParams.get('rRef') || null
                 });
-                history.replaceState(null, '', `${window.location.pathname}#${rView}`);
+                history.replaceState({ view: rView }, '', `${window.location.pathname}#${rView}`);
                 if (shouldCaptureGps && currentUser?.rol === 'admin') {
                     setTimeout(() => triggerSmartGpsCapture('current'), 450);
                 }
             } else if (shouldCaptureGps && currentUser?.rol === 'admin') {
                 openReminderTarget({ targetView: 'horario', targetTab: 'locations' });
-                history.replaceState(null, '', `${window.location.pathname}#horario`);
+                history.replaceState({ view: 'horario' }, '', `${window.location.pathname}#horario`);
                 setTimeout(() => triggerSmartGpsCapture('current'), 450);
             } else {
-                const startView = VALID_VIEWS.has(initialHash) ? initialHash : 'inicio';
-                showView(startView, false);
+                history.replaceState({ view: 'inicio' }, '', `${window.location.pathname}#inicio`);
+                showView('inicio', false);
             }
+        }
+        if (typeof initRealtimeSessionSync === 'function') {
+            initRealtimeSessionSync();
         }
     } catch (bootErr) {
         console.error('[SESSION_INIT_WARN]', bootErr);
@@ -13025,7 +13139,253 @@ function enterAppSession(user) {
     }
 }
 
+// ==========================================
+// REAL-TIME MULTI-SESSION SYNC (SSE + CATCH-UP REVISIONS)
+// ==========================================
+let syncEventSource = null;
+let knownSyncRevisions = {};
+let syncRefreshDebounceTimer = null;
+let pendingSyncChangedScopes = new Set();
+let syncLifecycleWired = false;
+
+function isActivelyTypingInView(viewId) {
+    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!activeEl) return false;
+    const tag = String(activeEl.tagName || '').toUpperCase();
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !activeEl.isContentEditable) {
+        return false;
+    }
+    const viewEl = viewId ? document.getElementById(viewId) : null;
+    return viewEl ? viewEl.contains(activeEl) : true;
+}
+
+function flushRealtimeSyncRefresh() {
+    syncRefreshDebounceTimer = null;
+    if (!currentUser || document.visibilityState === 'hidden') return;
+    if (Date.now() - lastLocalApiMutationAt < 1200) {
+        pendingSyncChangedScopes.clear();
+        return;
+    }
+    const changed = Array.from(pendingSyncChangedScopes);
+    pendingSyncChangedScopes.clear();
+    if (changed.length === 0) return;
+
+    const changedSet = new Set(changed);
+    const activeView = currentActiveView || (currentUser.rol === 'psiquiatra' ? 'resumen' : 'inicio');
+
+    if (activeView === 'inicio') {
+        if (typeof cargarInicioResumen === 'function') cargarInicioResumen();
+        if (typeof cargarRecordatoriosActivos === 'function') cargarRecordatoriosActivos();
+    } else if (activeView === 'mood' && changedSet.has('mood')) {
+        if (!isActivelyTypingInView('view-mood') && typeof cargarMoodsHoy === 'function') cargarMoodsHoy();
+    } else if (activeView === 'sueno' && (changedSet.has('sleep') || changedSet.has('settings'))) {
+        if (!isActivelyTypingInView('view-sueno') && typeof cargarSuenoHoy === 'function') cargarSuenoHoy();
+    } else if (activeView === 'crisis' && changedSet.has('crisis')) {
+        if (!isActivelyTypingInView('view-crisis') && typeof cargarCrisisRecientes === 'function') cargarCrisisRecientes();
+    } else if (activeView === 'resumen' && (changedSet.has('mood') || changedSet.has('sleep') || changedSet.has('crisis'))) {
+        if (typeof cargarResumenSemanalActual === 'function') cargarResumenSemanalActual();
+    } else if (activeView === 'agenda' && (changedSet.has('agenda') || changedSet.has('planner'))) {
+        if (!isActivelyTypingInView('view-agenda') && typeof cargarAgendaSemana === 'function') cargarAgendaSemana();
+    } else if (activeView === 'horario' && changedSet.has('planner')) {
+        if (!isActivelyTypingInView('view-horario') && typeof cargarPlannerVista === 'function') cargarPlannerVista();
+    } else if (activeView === 'english' && changedSet.has('music')) {
+        if (!isActivelyTypingInView('view-english') && typeof cargarCatalogoMusical === 'function') cargarCatalogoMusical();
+    } else if (activeView === 'journal' && changedSet.has('journal')) {
+        if (!isActivelyTypingInView('view-journal') && typeof cargarEstadoDiarioJournal === 'function') {
+            cargarEstadoDiarioJournal({ silent: true });
+        }
+    } else if (activeView === 'settings' && changedSet.has('settings')) {
+        if (!isActivelyTypingInView('settingsForm')) {
+            fetch('/api/settings', { cache: 'no-store' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                    if (data && data.settings) {
+                        aplicarSettingsEnEstado(data.settings, { syncAgendaDefaults: true });
+                        if (typeof populateSettingsForm === 'function') populateSettingsForm(data.settings);
+                    }
+                })
+                .catch(() => {});
+        }
+    }
+}
+
+function applyIncomingSyncRevisions(revs, changedScopes = []) {
+    if (!revs || typeof revs !== 'object') return;
+    const isInitialBaseline = Object.keys(knownSyncRevisions).length === 0;
+    const detectedChanges = [];
+
+    Object.entries(revs).forEach(([scope, rawRev]) => {
+        const nextRev = Number(rawRev);
+        if (!Number.isFinite(nextRev)) return;
+        const prevRev = Number(knownSyncRevisions[scope]);
+        if (!isInitialBaseline && Number.isFinite(prevRev) && nextRev > prevRev) {
+            detectedChanges.push(scope);
+        }
+        knownSyncRevisions[scope] = nextRev;
+    });
+
+    if (Array.isArray(changedScopes) && !isInitialBaseline) {
+        changedScopes.forEach((s) => {
+            if (s && !detectedChanges.includes(s)) detectedChanges.push(s);
+        });
+    }
+
+    if (detectedChanges.length === 0) return;
+    if (Date.now() - lastLocalApiMutationAt < 1200) return;
+
+    detectedChanges.forEach((s) => pendingSyncChangedScopes.add(s));
+    if (syncRefreshDebounceTimer) clearTimeout(syncRefreshDebounceTimer);
+    syncRefreshDebounceTimer = setTimeout(flushRealtimeSyncRefresh, 350);
+}
+
+async function fetchSyncRevisionsCatchUp() {
+    if (!currentUser || document.visibilityState === 'hidden') return;
+    try {
+        const res = await fetch('/api/sync/revisions', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.revisions) {
+            applyIncomingSyncRevisions(data.revisions);
+        }
+    } catch (_) {
+        // noop
+    }
+}
+
+function connectSyncEventSource() {
+    if (!currentUser || typeof EventSource !== 'function' || document.visibilityState === 'hidden') return;
+    if (syncEventSource) return;
+
+    try {
+        const es = new EventSource('/api/sync/stream');
+        syncEventSource = es;
+        es.addEventListener('sync', (ev) => {
+            try {
+                const data = JSON.parse(ev.data || '{}');
+                if (data && data.revisions) {
+                    applyIncomingSyncRevisions(data.revisions, data.changedScopes || []);
+                }
+            } catch (_) {
+                // noop
+            }
+        });
+        es.onerror = () => {
+            if (syncEventSource) {
+                syncEventSource.close();
+                syncEventSource = null;
+            }
+            if (currentUser && document.visibilityState !== 'hidden') {
+                setTimeout(() => {
+                    if (currentUser && document.visibilityState !== 'hidden') {
+                        fetchSyncRevisionsCatchUp();
+                        connectSyncEventSource();
+                    }
+                }, 4000);
+            }
+        };
+    } catch (_) {
+        syncEventSource = null;
+    }
+}
+
+function stopRealtimeSessionSync() {
+    if (syncRefreshDebounceTimer) {
+        clearTimeout(syncRefreshDebounceTimer);
+        syncRefreshDebounceTimer = null;
+    }
+    pendingSyncChangedScopes.clear();
+    knownSyncRevisions = {};
+    if (syncEventSource) {
+        try { syncEventSource.close(); } catch (_) {}
+        syncEventSource = null;
+    }
+}
+
+function initRealtimeSessionSync() {
+    if (!currentUser) return;
+    if (!syncLifecycleWired && typeof document !== 'undefined') {
+        syncLifecycleWired = true;
+        document.addEventListener('visibilitychange', () => {
+            if (!currentUser) return;
+            if (document.visibilityState === 'hidden') {
+                if (syncEventSource) {
+                    try { syncEventSource.close(); } catch (_) {}
+                    syncEventSource = null;
+                }
+            } else {
+                fetchSyncRevisionsCatchUp();
+                connectSyncEventSource();
+            }
+        });
+    }
+    fetchSyncRevisionsCatchUp();
+    connectSyncEventSource();
+}
+
+function resetMedicoAutofillShield({ forceClear = false } = {}) {
+    if (typeof document === 'undefined') return;
+    const medicoFormEl = document.getElementById('medicoForm');
+    if (!medicoFormEl || typeof medicoFormEl.querySelectorAll !== 'function') return;
+    const fields = medicoFormEl.querySelectorAll('[data-no-autofill="true"]');
+    fields.forEach((field) => {
+        if (!field) return;
+        if (forceClear) {
+            delete field.dataset.userEdited;
+        }
+        if (forceClear || field.dataset.userEdited !== 'true') {
+            field.value = '';
+            field.readOnly = true;
+            if (typeof field.setAttribute === 'function') {
+                field.setAttribute('readonly', 'readonly');
+            }
+        }
+    });
+    if (!forceClear) {
+        setTimeout(() => {
+            fields.forEach((field) => {
+                if (field && field.dataset.userEdited !== 'true' && document.activeElement !== field) {
+                    field.value = '';
+                }
+            });
+        }, 120);
+    }
+}
+
+function initMedicoAutofillShield() {
+    if (typeof document === 'undefined') return;
+    const medicoFormEl = document.getElementById('medicoForm');
+    if (!medicoFormEl || medicoFormEl.dataset?.autofillShieldWired === '1') return;
+    if (medicoFormEl.dataset) medicoFormEl.dataset.autofillShieldWired = '1';
+
+    const unlockField = (field) => {
+        if (!field) return;
+        field.readOnly = false;
+        if (typeof field.removeAttribute === 'function') {
+            field.removeAttribute('readonly');
+        }
+    };
+
+    if (typeof medicoFormEl.querySelectorAll === 'function') {
+        medicoFormEl.querySelectorAll('[data-no-autofill="true"]').forEach((field) => {
+            if (!field || typeof field.addEventListener !== 'function') return;
+            ['focus', 'pointerdown', 'keydown'].forEach((evtName) => {
+                field.addEventListener(evtName, () => unlockField(field));
+            });
+            field.addEventListener('input', () => {
+                field.dataset.userEdited = 'true';
+            });
+        });
+    }
+
+    if (typeof medicoFormEl.addEventListener === 'function') {
+        medicoFormEl.addEventListener('reset', () => {
+            setTimeout(() => resetMedicoAutofillShield({ forceClear: true }), 0);
+        });
+    }
+}
+
 function cargarMedicos() {
+    resetMedicoAutofillShield({ forceClear: false });
     const container = document.getElementById('medicosList');
     if (!container || !currentUser || currentUser.rol !== 'admin') return;
 
@@ -13182,6 +13542,12 @@ function initPasswordToggles() {
 
         setPasswordVisibilityState(input, btn, false);
         btn.addEventListener('click', () => {
+            if (input.hasAttribute && input.hasAttribute('data-no-autofill')) {
+                input.readOnly = false;
+                if (typeof input.removeAttribute === 'function') {
+                    input.removeAttribute('readonly');
+                }
+            }
             const willShow = input.type === 'password';
             setPasswordVisibilityState(input, btn, willShow);
             input.focus();
@@ -13468,6 +13834,8 @@ function initAuthHandlers() {
         });
     }
 
+    initMedicoAutofillShield();
+
     let lastSavedMedicoSignature = '';
     bindLockedFormSubmit({
         formId: 'medicoForm',
@@ -13508,6 +13876,7 @@ function initAuthHandlers() {
             setInlineBanner('medicoStatusBanner', 'ok', data.message);
             showToast('ok', data.message);
             form.reset();
+            resetMedicoAutofillShield({ forceClear: true });
             resetPasswordToggles();
             cargarMedicos();
         }
@@ -14327,125 +14696,6 @@ function initSettingsHandlers() {
                     showToast('err', diag.message || 'Gemini test failed.');
                 }
             }, { loadingText: 'Testing Gemini...' });
-        });
-    }
-
-    const btnRotateTransport = document.getElementById('btnTransportRotateKey');
-    if (btnRotateTransport) {
-        btnRotateTransport.addEventListener('click', () => {
-            if (!clientTransportTunnel || !rawBrowserFetch) {
-                showToast('err', 'Encrypted transport tunnel is unavailable.');
-                return;
-            }
-            runWithButtonLock(btnRotateTransport, async () => {
-                clientTransportTunnel.resetSession();
-                await clientTransportTunnel.establishSession(rawBrowserFetch, true);
-                updateTransportStatusBadges();
-                const diag = clientTransportTunnel.getDiagnostics();
-                showToast('ok', tUi('Private session key renewed cleanly.', 'Llave de sesión privada renovada correctamente.'));
-            }, { loadingText: tUi('Renewing...', 'Renovando...') });
-        });
-    }
-
-    const btnInspectWire = document.getElementById('btnTransportInspectPacket');
-    const transportResultBox = document.getElementById('transportBenchmarkResult');
-    if (btnInspectWire && transportResultBox) {
-        btnInspectWire.addEventListener('click', () => {
-            transportResultBox.hidden = false;
-            transportResultBox.replaceChildren();
-            const heading = document.createElement('strong');
-            heading.textContent = tUi(
-                '🔍 Encrypted Transmission Verification (Everything travels protected):',
-                '🔍 Verificación de Transmisión Cifrada (Tu información viaja protegida):'
-            );
-            transportResultBox.appendChild(heading);
-
-            if (!lastCapturedWirePacket) {
-                const p = document.createElement('p');
-                p.className = 'muted-text';
-                p.textContent = tUi(
-                    'No encrypted packet captured yet — save any form or run a speed check first.',
-                    'Aún no se captura actividad reciente — guarda cualquier formulario o ejecuta la prueba de velocidad.'
-                );
-                transportResultBox.appendChild(p);
-                return;
-            }
-
-            const meta = document.createElement('p');
-            meta.className = 'muted-text';
-            meta.textContent = `${lastCapturedWirePacket.direction} · ${lastCapturedWirePacket.capturedAt}`;
-            const pre = document.createElement('pre');
-            pre.className = 'transport-wire-preview';
-            pre.textContent = JSON.stringify(lastCapturedWirePacket.wireEnvelope, null, 2);
-            transportResultBox.append(meta, pre);
-        });
-    }
-
-    const btnBenchTransport = document.getElementById('btnTransportBenchmark');
-    if (btnBenchTransport && transportResultBox) {
-        btnBenchTransport.addEventListener('click', () => {
-            if (!clientTransportTunnel) {
-                showToast('err', 'Encrypted session is inactive.');
-                return;
-            }
-            runWithButtonLock(btnBenchTransport, async () => {
-                try {
-                    const sizesKb = [1, 64, 192];
-                    const results = [];
-                    for (const kb of sizesKb) {
-                        const targetBytes = kb * 1024;
-                        const samplePayload = 'STUDY-PRIVACY-CHECK-'.repeat(Math.ceil(targetBytes / 20)).slice(0, targetBytes);
-                        const tStart = performance.now();
-                        const res = await fetch('/api/transport/benchmark', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ samplePayload, echo: false })
-                        });
-                        if (!res.ok) throw new Error(await res.text() || 'Benchmark failed');
-                        const data = await res.json();
-                        const rttMs = Number((performance.now() - tStart).toFixed(2));
-                        const diag = clientTransportTunnel.getDiagnostics();
-                        results.push({
-                            kb,
-                            payloadBytes: data.payloadBytes,
-                            rttMs,
-                            clientEncryptMs: diag.metrics.lastEncryptMs,
-                            serverDecryptMs: data.serverDecryptMs,
-                            sha256Prefix: data.sha256Prefix,
-                            encryptedIn: data.encryptedIn
-                        });
-                    }
-                    updateTransportStatusBadges();
-
-                    transportResultBox.hidden = false;
-                    transportResultBox.replaceChildren();
-                    const title = document.createElement('strong');
-                    title.textContent = tUi(
-                        '⚡ Privacy Speed Verification Results:',
-                        '⚡ Resultados de Velocidad de Protección:'
-                    );
-                    transportResultBox.appendChild(title);
-
-                    const explain = document.createElement('p');
-                    explain.className = 'muted-text';
-                    explain.textContent = tUi(
-                        'Verified end-to-end encryption latency across small and large notes.',
-                        'Se verificó la velocidad de cifrado de extremo a extremo para notas cortas y extensas.'
-                    );
-                    transportResultBox.appendChild(explain);
-
-                    results.forEach(r => {
-                        const line = document.createElement('div');
-                        const throughputMBs = r.clientEncryptMs > 0
-                            ? ((r.payloadBytes / (1024 * 1024)) / (r.clientEncryptMs / 1000)).toFixed(2)
-                            : '∞';
-                        line.textContent = `• ${r.kb} KB: Verified=${r.encryptedIn} | ${r.clientEncryptMs} ms (~${throughputMBs} MB/s) | RTT=${r.rttMs} ms`;
-                        transportResultBox.appendChild(line);
-                    });
-                } catch (err) {
-                    showToast('err', err.message || 'Benchmark error.');
-                }
-            }, { loadingText: 'Benchmarking...' });
         });
     }
 
@@ -17689,41 +17939,6 @@ function initAcademicPlannerHandlers() {
                     showToast('err', err.message);
                 }
             }, { loadingText: tUi('Saving...', 'Guardando...') });
-        });
-    }
-
-    const btnSyncWeek = document.getElementById('btnSyncScheduleToAgenda');
-    if (btnSyncWeek) {
-        btnSyncWeek.addEventListener('click', () => {
-            const payload = collectPlannerStateFromDOM();
-            runWithButtonLock(btnSyncWeek, async () => {
-                try {
-                    if (payload) {
-                        await submitMutationRequest({
-                            url: '/api/planner',
-                            method: 'PUT',
-                            scopeKey: 'planner-save-before-sync',
-                            signature: JSON.stringify(payload),
-                            buildBody: () => payload,
-                            parseJson: true
-                        });
-                    }
-                    const syncRes = await submitMutationRequest({
-                        url: '/api/planner/sync-agenda',
-                        method: 'POST',
-                        scopeKey: 'planner-sync-agenda',
-                        signature: String(Date.now()),
-                        buildBody: () => ({ weekStartDate: getMonday(new Date()) ? formatLocalDate(getMonday(new Date())) : formatLocalDate(new Date()) }),
-                        parseJson: true
-                    });
-                    const syncMsg = tServer(syncRes.message) || tUi('Synced classes, Residencias & work to Weekly Agenda!', '¡Clases, Residencias y trabajo sincronizados con tu Agenda Semanal!');
-                    setPlannerBanner('ok', syncMsg);
-                    showToast('ok', syncMsg);
-                } catch (err) {
-                    setPlannerBanner('err', `${tUi('Failed to sync to Agenda', 'Error al sincronizar a la Agenda')}: ${tServer(err.message)}`);
-                    showToast('err', err.message);
-                }
-            }, { loadingText: tUi('Syncing...', 'Sincronizando...') });
         });
     }
 }
