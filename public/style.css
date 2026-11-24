@@ -502,6 +502,9 @@ body {
     display: flex;
     min-height: 100dvh;
     width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
 }
 
 .mobile-topbar {
@@ -773,6 +776,9 @@ body {
     margin-left: var(--sidebar-width);
     padding: 28px 26px 44px;
     min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
     transition: margin-left 0.25s ease;
 }
 
@@ -1173,6 +1179,11 @@ label {
     font-weight: 600;
     font-size: 0.92rem;
     color: var(--text-main);
+}
+
+input[type="time"] {
+    min-width: 152px;
+    max-width: 100%;
 }
 
 input[type="date"],
@@ -4074,6 +4085,8 @@ body.modal-scroll-locked {
     border-radius: 10px;
     border: 1px solid #e2e8f0;
     background: #f8fafc;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
 .rule-row-split {
@@ -4082,11 +4095,23 @@ body.modal-scroll-locked {
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
+    min-width: 0;
 }
 
-.rule-row-split input[type="time"] {
-    width: auto;
-    min-width: 118px;
+.rule-row-split > .switch-row {
+    flex: 1 1 220px;
+    min-width: 0;
+}
+
+.rule-row-split input[type="time"],
+.sleep-rule-field input[type="time"],
+.settings-sleep-subrules input[type="time"] {
+    width: clamp(158px, 34%, 192px);
+    min-width: 158px;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    flex-shrink: 0;
 }
 
 .rule-sub-controls {
@@ -4115,13 +4140,16 @@ body.modal-scroll-locked {
     margin: 0;
     font-size: 0.84rem;
     font-weight: 600;
+    min-width: 0;
+    flex-wrap: wrap;
 }
 
-.sleep-rule-field input[type="time"],
 .sleep-rule-field input[type="number"] {
     width: auto;
-    min-width: 96px;
-    max-width: 120px;
+    min-width: 104px;
+    max-width: 144px;
+    box-sizing: border-box;
+    padding: 9px 12px;
 }
 
 .mini-check {
@@ -6826,21 +6854,24 @@ body {
         text-align: center;
     }
 
-    .english-tabs {
-        display: flex;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+    .english-tabs,
+    .planner-tabs {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
         padding-bottom: 4px;
     }
 
     .english-tab-btn {
-        flex: 0 0 auto;
-        white-space: nowrap;
+        flex: 1 1 auto;
+        white-space: normal;
+        overflow-wrap: anywhere;
         min-height: 40px;
-        font-size: 0.82rem;
-        padding: 9px 12px;
+        height: auto;
+        font-size: 0.8rem;
+        line-height: 1.28;
+        padding: 9px 10px;
+        text-align: center;
     }
 
     .modal-overlay {
@@ -11056,4 +11087,215 @@ input[type="password"] {
     background: rgba(37, 99, 235, 0.2);
     color: #93c5fd;
     border-color: rgba(96, 165, 250, 0.35);
+}
+
+/* =========================================================================
+   SECRET INPUT MASKING (NON-LOGIN FIELDS WITHOUT PASSWORD-MANAGER POPUP)
+   ========================================================================= */
+.secret-input-masked {
+    -webkit-text-security: disc;
+    text-security: disc;
+    font-family: inherit;
+    letter-spacing: 0.04em;
+}
+
+.secret-input-masked::placeholder {
+    -webkit-text-security: none;
+    text-security: none;
+    letter-spacing: normal;
+}
+
+.secret-input-masked.is-secret-revealed {
+    -webkit-text-security: none;
+    text-security: none;
+    letter-spacing: normal;
+}
+
+.settings-inline-actions .secret-inline-wrap {
+    flex: 1 1 250px;
+    min-width: 0;
+}
+
+/* =========================================================================
+   REUSABLE RESPONSIVE ICON COMPACTION & GLOBAL ANTI-CLIPPING OVERHAUL
+   ========================================================================= */
+.icon-only-mobile,
+.btn-icon-mobile-compact {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.btn-icon-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.btn-responsive-text {
+    display: inline;
+}
+
+.form-row-2 > *,
+.form-row-3 > *,
+.english-row-2 > *,
+.view-grid-2 > *,
+.settings-grid > *,
+.view-header-card,
+.view-header-main,
+.view-header-main > *,
+.settings-card,
+.its-croquis-card,
+.planner-course-meta {
+    min-width: 0;
+}
+
+.view-header-card h1,
+.view-header-card h2,
+.view-header-subtitle,
+.reminder-rule-block label,
+.switch-row span,
+.form-group > label,
+.sleep-mode-pill,
+.crisis-pill,
+.crisis-int-pill,
+.resumen-visual-day-pill {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.settings-inline-actions,
+.view-header-actions,
+.agenda-toolbar,
+.agenda-week-nav,
+.agenda-view-controls,
+.resumen-calendar-toolbar,
+.crisis-type-pills,
+.sleep-mode-pills {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+    .main-content {
+        padding: 72px 12px 28px;
+    }
+
+    .view-shell,
+    .tracker-container.view-shell,
+    .settings-container.view-shell {
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    .english-row-2 {
+        grid-template-columns: 1fr;
+    }
+
+    .rule-row-split,
+    .sleep-rules-sub-grid,
+    .sleep-rule-field,
+    .mini-select-wrap {
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+        min-width: 0;
+        gap: 8px;
+        padding-left: 0;
+    }
+
+    .rule-row-split > .switch-row,
+    .sleep-rule-field > span {
+        flex: 0 0 auto;
+        width: 100%;
+        min-width: 0;
+    }
+
+    .rule-sub-controls {
+        padding-left: 0;
+        gap: 10px;
+    }
+
+    .rule-row-split input[type="time"],
+    .sleep-rule-field input[type="time"],
+    .sleep-rule-field input[type="number"],
+    .settings-sleep-subrules input[type="time"],
+    .mini-select-wrap select {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        font-size: 16px;
+        box-sizing: border-box;
+    }
+
+    input[type="time"],
+    input[type="date"],
+    input[type="number"],
+    input[type="text"]:not(#sleepHours),
+    input[type="email"],
+    input[type="password"],
+    input[type="url"],
+    input[type="search"],
+    select,
+    .select-input,
+    textarea {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        font-size: 16px;
+        box-sizing: border-box;
+    }
+
+    .settings-inline-actions .secret-inline-wrap {
+        width: 100%;
+        flex: 1 1 100%;
+    }
+
+    .settings-inline-actions .secret-inline-wrap input[type="text"] {
+        padding-right: 44px;
+    }
+
+    .agenda-week-label {
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+
+    .crisis-pill,
+    .sleep-mode-pill {
+        min-width: 0;
+        max-width: 100%;
+    }
+}
+
+@media (max-width: 520px) {
+    .icon-only-mobile .btn-responsive-text,
+    .btn-icon-mobile-compact .btn-responsive-text {
+        display: none;
+    }
+
+    .icon-only-mobile,
+    .btn-icon-mobile-compact {
+        min-width: 38px;
+        min-height: 38px;
+        padding: 8px 10px;
+        gap: 0;
+        flex: 0 0 auto;
+        width: auto;
+    }
+
+    .view-header-actions > .icon-only-mobile,
+    .settings-header-actions > .icon-only-mobile {
+        flex: 0 0 auto;
+        width: auto;
+    }
+
+    .mobile-topbar .icon-only-mobile {
+        min-width: 38px;
+        min-height: 36px;
+        padding: 6px 9px;
+    }
 }
