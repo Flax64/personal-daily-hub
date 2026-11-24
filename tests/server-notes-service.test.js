@@ -53,6 +53,94 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
         assert.strictEqual(serverNotes.decryptClientE2ee('cipher-1', key32).reason, 'NOT_E2EE_ENVELOPE');
     });
 
+    it('cifra y autentica sobres Journal pdh-j2 con salt aleatorio, PBKDF2-HMAC-SHA256, Encrypt-then-MAC e interoperabilidad CryptoJS', () => {
+        const CryptoJS = require('../public/vendor/crypto-js.min.js');
+        const key32 = '1234567890abcdef1234567890abcdef';
+        const wrongKey32 = 'ffffffffffffffffffffffffffffffff';
+        const sample = 'Entrada íntima del diario 🦉\nCafé, 日本語, 사랑해 — Fin.';
+
+        // 1. Mismo texto cifrado dos veces produce salt, IV, MAC y ciphertext distintos y ambos descifran bien
+        const env1 = serverNotes.encryptJournalSaltedE2ee(sample, key32);
+        const env2 = serverNotes.encryptJournalSaltedE2ee(sample, key32);
+        assert.notStrictEqual(env1, env2);
+
+        const parts1 = env1.split(':');
+        const parts2 = env2.split(':');
+        assert.strictEqual(parts1.length, 6);
+        assert.strictEqual(parts1[0], 'pdh-j2');
+        assert.strictEqual(parts1[1], '120000');
+        assert.notStrictEqual(parts1[2], parts2[2], 'Salt único de 16 bytes debe cambiar en cada envío');
+        assert.notStrictEqual(parts1[3], parts2[3], 'IV único de 16 bytes debe cambiar en cada envío');
+        assert.notStrictEqual(parts1[4], parts2[4], 'MAC HMAC-SHA256 debe cambiar en cada envío');
+        assert.notStrictEqual(parts1[5], parts2[5], 'Ciphertext debe cambiar en cada envío');
+        assert.strictEqual(serverNotes.isValidJournalSaltedEnvelope(env1), true);
+        assert.strictEqual(serverNotes.isValidE2eeEnvelope(env1), true);
+
+        const dec1 = serverNotes.decryptJournalSaltedE2ee(env1, key32);
+        const dec2 = serverNotes.decryptClientE2ee(env2, key32);
+        assert.strictEqual(dec1.ok, true);
+        assert.strictEqual(dec1.plainText, sample);
+        assert.strictEqual(dec2.ok, true);
+        assert.strictEqual(dec2.plainText, sample);
+
+        // 2. Rechazo con llave equivocada
+        const wrongRes = serverNotes.decryptJournalSaltedE2ee(env1, wrongKey32);
+        assert.strictEqual(wrongRes.ok, false);
+        assert.strictEqual(wrongRes.reason, 'MAC_MISMATCH');
+
+        // 3. Rechazo ante manipulación de 1 carácter en salt, IV, MAC o ciphertext
+        const flipChar = (s, pos = 0) => {
+            const ch = s[pos];
+            const repl = ch === 'a' ? 'b' : (ch === 'A' ? 'B' : (ch === '0' ? '1' : '0'));
+            return s.slice(0, pos) + repl + s.slice(pos + 1);
+        };
+        const tamperedSalt = [parts1[0], parts1[1], flipChar(parts1[2], 4), parts1[3], parts1[4], parts1[5]].join(':');
+        const tamperedIv = [parts1[0], parts1[1], parts1[2], flipChar(parts1[3], 4), parts1[4], parts1[5]].join(':');
+        const tamperedMac = [parts1[0], parts1[1], parts1[2], parts1[3], flipChar(parts1[4], 4), parts1[5]].join(':');
+        const tamperedCt = [parts1[0], parts1[1], parts1[2], parts1[3], parts1[4], flipChar(parts1[5], 2)].join(':');
+        for (const tampered of [tamperedSalt, tamperedIv, tamperedMac, tamperedCt]) {
+            const res = serverNotes.decryptJournalSaltedE2ee(tampered, key32);
+            assert.strictEqual(res.ok, false, `Sobre manipulado debe rechazarse: ${tampered.slice(0, 40)}`);
+        }
+
+        // 4. Rechazo si las iteraciones están fuera del rango permitido (< 100000 o > 600000)
+        const lowIterEnv = serverNotes.encryptJournalSaltedE2ee(sample, key32, { iterations: 99999 });
+        const highIterEnv = serverNotes.encryptJournalSaltedE2ee(sample, key32, { iterations: 600001 });
+        assert.strictEqual(serverNotes.isValidJournalSaltedEnvelope(lowIterEnv), false);
+        assert.strictEqual(serverNotes.isValidJournalSaltedEnvelope(highIterEnv), false);
+        assert.strictEqual(serverNotes.decryptJournalSaltedE2ee(lowIterEnv, key32).ok, false);
+        assert.strictEqual(serverNotes.decryptJournalSaltedE2ee(lowIterEnv, key32).reason, 'INVALID_ITERATIONS');
+        assert.strictEqual(serverNotes.decryptJournalSaltedE2ee(highIterEnv, key32).ok, false);
+        assert.strictEqual(serverNotes.decryptJournalSaltedE2ee(highIterEnv, key32).reason, 'INVALID_ITERATIONS');
+
+        // 5. Interoperabilidad real con public/vendor/crypto-js.min.js (cifrar CryptoJS -> descifrar Node)
+        const saltWA = CryptoJS.lib.WordArray.random(16);
+        const ivWA = CryptoJS.lib.WordArray.random(16);
+        const derivedWA = CryptoJS.PBKDF2(CryptoJS.enc.Utf8.parse(key32), saltWA, {
+            keySize: 16,
+            iterations: 120000,
+            hasher: CryptoJS.algo.SHA256
+        });
+        const encKeyWA = CryptoJS.lib.WordArray.create(derivedWA.words.slice(0, 8), 32);
+        const macKeyWA = CryptoJS.lib.WordArray.create(derivedWA.words.slice(8, 16), 32);
+        const cipherB64 = CryptoJS.AES.encrypt(sample, encKeyWA, {
+            iv: ivWA,
+            mode: CryptoJS.mode.CBC,
+            padding: CryptoJS.pad.Pkcs7
+        }).toString();
+        const saltHex = saltWA.toString(CryptoJS.enc.Hex).toLowerCase();
+        const ivHex = ivWA.toString(CryptoJS.enc.Hex).toLowerCase();
+        const authPayload = `pdh-j2:120000:${saltHex}:${ivHex}:${cipherB64}`;
+        const macHex = CryptoJS.HmacSHA256(CryptoJS.enc.Utf8.parse(authPayload), macKeyWA)
+            .toString(CryptoJS.enc.Hex)
+            .toLowerCase();
+        const cjsEnvelope = `pdh-j2:120000:${saltHex}:${ivHex}:${macHex}:${cipherB64}`;
+
+        const decCjs = serverNotes.decryptJournalSaltedE2ee(cjsEnvelope, key32);
+        assert.strictEqual(decCjs.ok, true);
+        assert.strictEqual(decCjs.plainText, sample);
+    });
+
     it('resuelve rutas de Journal local y Cuaderno de Idiomas ignorando rutas Windows en Linux y aislando Diario', () => {
         const linuxJournal = serverNotes.resolveLocalJournalPath({
             env: { WORD_FILE_PATH: 'C:\\Users\\flavi\\Desktop\\Diario.docx' },
