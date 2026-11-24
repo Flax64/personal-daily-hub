@@ -49,10 +49,10 @@ services:
       retries: 12
       start_period: 25s
 
-  app:
+  app_blue:
     build: .
-    image: personal-daily-hub-app:latest
-    container_name: mood_app
+    image: personal-daily-hub-app:${BLUE_IMAGE_TAG:-blue}
+    container_name: mood_app_blue
     restart: always
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     mem_limit: 1024m
@@ -66,8 +66,8 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=128m
       - /dev/shm:rw,noexec,nosuid,nodev,size=64m
     ports:
-      # Enlazado solo a loopback; exponer remotamente únicamente mediante Tailscale Serve o Caddy
-      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+      # Enlazado solo a loopback para smoke tests previos al corte de tráfico en Caddy (nunca 0.0.0.0)
+      - "127.0.0.1:${BLUE_PORT:-3001}:${PORT:-3000}"
     volumes:
       # Journal personal cifrado con contraseña (100% local, nunca en Drive ni Git)
       - ./data/journal:/app/journal-data
@@ -77,13 +77,17 @@ services:
       - ./data/ytdlp:/app/ytdlp-config:ro
       # Logs persistentes rotativos del servidor (excluidos de Git en .gitignore)
       - ./logs:/app/logs
+      # Estado atómico del slot activo Blue-Green (solo lectura para que schedulers decidan cuál slot está activo)
+      - ./data/deploy-state:/app/deploy-state:ro
     logging:
       driver: "json-file"
       options:
         max-size: "25m"
         max-file: "5"
     environment:
-      - REPLICA_ID=app
+      - REPLICA_ID=blue
+      - APP_SLOT=blue
+      - APP_SLOT_STATE_FILE=/app/deploy-state/active-slot
       - DISABLE_REMINDER_SCHEDULER=${DISABLE_REMINDER_SCHEDULER:-false}
       - DISABLE_CLEANUP_SCHEDULER=${DISABLE_CLEANUP_SCHEDULER:-false}
       - DB_HOST=${DB_HOST:-db}
@@ -93,7 +97,7 @@ services:
       - PORT=${PORT:-3000}
       - APP_VERSION=${APP_VERSION:-}
       - TZ=${TZ:-America/Monterrey}
-      - LOG_DIR=${LOG_DIR:-/app/logs}
+      - LOG_DIR=${LOG_DIR:-/app/logs}/blue
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_MAX_BYTES=${LOG_MAX_BYTES:-20971520}
       - LOG_MAX_FILES=${LOG_MAX_FILES:-10}
@@ -134,9 +138,9 @@ services:
       db:
         condition: service_healthy
 
-  app2:
-    image: personal-daily-hub-app:latest
-    container_name: mood_app2
+  app_green:
+    image: personal-daily-hub-app:${GREEN_IMAGE_TAG:-green}
+    container_name: mood_app_green
     restart: always
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     mem_limit: 1024m
@@ -149,20 +153,26 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=128m
       - /dev/shm:rw,noexec,nosuid,nodev,size=64m
+    ports:
+      # Enlazado solo a loopback para smoke tests previos al corte de tráfico en Caddy (nunca 0.0.0.0)
+      - "127.0.0.1:${GREEN_PORT:-3002}:${PORT:-3000}"
     volumes:
       - ./data/journal:/app/journal-data
       - ./english-notes:/app/english-notes
       - ./data/ytdlp:/app/ytdlp-config:ro
       - ./logs:/app/logs
+      - ./data/deploy-state:/app/deploy-state:ro
     logging:
       driver: "json-file"
       options:
         max-size: "25m"
         max-file: "5"
     environment:
-      - REPLICA_ID=app2
-      - DISABLE_REMINDER_SCHEDULER=true
-      - DISABLE_CLEANUP_SCHEDULER=true
+      - REPLICA_ID=green
+      - APP_SLOT=green
+      - APP_SLOT_STATE_FILE=/app/deploy-state/active-slot
+      - DISABLE_REMINDER_SCHEDULER=${DISABLE_REMINDER_SCHEDULER:-false}
+      - DISABLE_CLEANUP_SCHEDULER=${DISABLE_CLEANUP_SCHEDULER:-false}
       - DB_HOST=${DB_HOST:-db}
       - DB_USER=${DB_USER}
       - DB_PASS=${DB_PASS}
@@ -170,7 +180,7 @@ services:
       - PORT=${PORT:-3000}
       - APP_VERSION=${APP_VERSION:-}
       - TZ=${TZ:-America/Monterrey}
-      - LOG_DIR=${LOG_DIR:-/app/logs}/app2
+      - LOG_DIR=${LOG_DIR:-/app/logs}/green
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_MAX_BYTES=${LOG_MAX_BYTES:-20971520}
       - LOG_MAX_FILES=${LOG_MAX_FILES:-10}
@@ -233,6 +243,7 @@ services:
       - PORT=${PORT:-3000}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/deploy-state:/etc/caddy/state:ro
       - caddy_data:/data
       - caddy_config:/config
     logging:
@@ -246,11 +257,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-    depends_on:
-      app:
-        condition: service_healthy
-      app2:
-        condition: service_healthy
 
 volumes:
   db_data:

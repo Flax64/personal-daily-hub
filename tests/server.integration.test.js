@@ -5278,7 +5278,11 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
 
             const healthRes = await request({ port, reqPath: '/healthz' });
             assert.strictEqual(healthRes.status, 200);
-            assert.deepStrictEqual(JSON.parse(healthRes.body), { ok: true });
+            const healthBody = JSON.parse(healthRes.body);
+            assert.strictEqual(healthBody.ok, true);
+            assert.ok(String(healthBody.slot || '').trim().length > 0);
+            assert.ok(String(healthBody.replicaId || '').trim().length > 0);
+            assert.ok(String(healthBody.version || '').trim().length > 0);
 
             // 2. API por HTTP plano sin TLS devuelve 426 Upgrade Required
             const plainApi = await request({ port, reqPath: '/api/auth/me' });
@@ -5707,8 +5711,13 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
 
         const healthRes = await request({ port, reqPath: '/healthz' });
         assert.strictEqual(healthRes.status, 200);
-        assert.deepStrictEqual(JSON.parse(healthRes.body), { ok: true });
+        const healthBody = JSON.parse(healthRes.body);
+        assert.strictEqual(healthBody.ok, true);
+        assert.ok(String(healthBody.slot || '').trim().length > 0, '/healthz debe incluir slot');
+        assert.ok(String(healthBody.replicaId || '').trim().length > 0, '/healthz debe incluir replicaId');
+        assert.ok(String(healthBody.version || '').trim().length > 0, '/healthz debe incluir version');
         assert.ok(String(healthRes.headers['x-replica-id'] || '').trim().length > 0, '/healthz debe incluir header X-Replica-Id');
+        assert.ok(String(healthRes.headers['x-app-version'] || '').trim().length > 0, '/healthz debe incluir header X-App-Version');
 
         const logsRes = await request({
             port,

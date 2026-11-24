@@ -27,20 +27,45 @@ fail() {
 }
 
 PORT="${PORT:-3000}"
+BLUE_PORT="${BLUE_PORT:-3001}"
+GREEN_PORT="${GREEN_PORT:-3002}"
 PROXY_HTTP_PORT="${PROXY_HTTP_PORT:-8080}"
 EXPECTED_TZ="${TZ:-America/Monterrey}"
 if [ -f "$PROJECT_DIR/.env" ]; then
     ENV_PORT="$(grep -E '^PORT=' "$PROJECT_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '"\r ' || true)"
+    ENV_BLUE_PORT="$(grep -E '^BLUE_PORT=' "$PROJECT_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '"\r ' || true)"
+    ENV_GREEN_PORT="$(grep -E '^GREEN_PORT=' "$PROJECT_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '"\r ' || true)"
     ENV_PROXY_PORT="$(grep -E '^PROXY_HTTP_PORT=' "$PROJECT_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '"\r ' || true)"
     ENV_TZ="$(grep -E '^TZ=' "$PROJECT_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '"\r ' || true)"
     [ -n "$ENV_PORT" ] && PORT="$ENV_PORT"
+    [ -n "$ENV_BLUE_PORT" ] && BLUE_PORT="$ENV_BLUE_PORT"
+    [ -n "$ENV_GREEN_PORT" ] && GREEN_PORT="$ENV_GREEN_PORT"
     [ -n "$ENV_PROXY_PORT" ] && PROXY_HTTP_PORT="$ENV_PROXY_PORT"
     [ -n "$ENV_TZ" ] && EXPECTED_TZ="$ENV_TZ"
 fi
 
+STATE_FILE="$PROJECT_DIR/data/deploy-state/active-slot"
+ACTIVE_SLOT="blue"
+if [ -r "$STATE_FILE" ]; then
+    RAW_SLOT="$(tr -d ' \t\r\n' < "$STATE_FILE" 2>/dev/null || true)"
+    if [ "$RAW_SLOT" = "blue" ] || [ "$RAW_SLOT" = "green" ]; then
+        ACTIVE_SLOT="$RAW_SLOT"
+    fi
+fi
+if [ "$ACTIVE_SLOT" = "blue" ]; then
+    STANDBY_SLOT="green"
+    ACTIVE_PORT="$BLUE_PORT"
+else
+    STANDBY_SLOT="blue"
+    ACTIVE_PORT="$GREEN_PORT"
+fi
+ACTIVE_CONTAINER="mood_app_${ACTIVE_SLOT}"
+STANDBY_CONTAINER="mood_app_${STANDBY_SLOT}"
+
 echo "======================================================================"
-echo " Verificación Local Ubuntu Server + Tailscale (8 GB RAM / i7 / ~500 GB HDD)"
+echo " Verificación Local Ubuntu Server + Tailscale (8 GB RAM / Blue-Green)"
 echo "======================================================================"
+echo "Slot activo: ${ACTIVE_SLOT} (${ACTIVE_CONTAINER} @ 127.0.0.1:${ACTIVE_PORT}) | Standby: ${STANDBY_SLOT} (${STANDBY_CONTAINER})"
 
 # 1. Hardware y sistema operativo
 echo ""
@@ -95,9 +120,9 @@ if [ -r /proc/sys/vm/swappiness ]; then
     fi
 fi
 
-# 2. Docker & Compose
+# 2. Docker & Compose (Blue-Green)
 echo ""
-echo "--- [2/10] Docker, Contenedores y Tuning MySQL HDD ---"
+echo "--- [2/10] Docker, Contenedores Blue-Green y Tuning MySQL HDD ---"
 DOCKER_CMD="docker"
 if ! docker info >/dev/null 2>&1; then
     if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
@@ -113,7 +138,7 @@ else
     fail "Docker Compose v2 ('docker compose') no está disponible."
 fi
 
-for cname in mood_db mood_app mood_app2 mood_proxy; do
+for cname in mood_db "$ACTIVE_CONTAINER" mood_proxy; do
     STATE="$($DOCKER_CMD inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cname" 2>/dev/null || echo 'missing|none')"
     if [ "$STATE" = "running|healthy" ]; then
         pass "Contenedor $cname en estado running (healthy)."
@@ -124,13 +149,20 @@ for cname in mood_db mood_app mood_app2 mood_proxy; do
     fi
 done
 
-$DOCKER_CMD stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' mood_db mood_app mood_app2 mood_proxy 2>/dev/null || true
-
-APP_UID_OUT="$($DOCKER_CMD exec mood_app id -u 2>/dev/null || echo '')"
-if [ -n "$APP_UID_OUT" ] && [ "$APP_UID_OUT" != "0" ]; then
-    pass "mood_app ejecuta como usuario no-root (UID=$APP_UID_OUT)."
+STANDBY_STATE="$($DOCKER_CMD inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$STANDBY_CONTAINER" 2>/dev/null || echo 'missing|none')"
+if [ "$STANDBY_STATE" = "running|healthy" ]; then
+    pass "Slot standby $STANDBY_CONTAINER en warm standby running (healthy) para rollback instantáneo."
 else
-    warn "mood_app no ejecuta como no-root (UID=${APP_UID_OUT:-desconocido}); los archivos creados podrían quedar como root."
+    warn "Slot standby $STANDBY_CONTAINER en estado '$STANDBY_STATE' (esperado tras el segundo deploy Blue-Green)."
+fi
+
+$DOCKER_CMD stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' mood_db mood_app_blue mood_app_green mood_proxy 2>/dev/null || true
+
+APP_UID_OUT="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" id -u 2>/dev/null || echo '')"
+if [ -n "$APP_UID_OUT" ] && [ "$APP_UID_OUT" != "0" ]; then
+    pass "${ACTIVE_CONTAINER} ejecuta como usuario no-root (UID=$APP_UID_OUT)."
+else
+    warn "${ACTIVE_CONTAINER} no ejecuta como no-root (UID=${APP_UID_OUT:-desconocido}); los archivos creados podrían quedar como root."
 fi
 
 MYSQL_TUNING="$($DOCKER_CMD exec mood_db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -N -s -u root -e "SHOW VARIABLES WHERE Variable_name IN (\"innodb_buffer_pool_size\",\"innodb_flush_log_at_trx_commit\",\"innodb_flush_method\");"' 2>/dev/null || true)"
@@ -144,16 +176,18 @@ fi
 
 # 3. Red, Loopback, UFW y Tailscale
 echo ""
-echo "--- [3/10] Seguridad de Red, Loopback, UFW y Tailscale ---"
+echo "--- [3/10] Seguridad de Red, Loopback (3001/3002/3306), UFW y Tailscale ---"
 if command -v ss >/dev/null 2>&1; then
     LISTEN_OUT="$(ss -lntp 2>/dev/null || ss -lnt 2>/dev/null || true)"
-    if printf '%s\n' "$LISTEN_OUT" | grep -qE "(0\.0\.0\.0|\*|\[::\]):${PORT}\b"; then
-        fail "El puerto ${PORT} está expuesto en 0.0.0.0/* (bypassea UFW); debe quedar solo en 127.0.0.1:${PORT}."
-    elif printf '%s\n' "$LISTEN_OUT" | grep -qE "127\.0\.0\.1:${PORT}\b"; then
-        pass "Puerto ${PORT} enlazado exclusivamente a 127.0.0.1:${PORT}."
-    else
-        warn "No se detectó socket escuchando en 127.0.0.1:${PORT}."
-    fi
+    for chk_port in "$BLUE_PORT" "$GREEN_PORT" "$PROXY_HTTP_PORT"; do
+        if printf '%s\n' "$LISTEN_OUT" | grep -qE "(0\.0\.0\.0|\*|\[::\]):${chk_port}\b"; then
+            fail "El puerto ${chk_port} está expuesto en 0.0.0.0/* (bypassea UFW); debe quedar solo en 127.0.0.1:${chk_port}."
+        elif printf '%s\n' "$LISTEN_OUT" | grep -qE "127\.0\.0\.1:${chk_port}\b"; then
+            pass "Puerto ${chk_port} enlazado exclusivamente a 127.0.0.1:${chk_port}."
+        elif [ "$chk_port" = "$ACTIVE_PORT" ] || [ "$chk_port" = "$PROXY_HTTP_PORT" ]; then
+            warn "No se detectó socket escuchando en 127.0.0.1:${chk_port}."
+        fi
+    done
 
     if printf '%s\n' "$LISTEN_OUT" | grep -qE "(0\.0\.0\.0|\*|\[::\]):3306\b"; then
         fail "El puerto MySQL 3306 está expuesto fuera de loopback."
@@ -179,10 +213,10 @@ if command -v tailscale >/dev/null 2>&1; then
     if tailscale status >/dev/null 2>&1; then
         pass "Tailscale conectado en este host."
         TS_SERVE="$(tailscale serve status 2>/dev/null || true)"
-        if [ -n "$TS_SERVE" ] && printf '%s\n' "$TS_SERVE" | grep -qE "(127\.0\.0\.1|localhost|):(${PORT}|${PROXY_HTTP_PORT})"; then
-            pass "Tailscale Serve apuntando hacia endpoint local (${PROXY_HTTP_PORT} / ${PORT})."
+        if [ -n "$TS_SERVE" ] && printf '%s\n' "$TS_SERVE" | grep -qE "(127\.0\.0\.1|localhost|):(${PROXY_HTTP_PORT}|${ACTIVE_PORT}|${PORT})"; then
+            pass "Tailscale Serve apuntando hacia endpoint local (${PROXY_HTTP_PORT})."
         else
-            warn "Tailscale Serve no muestra ruta activa hacia localhost:${PROXY_HTTP_PORT} ni ${PORT} (para balanceador usa: sudo tailscale serve --bg http://127.0.0.1:${PROXY_HTTP_PORT})."
+            warn "Tailscale Serve no muestra ruta activa hacia localhost:${PROXY_HTTP_PORT} (ejecuta: sudo tailscale serve --bg http://127.0.0.1:${PROXY_HTTP_PORT})."
         fi
     else
         warn "Tailscale instalado pero sin sesión activa o sin permisos."
@@ -191,27 +225,27 @@ else
     warn "CLI 'tailscale' no encontrado en PATH."
 fi
 
-# 4. Node.js y zona horaria (tzdata) dentro de mood_app
+# 4. Node.js y zona horaria (tzdata) dentro del contenedor activo
 echo ""
-echo "--- [4/10] Node.js y Zona Horaria (tzdata) en mood_app ---"
-NODE_TZ_OUT="$($DOCKER_CMD exec mood_app sh -c 'node -e "console.log(process.version + \"|\" + Intl.DateTimeFormat().resolvedOptions().timeZone)"' 2>/dev/null || true)"
-SYS_TZ_OUT="$($DOCKER_CMD exec mood_app date +%Z 2>/dev/null || true)"
+echo "--- [4/10] Node.js y Zona Horaria (tzdata) en ${ACTIVE_CONTAINER} ---"
+NODE_TZ_OUT="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" sh -c 'node -e "console.log(process.version + \"|\" + Intl.DateTimeFormat().resolvedOptions().timeZone)"' 2>/dev/null || true)"
+SYS_TZ_OUT="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" date +%Z 2>/dev/null || true)"
 if [ -n "$NODE_TZ_OUT" ]; then
-    echo "Node en contenedor: ${NODE_TZ_OUT} (date +%Z = ${SYS_TZ_OUT:-?})"
+    echo "Node en contenedor (${ACTIVE_CONTAINER}): ${NODE_TZ_OUT} (date +%Z = ${SYS_TZ_OUT:-?})"
     if [[ "$NODE_TZ_OUT" == *"|${EXPECTED_TZ}" ]] && [ "${SYS_TZ_OUT:-UTC}" != "UTC" -o "$EXPECTED_TZ" = "UTC" ]; then
         pass "Node.js + tzdata usan la zona horaria local esperada (${EXPECTED_TZ})."
     else
-        fail "Desfase horario en mood_app: obtenido '${NODE_TZ_OUT}' (date +%Z=${SYS_TZ_OUT:-?}), esperado '${EXPECTED_TZ}'."
+        fail "Desfase horario en ${ACTIVE_CONTAINER}: obtenido '${NODE_TZ_OUT}' (date +%Z=${SYS_TZ_OUT:-?}), esperado '${EXPECTED_TZ}'."
     fi
 else
-    fail "No se pudo consultar Node.js / zona horaria en mood_app."
+    fail "No se pudo consultar Node.js / zona horaria en ${ACTIVE_CONTAINER}."
 fi
 
-# 5. Python 3 + msoffcrypto + docx_writer.py dentro de mood_app
+# 5. Python 3 + msoffcrypto + docx_writer.py dentro del contenedor activo
 echo ""
-echo "--- [5/10] Python 3 + msoffcrypto-tool + docx_writer.py en mood_app ---"
+echo "--- [5/10] Python 3 + msoffcrypto-tool + docx_writer.py en ${ACTIVE_CONTAINER} ---"
 PY_RC=0
-PY_CHECK="$($DOCKER_CMD exec mood_app python3 -c 'import ast, io, msoffcrypto, platform, time, zipfile
+PY_CHECK="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" python3 -c 'import ast, io, msoffcrypto, platform, time, zipfile
 from msoffcrypto.format.ooxml import OOXMLFile
 with open("/app/lib/docx_writer.py", encoding="utf-8") as fh:
     ast.parse(fh.read())
@@ -236,56 +270,57 @@ print(platform.python_version(), "|", time.tzname)' 2>&1)" || PY_RC=$?
 if [ "$PY_RC" -eq 0 ] && [ -n "$PY_CHECK" ]; then
     pass "Python + AST(docx_writer.py) + OOXMLFile/OfficeFile cifrado/descifrado en RAM OK ($PY_CHECK)."
 else
-    fail "Falló la verificación Python / msoffcrypto OOXMLFile / docx_writer.py dentro de mood_app (rc=${PY_RC}): ${PY_CHECK:-sin salida}"
+    fail "Falló la verificación Python / msoffcrypto OOXMLFile / docx_writer.py dentro de ${ACTIVE_CONTAINER} (rc=${PY_RC}): ${PY_CHECK:-sin salida}"
 fi
 
-# 6. yt-dlp + ffmpeg + runtime JS dentro de mood_app
+# 6. yt-dlp + ffmpeg + runtime JS dentro del contenedor activo
 echo ""
-echo "--- [6/10] yt-dlp + ffmpeg + Runtime JS (Node) en mood_app ---"
-YTDLP_VER="$($DOCKER_CMD exec mood_app /usr/local/bin/yt-dlp --version 2>/dev/null || true)"
-FFMPEG_VER="$($DOCKER_CMD exec mood_app sh -c 'ffmpeg -version 2>/dev/null | head -n 1' || true)"
-NODE_BIN="$($DOCKER_CMD exec mood_app which node 2>/dev/null || true)"
+echo "--- [6/10] yt-dlp + ffmpeg + Runtime JS (Node) en ${ACTIVE_CONTAINER} ---"
+YTDLP_VER="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" /usr/local/bin/yt-dlp --version 2>/dev/null || true)"
+FFMPEG_VER="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" sh -c 'ffmpeg -version 2>/dev/null | head -n 1' || true)"
+NODE_BIN="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" which node 2>/dev/null || true)"
 if [ -n "$YTDLP_VER" ] && [ -n "$FFMPEG_VER" ] && [ -n "$NODE_BIN" ]; then
-    if $DOCKER_CMD exec mood_app /usr/local/bin/yt-dlp --js-runtimes node --version >/dev/null 2>&1; then
+    if $DOCKER_CMD exec "$ACTIVE_CONTAINER" /usr/local/bin/yt-dlp --js-runtimes node --version >/dev/null 2>&1; then
         pass "yt-dlp ($YTDLP_VER) + --js-runtimes node ($NODE_BIN) + ffmpeg operativos en local."
     else
         warn "yt-dlp ($YTDLP_VER) presente pero no aceptó --js-runtimes node; actualiza yt-dlp."
     fi
 else
-    fail "Falta alguno de yt-dlp ('$YTDLP_VER'), ffmpeg ('$FFMPEG_VER') o node ('$NODE_BIN') en mood_app."
+    fail "Falta alguno de yt-dlp ('$YTDLP_VER'), ffmpeg ('$FFMPEG_VER') o node ('$NODE_BIN') en ${ACTIVE_CONTAINER}."
 fi
 
-if $DOCKER_CMD exec mood_app test -s /app/ytdlp-config/cookies.txt 2>/dev/null; then
+if $DOCKER_CMD exec "$ACTIVE_CONTAINER" test -s /app/ytdlp-config/cookies.txt 2>/dev/null; then
     pass "Archivo opcional de cookies yt-dlp detectado (/app/ytdlp-config/cookies.txt)."
 else
     echo "Info: Sin cookies.txt montado en ./data/ytdlp (opcional salvo videos con restricción)."
 fi
 
-# 7. Assets 100% locales sin CDN, HTTPS/HSTS y CORS estricto
+# 7. Assets 100% locales sin CDN, Caddy Blue-Green, HTTPS/HSTS y CORS estricto
 echo ""
-echo "--- [7/10] Assets 100% Locales (sin CDN), HTTPS/HSTS y CORS Estricto ---"
+echo "--- [7/10] Assets 100% Locales (sin CDN), Caddy Blue-Green, HTTPS/HSTS y CORS Estricto ---"
 if command -v curl >/dev/null 2>&1; then
-    HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT}/healthz" 2>/dev/null || echo '000')"
+    HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${ACTIVE_PORT}/healthz" 2>/dev/null || echo '000')"
     if [ "$HEALTH_CODE" = "200" ]; then
-        pass "http://127.0.0.1:${PORT}/healthz responde HTTP 200."
+        pass "http://127.0.0.1:${ACTIVE_PORT}/healthz (${ACTIVE_CONTAINER}) responde HTTP 200."
     else
-        fail "http://127.0.0.1:${PORT}/healthz respondió HTTP ${HEALTH_CODE}."
+        fail "http://127.0.0.1:${ACTIVE_PORT}/healthz (${ACTIVE_CONTAINER}) respondió HTTP ${HEALTH_CODE}."
     fi
 
     PROXY_HEALTH_HDRS="$(curl -s -D - -o /dev/null -w '\n%{http_code}' --max-time 5 "http://127.0.0.1:${PROXY_HTTP_PORT}/healthz" 2>/dev/null || true)"
     PROXY_HEALTH_CODE="$(printf '%s\n' "$PROXY_HEALTH_HDRS" | tail -n 1)"
     if [ "$PROXY_HEALTH_CODE" = "200" ]; then
-        PROXY_REPLICA="$(printf '%s\n' "$PROXY_HEALTH_HDRS" | grep -i '^X-Replica-Id:' | head -n 1 | tr -d '\r' || true)"
-        if printf '%s\n' "$PROXY_HEALTH_HDRS" | grep -qi '^Set-Cookie:.*pdh_lb='; then
-            pass "Balanceador Caddy (127.0.0.1:${PROXY_HTTP_PORT}/healthz) responde 200 con sticky cookie pdh_lb (${PROXY_REPLICA:-X-Replica-Id})."
+        PROXY_REPLICA="$(printf '%s\n' "$PROXY_HEALTH_HDRS" | grep -i '^X-Replica-Id:' | head -n 1 | cut -d: -f2- | tr -d ' \t\r\n' || true)"
+        PROXY_VER="$(printf '%s\n' "$PROXY_HEALTH_HDRS" | grep -i '^X-App-Version:' | head -n 1 | cut -d: -f2- | tr -d ' \t\r\n' || true)"
+        if [ "$PROXY_REPLICA" = "$ACTIVE_SLOT" ]; then
+            pass "Caddy Blue-Green (127.0.0.1:${PROXY_HTTP_PORT}/healthz) responde 200 apuntando a X-Replica-Id=${PROXY_REPLICA} (v${PROXY_VER:-?})."
         else
-            warn "Balanceador Caddy (127.0.0.1:${PROXY_HTTP_PORT}/healthz) responde 200 pero sin cookie pdh_lb (${PROXY_REPLICA:-sin X-Replica-Id})."
+            fail "Caddy (127.0.0.1:${PROXY_HTTP_PORT}/healthz) respondió X-Replica-Id='${PROXY_REPLICA:-ninguno}', esperado '${ACTIVE_SLOT}'."
         fi
     else
-        fail "Balanceador Caddy http://127.0.0.1:${PROXY_HTTP_PORT}/healthz respondió HTTP ${PROXY_HEALTH_CODE:-000}."
+        fail "Proxy Caddy http://127.0.0.1:${PROXY_HTTP_PORT}/healthz respondió HTTP ${PROXY_HEALTH_CODE:-000}."
     fi
 
-    HTML_BODY="$(curl -fsS --max-time 8 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
+    HTML_BODY="$(curl -fsS --max-time 8 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${PROXY_HTTP_PORT}/" 2>/dev/null || true)"
     if [ -n "$HTML_BODY" ]; then
         if grep -q 'cdnjs.cloudflare.com' <<<"$HTML_BODY"; then
             fail "La página principal sigue referenciando cdnjs.cloudflare.com."
@@ -295,26 +330,26 @@ if command -v curl >/dev/null 2>&1; then
             warn "No se detectó referencia a vendor/crypto-js.min.js en /."
         fi
     else
-        fail "No responde http://127.0.0.1:${PORT}/ con X-Forwarded-Proto: https."
+        fail "No responde http://127.0.0.1:${PROXY_HTTP_PORT}/ con X-Forwarded-Proto: https."
     fi
 
-    HTTPS_HDRS="$(curl -fsS -D - -o /dev/null --max-time 8 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
+    HTTPS_HDRS="$(curl -fsS -D - -o /dev/null --max-time 8 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${PROXY_HTTP_PORT}/" 2>/dev/null || true)"
     if printf '%s' "$HTTPS_HDRS" | grep -qi '^Strict-Transport-Security:'; then
         pass "Cabecera Strict-Transport-Security (HSTS) activa bajo HTTPS (Tailscale Serve)."
     else
         fail "Falta Strict-Transport-Security bajo X-Forwarded-Proto: https."
     fi
 
-    VENDOR_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${PORT}/vendor/crypto-js.min.js" 2>/dev/null || echo '000')"
+    VENDOR_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${PROXY_HTTP_PORT}/vendor/crypto-js.min.js" 2>/dev/null || echo '000')"
     if [ "$VENDOR_CODE" = "200" ]; then
-        pass "http://127.0.0.1:${PORT}/vendor/crypto-js.min.js responde HTTP 200."
+        pass "http://127.0.0.1:${PROXY_HTTP_PORT}/vendor/crypto-js.min.js responde HTTP 200."
     else
         fail "vendor/crypto-js.min.js respondió HTTP ${VENDOR_CODE}."
     fi
 
-    REQ_HTTPS_VAL="$($DOCKER_CMD exec mood_app sh -c 'printf "%s" "${REQUIRE_HTTPS:-false}"' 2>/dev/null || echo '')"
+    REQ_HTTPS_VAL="$($DOCKER_CMD exec "$ACTIVE_CONTAINER" sh -c 'printf "%s" "${REQUIRE_HTTPS:-false}"' 2>/dev/null || echo '')"
     if [ "$REQ_HTTPS_VAL" = "true" ]; then
-        PLAIN_API_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT}/api/auth/me" 2>/dev/null || echo '000')"
+        PLAIN_API_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PROXY_HTTP_PORT}/api/auth/me" 2>/dev/null || echo '000')"
         if [ "$PLAIN_API_CODE" = "426" ]; then
             pass "REQUIRE_HTTPS=true bloquea API HTTP plano sin TLS (HTTP 426)."
         else
@@ -324,7 +359,7 @@ if command -v curl >/dev/null 2>&1; then
         warn "REQUIRE_HTTPS=${REQ_HTTPS_VAL:-false}; en producción con Tailscale Serve usa REQUIRE_HTTPS=true."
     fi
 
-    CORS_EVIL_HDRS="$(curl -s -D - -o /dev/null --max-time 5 -H "X-Forwarded-Proto: https" -H "Origin: https://evil.example" "http://127.0.0.1:${PORT}/api/auth/me" 2>/dev/null || true)"
+    CORS_EVIL_HDRS="$(curl -s -D - -o /dev/null --max-time 5 -H "X-Forwarded-Proto: https" -H "Origin: https://evil.example" "http://127.0.0.1:${PROXY_HTTP_PORT}/api/auth/me" 2>/dev/null || true)"
     if printf '%s' "$CORS_EVIL_HDRS" | grep -qi 'evil\.example'; then
         fail "CORS reflejó un origen hostil (https://evil.example)."
     else
@@ -409,10 +444,10 @@ else
     warn "rclone o $VERIFY_RCLONE_CONF no configurados; respaldos operan solo en local."
 fi
 
-if $DOCKER_CMD exec mood_app sh -c 'test -n "${RCLONE_CONF_B64:-}"' >/dev/null 2>&1; then
-    pass "RCLONE_CONF_B64 presente en mood_app para sincronizar Cuaderno de Idiomas en Drive."
+if $DOCKER_CMD exec "$ACTIVE_CONTAINER" sh -c 'test -n "${RCLONE_CONF_B64:-}"' >/dev/null 2>&1; then
+    pass "RCLONE_CONF_B64 presente en ${ACTIVE_CONTAINER} para sincronizar Cuaderno de Idiomas en Drive."
 else
-    warn "RCLONE_CONF_B64 vacío en mood_app (Cuaderno de Idiomas solo en volumen local ./english-notes)."
+    warn "RCLONE_CONF_B64 vacío en ${ACTIVE_CONTAINER} (Cuaderno de Idiomas solo en volumen local ./english-notes)."
 fi
 
 if command -v crontab >/dev/null 2>&1; then
@@ -422,21 +457,21 @@ if command -v crontab >/dev/null 2>&1; then
     else
         warn "Falta cron de scripts/backup.sh en crontab."
     fi
-    if printf '%s\n' "$CRON_DUMP" | grep -qE 'docker exec -u 0 mood_app (/usr/local/bin/)?yt-dlp -U'; then
-        pass "Cron semanal de yt-dlp (-u 0) registrado."
+    if printf '%s\n' "$CRON_DUMP" | grep -qE 'docker exec -u 0 mood_app_(blue|green) (/usr/local/bin/)?yt-dlp -U'; then
+        pass "Cron semanal de yt-dlp (-u 0) registrado para Blue-Green."
     else
-        warn "Falta o usa root implícito el cron de actualización yt-dlp (usa: docker exec -u 0 mood_app yt-dlp -U)."
+        warn "Falta o usa formato legado el cron de actualización yt-dlp (esperado: mood_app_blue / mood_app_green)."
     fi
 fi
 
 # 10. Blindaje anti-intrusión, anti-DoS y aislamiento de secretos
 echo ""
 echo "--- [10/10] Blindaje anti-intrusión, anti-DoS y aislamiento de secretos ---"
-APP_SEC_INFO="$($DOCKER_CMD inspect -f '{{.HostConfig.SecurityOpt}}|{{.HostConfig.CapDrop}}|{{.HostConfig.PidsLimit}}' mood_app 2>/dev/null || echo '')"
+APP_SEC_INFO="$($DOCKER_CMD inspect -f '{{.HostConfig.SecurityOpt}}|{{.HostConfig.CapDrop}}|{{.HostConfig.PidsLimit}}' "$ACTIVE_CONTAINER" 2>/dev/null || echo '')"
 if printf '%s' "$APP_SEC_INFO" | grep -q 'no-new-privileges:true' && printf '%s' "$APP_SEC_INFO" | grep -qi 'ALL'; then
-    pass "Contenedor mood_app endurecido ($APP_SEC_INFO)."
+    pass "Contenedor ${ACTIVE_CONTAINER} endurecido ($APP_SEC_INFO)."
 else
-    warn "mood_app sin hardening completo de capacidades/pids ($APP_SEC_INFO); reconstruye con docker compose up -d --build."
+    warn "${ACTIVE_CONTAINER} sin hardening completo de capacidades/pids ($APP_SEC_INFO); reconstruye con docker compose."
 fi
 
 if [ -f "$PROJECT_DIR/.env" ]; then

@@ -72,6 +72,42 @@ const { buildSafeRcloneExecEnv } = serverNotesService;
 const { createServerLogger, isAutomatedTestEnv } = require('./lib/server-logger');
 
 const REPLICA_ID = String(process.env.REPLICA_ID || os.hostname() || 'app').trim().slice(0, 64) || 'app';
+const APP_SLOT_NAME = String(process.env.APP_SLOT || '').trim().toLowerCase();
+const APP_SLOT_STATE_FILE = String(process.env.APP_SLOT_STATE_FILE || '/app/deploy-state/active-slot').trim();
+
+function isActiveBlueGreenSlot() {
+    if (!APP_SLOT_NAME || (APP_SLOT_NAME !== 'blue' && APP_SLOT_NAME !== 'green')) {
+        return true;
+    }
+    if (!APP_SLOT_STATE_FILE) {
+        return true;
+    }
+    try {
+        if (!fs.existsSync(APP_SLOT_STATE_FILE)) {
+            return true;
+        }
+        const activeSlot = fs.readFileSync(APP_SLOT_STATE_FILE, 'utf8').trim().toLowerCase();
+        if (!activeSlot) {
+            return true;
+        }
+        return activeSlot === APP_SLOT_NAME;
+    } catch (_) {
+        return true;
+    }
+}
+
+function resolveRuntimeAppVersion() {
+    const rawEnvVersion = String(process.env.APP_VERSION || '').trim().replace(/^v/i, '');
+    if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(rawEnvVersion)) {
+        return rawEnvVersion;
+    }
+    try {
+        if (typeof loadVersionMetadata === 'function') {
+            return loadVersionMetadata().currentVersion || '1.0.0';
+        }
+    } catch (_) {}
+    return '1.0.0';
+}
 
 const serverLogger = createServerLogger({ rootDir: __dirname });
 serverLogger.installConsoleTee();
@@ -179,8 +215,16 @@ app.use((req, res, next) => {
 });
 
 app.get('/healthz', (_req, res) => {
+    const version = resolveRuntimeAppVersion();
+    const slot = APP_SLOT_NAME || REPLICA_ID;
     res.setHeader('X-Replica-Id', REPLICA_ID);
-    res.status(200).json({ ok: true });
+    res.setHeader('X-App-Version', version);
+    res.status(200).json({
+        ok: true,
+        slot,
+        replicaId: REPLICA_ID,
+        version
+    });
 });
 
 app.use(cors((req, callback) => {
@@ -1041,6 +1085,7 @@ app.use('/api', apiGlobalLimiter.middleware);
 
 // Limpieza periódica de sesiones y códigos vencidos para ahorrar espacio en MySQL
 function limpiarRegistrosExpirados() {
+    if (!isActiveBlueGreenSlot()) return;
     const nowSql = formatMySqlDateTime(new Date());
     const cutoff90Days = formatMySqlDateTime(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000));
     db.query('DELETE FROM SesionesAuth WHERE expira_en <= ?', [nowSql], () => {});
@@ -6346,6 +6391,7 @@ let _lastMidnightJournalDate = '';
 let _lastMidnightJournalAttemptMs = 0;
 
 async function runAutonomousJournalMidnightTick(adminTimeZone = null) {
+    if (!isActiveBlueGreenSlot()) return;
     const wordPassword = String(process.env.WORD_PASSWORD || '').trim();
     if (!wordPassword || !serverNotesService.isServerAutonomousNotesEnabled()) return;
 
@@ -6392,6 +6438,7 @@ async function runAutonomousJournalMidnightTick(adminTimeZone = null) {
 
 let schedulerRunning = false;
 async function runReminderSchedulerTick() {
+    if (!isActiveBlueGreenSlot()) return;
     if (schedulerRunning) return;
     schedulerRunning = true;
     try {

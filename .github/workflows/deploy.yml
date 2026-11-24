@@ -495,13 +495,17 @@ jobs:
 
             APP_UID="$(id -u)"
             APP_GID="$(id -g)"
-            mkdir -p data/journal data/ytdlp english-notes logs
-            chmod 700 data data/journal data/ytdlp english-notes logs
-            for _vol_dir in data english-notes logs; do
+            mkdir -p data/journal data/ytdlp data/deploy-state english-notes logs
+            chmod 755 data data/deploy-state
+            chmod 700 data/journal data/ytdlp english-notes logs
+            for _vol_dir in data/journal data/ytdlp english-notes logs; do
               if [ -n "$(find "$_vol_dir" \( ! -uid "$APP_UID" -o ! -gid "$APP_GID" \) -print -quit 2>/dev/null || true)" ]; then
                 $SUDO chown -R "${APP_UID}:${APP_GID}" "$_vol_dir" 2>/dev/null || true
               fi
             done
+            if [ -n "$(find data/deploy-state \( ! -uid "$APP_UID" -o ! -gid "$APP_GID" \) -print -quit 2>/dev/null || true)" ]; then
+              $SUDO chown -R "${APP_UID}:${APP_GID}" data/deploy-state 2>/dev/null || true
+            fi
             chmod 600 data/journal/Diario.docx english-notes/English_Learning_Notebook.docx 2>/dev/null || true
             chmod 700 "$HOME" "$HOME/.ssh" "$HOME/.config" "$HOME/projects" "$HOME/projects/respaldos" 2>/dev/null || true
             chmod 600 "$HOME/.ssh/authorized_keys" 2>/dev/null || true
@@ -572,6 +576,8 @@ jobs:
               printf 'DB_PASS=%s\n' "$FINAL_DB_PASS"
               printf 'DB_NAME=%s\n' "$FINAL_DB_NAME"
               printf 'PORT=%s\n' "$FINAL_PORT"
+              printf 'BLUE_PORT=3001\n'
+              printf 'GREEN_PORT=3002\n'
               printf 'APP_VERSION=%s\n' "${APP_VERSION:-}"
               printf 'TZ=%s\n' "$FINAL_TZ"
               printf 'APP_UID=%s\n' "$APP_UID"
@@ -654,33 +660,106 @@ jobs:
               exit 1
             fi
 
-            chmod +x scripts/backup.sh scripts/restore.sh scripts/env-vault.sh scripts/verify-ubuntu-local.sh
+            chmod +x scripts/backup.sh scripts/restore.sh scripts/env-vault.sh scripts/verify-ubuntu-local.sh scripts/blue-green.sh
 
-            # 5. Levantar o actualizar los contenedores Docker leyendo el entorno desde RAM
-            $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" build app
-            $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" up -d --no-build
+            # 5. Despliegue Blue-Green con cero tiempo de inactividad y auto-protección ante fallos
+            CURRENT_ACTIVE_SLOT="none"
+            if [ -r "data/deploy-state/active-slot" ]; then
+              RAW_SLOT="$(tr -d ' \t\r\n' < data/deploy-state/active-slot 2>/dev/null || true)"
+              if [ "$RAW_SLOT" = "blue" ] || [ "$RAW_SLOT" = "green" ]; then
+                CURRENT_ACTIVE_SLOT="$RAW_SLOT"
+              fi
+            fi
+            if [ "$CURRENT_ACTIVE_SLOT" = "blue" ]; then
+              TARGET_SLOT="green"
+              TARGET_PORT="3002"
+            else
+              TARGET_SLOT="blue"
+              TARGET_PORT="3001"
+            fi
+            TARGET_CONTAINER="mood_app_${TARGET_SLOT}"
+            IMAGE_VER_TAG="v${APP_VERSION:-latest}"
+
+            if [ ! -f "data/deploy-state/upstream.caddy" ]; then
+              ./scripts/blue-green.sh init-state "$TARGET_SLOT"
+            fi
+
+            echo "🏗️ Construyendo imagen única personal-daily-hub-app:${IMAGE_VER_TAG} (slot activo=${CURRENT_ACTIVE_SLOT} -> nuevo slot=${TARGET_SLOT})..."
+            BLUE_IMAGE_TAG="$IMAGE_VER_TAG" $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" build app_blue
+            $DOCKER_CMD tag "personal-daily-hub-app:${IMAGE_VER_TAG}" "personal-daily-hub-app:${TARGET_SLOT}"
+
+            $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" up -d --no-build db
+            for _db_i in $(seq 1 25); do
+              DB_STATE="$($DOCKER_CMD inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' mood_db 2>/dev/null || echo 'missing|none')"
+              [ "$DB_STATE" = "running|healthy" ] && break
+              sleep 2
+            done
 
             # 6. Si es una instancia nueva / BD vacía, restaurar automáticamente el último backup de Google Drive
             ENV_FILE_OVERRIDE="$DEPLOY_ENV_FILE" ./scripts/restore.sh --if-empty
 
-            echo "⏳ Esperando estado healthy en los 4 contenedores (mood_db, mood_app, mood_app2, mood_proxy)..."
+            echo "🚀 Levantando slot inactivo app_${TARGET_SLOT} (${TARGET_CONTAINER}) sin tocar el tráfico actual..."
+            BLUE_IMAGE_TAG=blue GREEN_IMAGE_TAG=green $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --no-build "app_${TARGET_SLOT}"
+
+            echo "⏳ Ejecutando smoke test estricto sobre ${TARGET_CONTAINER} (127.0.0.1:${TARGET_PORT}) antes del corte de tráfico..."
+            SLOT_READY=0
             for _wait_i in $(seq 1 20); do
-              ALL_HEALTHY=1
-              for cname in mood_db mood_app mood_app2 mood_proxy; do
-                CSTATE="$($DOCKER_CMD inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cname" 2>/dev/null || echo 'missing|none')"
-                if [ "$CSTATE" != "running|healthy" ]; then
-                  ALL_HEALTHY=0
-                  break
-                fi
-              done
-              if [ "$ALL_HEALTHY" -eq 1 ]; then
-                echo "✅ Todos los contenedores reportan running (healthy)."
+              CSTATE="$($DOCKER_CMD inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$TARGET_CONTAINER" 2>/dev/null || echo 'missing|none')"
+              if [ "$CSTATE" = "running|healthy" ]; then
+                SLOT_READY=1
                 break
               fi
               sleep 3
             done
 
-            # 7. Limpiar imágenes huérfanas y caché viejo de Docker para no llenar el disco de la t3.micro
+            SMOKE_OK=1
+            if [ "$SLOT_READY" -ne 1 ]; then
+              echo "ERROR: ${TARGET_CONTAINER} no alcanzó running|healthy en 60s." >&2
+              SMOKE_OK=0
+            else
+              HEALTH_HDRS="$(curl -s -D - -o /dev/null -w '\n%{http_code}' --max-time 6 "http://127.0.0.1:${TARGET_PORT}/healthz" 2>/dev/null || true)"
+              HEALTH_CODE="$(printf '%s\n' "$HEALTH_HDRS" | tail -n 1)"
+              HEALTH_VER="$(printf '%s\n' "$HEALTH_HDRS" | grep -i '^X-App-Version:' | head -n 1 | cut -d: -f2- | tr -d ' \t\r\n' || true)"
+              ROOT_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${TARGET_PORT}/" 2>/dev/null || echo '000')"
+              VENDOR_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${TARGET_PORT}/vendor/crypto-js.min.js" 2>/dev/null || echo '000')"
+              if [ "$HEALTH_CODE" != "200" ] || [ "$ROOT_CODE" != "200" ] || [ "$VENDOR_CODE" != "200" ]; then
+                echo "ERROR: Smoke test falló en ${TARGET_CONTAINER} (/healthz=${HEALTH_CODE}, /=${ROOT_CODE}, vendor=${VENDOR_CODE})." >&2
+                SMOKE_OK=0
+              elif [ -n "${APP_VERSION:-}" ] && [ -n "$HEALTH_VER" ] && [ "$HEALTH_VER" != "$APP_VERSION" ]; then
+                echo "ERROR: Versión respondida por ${TARGET_CONTAINER} ('${HEALTH_VER}') no coincide con '${APP_VERSION}'." >&2
+                SMOKE_OK=0
+              fi
+            fi
+
+            if [ "$SMOKE_OK" -ne 1 ]; then
+              echo "❌ Rollback automático preventivo: se conserva '${CURRENT_ACTIVE_SLOT}' sirviendo producción sin cambiar Caddy." >&2
+              $DOCKER_CMD logs --tail 80 "$TARGET_CONTAINER" 2>/dev/null || true
+              exit 1
+            fi
+
+            echo "🔀 Smoke test OK en ${TARGET_CONTAINER} (v${APP_VERSION:-?}). Conmutando tráfico en Caddy..."
+            BLUE_IMAGE_TAG=blue GREEN_IMAGE_TAG=green $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --no-build proxy
+            PROXY_HTTP_PORT="$FINAL_PROXY_HTTP_PORT" ENV_FILE_OVERRIDE="$DEPLOY_ENV_FILE" ./scripts/blue-green.sh switch "${TARGET_SLOT}" "${IMAGE_VER_TAG}"
+
+            PROXY_AFTER_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 "http://127.0.0.1:${FINAL_PROXY_HTTP_PORT}/healthz" 2>/dev/null || echo '000')"
+            if [ "$PROXY_AFTER_CODE" != "200" ]; then
+              echo "ERROR: Proxy Caddy http://127.0.0.1:${FINAL_PROXY_HTTP_PORT}/healthz respondió ${PROXY_AFTER_CODE} tras el switch." >&2
+              exit 1
+            fi
+
+            # Retirar contenedores legados de la arquitectura anterior si aún existieran
+            $DOCKER_CMD rm -f mood_app mood_app2 2>/dev/null || true
+
+            # 7. Conservar imágenes :blue, :green y las últimas 3 etiquetas v* para rollback sin internet; limpiar el resto
+            IN_USE_IMG_IDS="$($DOCKER_CMD ps -q | xargs -r $DOCKER_CMD inspect -f '{{.Image}}' 2>/dev/null | sort -u || true)"
+            OLD_VER_REFS="$($DOCKER_CMD images --format '{{.Repository}}:{{.Tag}}' personal-daily-hub-app 2>/dev/null | grep -E '^personal-daily-hub-app:v[0-9]+\.' | sort -rV | tail -n +4 || true)"
+            for _img_ref in $OLD_VER_REFS; do
+              _img_id="$($DOCKER_CMD image inspect -f '{{.Id}}' "$_img_ref" 2>/dev/null || true)"
+              if [ -n "$_img_id" ] && printf '%s\n' "$IN_USE_IMG_IDS" | grep -qx "$_img_id"; then
+                continue
+              fi
+              $DOCKER_CMD rmi "$_img_ref" >/dev/null 2>&1 || true
+            done
             $DOCKER_CMD image prune -f >/dev/null 2>&1 || true
             $DOCKER_CMD builder prune -f --filter "until=168h" >/dev/null 2>&1 || true
 
@@ -725,7 +804,7 @@ jobs:
 
             FINAL_CRON_SCHEDULE="${BACKUP_CRON_SCHEDULE:-30 3 * * *}"
             CRON_JOB="${FINAL_CRON_SCHEDULE} $HOME/projects/mood-tracker/scripts/backup.sh >> $HOME/projects/respaldos/backup.log 2>&1"
-            YTDLP_CRON_JOB="15 4 * * 0 (docker exec -u 0 mood_app yt-dlp -U || true) && (docker exec -u 0 mood_app2 yt-dlp -U || true) >> $HOME/projects/respaldos/ytdlp-update.log 2>&1"
+            YTDLP_CRON_JOB="15 4 * * 0 (docker exec -u 0 mood_app_blue yt-dlp -U || true) && (docker exec -u 0 mood_app_green yt-dlp -U || true) >> $HOME/projects/respaldos/ytdlp-update.log 2>&1"
             CURRENT_CRONTAB="$(crontab -l 2>/dev/null || true)"
             CURRENT_CRONTAB_NORM="$(printf '%s\n' "$CURRENT_CRONTAB" | sed '/^$/d')"
             DESIRED_CRONTAB="$( { printf '%s\n' "$CURRENT_CRONTAB" | grep -v "scripts/backup.sh" | grep -v "yt-dlp -U" || true; printf '%s\n%s\n' "$CRON_JOB" "$YTDLP_CRON_JOB"; } | sed '/^$/d' )"

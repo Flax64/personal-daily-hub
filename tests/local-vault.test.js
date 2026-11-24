@@ -125,6 +125,7 @@ describe('Bóveda local (.env / .env.enc)', () => {
         const compose = fs.readFileSync(path.join(ROOT_DIR, 'docker-compose.yml'), 'utf8');
         const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
         const deploy = fs.readFileSync(path.join(ROOT_DIR, '.github', 'workflows', 'deploy.yml'), 'utf8');
+        const rollback = fs.readFileSync(path.join(ROOT_DIR, '.github', 'workflows', 'rollback.yml'), 'utf8');
         const ci = fs.readFileSync(path.join(ROOT_DIR, '.github', 'workflows', 'ci.yml'), 'utf8');
 
         assert.equal(/sincronitation|sincronizador|yt_lyrics_helper/i.test(dockerfile), false, 'Dockerfile no debe copiar ni ejecutar scripts de PC local');
@@ -132,6 +133,7 @@ describe('Bóveda local (.env / .env.enc)', () => {
         assert.equal(/sincronizador|yt_lyrics_helper/i.test(compose), false, 'docker-compose.yml no debe invocar scripts de PC local');
         assert.equal(/sincronizador|yt_lyrics_helper/i.test(JSON.stringify(pkg.scripts || {})), false, 'package.json no debe invocar scripts de PC local');
         assert.equal(/python3?\s+[^\n]*sincronizador\.py/i.test(deploy), false, 'deploy.yml no debe ejecutar sincronizador.py en EC2');
+        assert.equal(/python3?\s+[^\n]*sincronizador\.py/i.test(rollback), false, 'rollback.yml no debe ejecutar sincronizador.py en EC2');
         assert.match(deploy, /rm -rf "\$HOME\/projects\/mood-tracker\/sincronitation"/, 'deploy.yml debe retirar sincronitation/ de la copia de trabajo en EC2');
         // CI solo valida la sintaxis (ast.parse), nunca ejecuta el sincronizador.
         assert.equal(/python3?\s+sincronitation\/sincronizador\.py/i.test(ci), false, 'CI no debe ejecutar sincronizador.py');

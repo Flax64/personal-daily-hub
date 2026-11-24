@@ -1,0 +1,377 @@
+name: Rollback Blue-Green (Instantáneo sin SSH manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Modo de rollback (instant-switch = cambia al slot standby en segundos)'
+        required: true
+        default: 'instant-switch'
+        type: choice
+        options:
+          - instant-switch
+          - specific-tag
+      target_version:
+        description: 'Tag SemVer exacto (ej. v1.24.0) — requerido solo si mode=specific-tag'
+        required: false
+        default: ''
+        type: string
+      reason:
+        description: 'Motivo del rollback (para registro en historial de GitHub Actions)'
+        required: false
+        default: 'Manual rollback triggered from GitHub Actions'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Rollback Blue-Green en Servidor Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar parámetros de rollback
+        id: validate
+        env:
+          RB_MODE: ${{ github.event.inputs.mode }}
+          RB_VERSION: ${{ github.event.inputs.target_version }}
+        run: |
+          set -euo pipefail
+          CLEAN_MODE="$(printf '%s' "${RB_MODE}" | tr -d ' \t\r\n')"
+          CLEAN_VER="$(printf '%s' "${RB_VERSION}" | tr -d ' \t\r\n')"
+          if [ "$CLEAN_MODE" = "specific-tag" ]; then
+            if [ -z "$CLEAN_VER" ]; then
+              echo "ERROR: target_version es obligatorio cuando mode=specific-tag (ej. v1.24.0)." >&2
+              exit 1
+            fi
+            case "$CLEAN_VER" in
+              v*) NORM_VER="$CLEAN_VER" ;;
+              *) NORM_VER="v${CLEAN_VER}" ;;
+            esac
+            if ! printf '%s' "$NORM_VER" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+              echo "ERROR: Formato SemVer inválido en target_version='${CLEAN_VER}' (esperado vX.Y.Z)." >&2
+              exit 1
+            fi
+          else
+            NORM_VER="${CLEAN_VER:-standby}"
+          fi
+          echo "mode=${CLEAN_MODE}" >> "$GITHUB_OUTPUT"
+          echo "normalized_version=${NORM_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Detectar modo Tailscale para conexión SSH privada
+        id: ts_mode
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          if [ -n "${TS_OAUTH_CLIENT_ID:-}" ] && [ -n "${TS_OAUTH_SECRET:-}" ]; then
+            echo "mode=oauth" >> "$GITHUB_OUTPUT"
+          elif [ -n "${TS_AUTHKEY:-}" ]; then
+            echo "mode=authkey" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Conectar runner a Tailscale (OAuth recomendado)
+        if: steps.ts_mode.outputs.mode == 'oauth'
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+
+      - name: Conectar runner a Tailscale (Auth Key)
+        if: steps.ts_mode.outputs.mode == 'authkey'
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - name: Ejecutar Rollback Blue-Green vía SSH
+        uses: appleboy/ssh-action@v1.0.0
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          ROLLBACK_MODE: ${{ steps.validate.outputs.mode }}
+          TARGET_TAG: ${{ steps.validate.outputs.normalized_version }}
+          ROLLBACK_REASON: ${{ github.event.inputs.reason }}
+          DEPLOY_EC2_HOST: ${{ vars.SERVER_HOST || secrets.SERVER_HOST || vars.EC2_HOST || secrets.EC2_HOST }}
+          SERVER_SSH_PORT: ${{ vars.SERVER_SSH_PORT || secrets.SERVER_SSH_PORT || '22' }}
+          SECRET_DB_HOST: ${{ secrets.DB_HOST || vars.DB_HOST }}
+          SECRET_DB_USER: ${{ secrets.DB_USER || vars.DB_USER }}
+          SECRET_DB_PASS: ${{ secrets.DB_PASS }}
+          SECRET_DB_NAME: ${{ secrets.DB_NAME || vars.DB_NAME }}
+          SECRET_PORT: ${{ vars.PORT || secrets.PORT }}
+          SECRET_TZ: ${{ vars.TZ || secrets.TZ }}
+          SECRET_ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL || vars.ADMIN_EMAIL }}
+          SECRET_ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+          SECRET_WORD_PASSWORD: ${{ secrets.WORD_PASSWORD }}
+          SECRET_JOURNAL_SECRET_KEY: ${{ secrets.JOURNAL_SECRET_KEY }}
+          SECRET_SMTP_USER: ${{ secrets.SMTP_USER || vars.SMTP_USER }}
+          SECRET_SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SECRET_APP_BASE_URL: ${{ secrets.APP_BASE_URL || vars.APP_BASE_URL }}
+          SECRET_TRUST_PROXY: ${{ vars.TRUST_PROXY || secrets.TRUST_PROXY }}
+          SECRET_SITE_ADDRESS: ${{ vars.SITE_ADDRESS || secrets.SITE_ADDRESS }}
+          SECRET_PROXY_HTTP_PORT: ${{ vars.PROXY_HTTP_PORT || secrets.PROXY_HTTP_PORT }}
+          SECRET_PROXY_HTTPS_PORT: ${{ vars.PROXY_HTTPS_PORT || secrets.PROXY_HTTPS_PORT }}
+          SECRET_REQUIRE_HTTPS: ${{ vars.REQUIRE_HTTPS || secrets.REQUIRE_HTTPS }}
+          SECRET_REQUIRE_PC_BRIDGE_AUTH: ${{ vars.REQUIRE_PC_BRIDGE_AUTH || secrets.REQUIRE_PC_BRIDGE_AUTH }}
+          SECRET_CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS || secrets.CORS_ALLOWED_ORIGINS }}
+          SECRET_DB_RETENTION_DAYS: ${{ vars.DB_RETENTION_DAYS || secrets.DB_RETENTION_DAYS }}
+          SECRET_ENABLE_LOGIN_MFA: ${{ vars.ENABLE_LOGIN_MFA || secrets.ENABLE_LOGIN_MFA }}
+          SECRET_REQUIRE_DRIVE_BACKUP: ${{ vars.REQUIRE_DRIVE_BACKUP || secrets.REQUIRE_DRIVE_BACKUP }}
+          SECRET_RCLONE_REMOTE: ${{ vars.RCLONE_REMOTE || secrets.RCLONE_REMOTE }}
+          SECRET_RCLONE_BACKUP_DIR: ${{ vars.RCLONE_BACKUP_DIR || secrets.RCLONE_BACKUP_DIR }}
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+          SECRET_STUDY_RCLONE_REMOTE: ${{ vars.STUDY_RCLONE_REMOTE || secrets.STUDY_RCLONE_REMOTE }}
+          SECRET_STUDY_RCLONE_DIR: ${{ vars.STUDY_RCLONE_DIR || secrets.STUDY_RCLONE_DIR }}
+          STUDY_RCLONE_CONF_B64: ${{ secrets.STUDY_RCLONE_CONF_B64 }}
+          SECRET_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SECRET_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          SECRET_YT_DLP_PATH: ${{ vars.YT_DLP_PATH || secrets.YT_DLP_PATH }}
+          SECRET_SERVER_SUDO_PASS: ${{ secrets.SERVER_SUDO_PASS || secrets.SUDO_PASS }}
+        with:
+          host: ${{ vars.SERVER_HOST || secrets.SERVER_HOST || vars.EC2_HOST || secrets.EC2_HOST }}
+          username: ${{ vars.SERVER_USER || secrets.SERVER_USER || vars.EC2_USER || secrets.EC2_USER || 'ubuntu' }}
+          port: ${{ vars.SERVER_SSH_PORT || secrets.SERVER_SSH_PORT || 22 }}
+          key: ${{ secrets.SERVER_SSH_KEY || secrets.EC2_SSH_KEY }}
+          command_timeout: 15m
+          envs: GITHUB_REPO,ROLLBACK_MODE,TARGET_TAG,ROLLBACK_REASON,DEPLOY_EC2_HOST,SERVER_SSH_PORT,SECRET_DB_HOST,SECRET_DB_USER,SECRET_DB_PASS,SECRET_DB_NAME,SECRET_PORT,SECRET_TZ,SECRET_ADMIN_EMAIL,SECRET_ADMIN_SECRET,SECRET_WORD_PASSWORD,SECRET_JOURNAL_SECRET_KEY,SECRET_SMTP_USER,SECRET_SMTP_PASS,SECRET_APP_BASE_URL,SECRET_TRUST_PROXY,SECRET_SITE_ADDRESS,SECRET_PROXY_HTTP_PORT,SECRET_PROXY_HTTPS_PORT,SECRET_REQUIRE_HTTPS,SECRET_REQUIRE_PC_BRIDGE_AUTH,SECRET_CORS_ALLOWED_ORIGINS,SECRET_DB_RETENTION_DAYS,SECRET_ENABLE_LOGIN_MFA,SECRET_REQUIRE_DRIVE_BACKUP,SECRET_RCLONE_REMOTE,SECRET_RCLONE_BACKUP_DIR,RCLONE_CONF_B64,SECRET_STUDY_RCLONE_REMOTE,SECRET_STUDY_RCLONE_DIR,STUDY_RCLONE_CONF_B64,SECRET_GEMINI_API_KEY,SECRET_YOUTUBE_API_KEY,SECRET_YT_DLP_PATH,SECRET_SERVER_SUDO_PASS
+          script: |
+            set -euo pipefail
+
+            DEPLOY_ENV_FILE=""
+            SUDO_ASKPASS_SECRET=""
+            SUDO_ASKPASS_SCRIPT=""
+            TEMP_WORKTREE=""
+
+            cleanup_all() {
+              if [ -n "${TEMP_WORKTREE:-}" ] && [ -d "$TEMP_WORKTREE" ]; then
+                git -C "$HOME/projects/mood-tracker" worktree remove --force "$TEMP_WORKTREE" 2>/dev/null || rm -rf "$TEMP_WORKTREE"
+                TEMP_WORKTREE=""
+              fi
+              if [ -n "${DEPLOY_ENV_FILE:-}" ] && [ -f "$DEPLOY_ENV_FILE" ]; then
+                shred -u -z -n 1 "$DEPLOY_ENV_FILE" 2>/dev/null || rm -f "$DEPLOY_ENV_FILE"
+                DEPLOY_ENV_FILE=""
+              fi
+              if [ -n "${SUDO_ASKPASS_SECRET:-}" ] && [ -f "$SUDO_ASKPASS_SECRET" ]; then
+                shred -u -z -n 1 "$SUDO_ASKPASS_SECRET" 2>/dev/null || rm -f "$SUDO_ASKPASS_SECRET"
+                SUDO_ASKPASS_SECRET=""
+              fi
+              if [ -n "${SUDO_ASKPASS_SCRIPT:-}" ] && [ -f "$SUDO_ASKPASS_SCRIPT" ]; then
+                shred -u -z -n 1 "$SUDO_ASKPASS_SCRIPT" 2>/dev/null || rm -f "$SUDO_ASKPASS_SCRIPT"
+                SUDO_ASKPASS_SCRIPT=""
+              fi
+              unset -f sudo 2>/dev/null || true
+              unset SUDO_ASKPASS SECRET_SERVER_SUDO_PASS CLEAN_SUDO_PASS 2>/dev/null || true
+              command sudo -k 2>/dev/null || true
+            }
+            trap cleanup_all EXIT INT TERM
+
+            cd "$HOME/projects/mood-tracker"
+
+            SUDO=""
+            if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+              if command sudo -n true 2>/dev/null; then
+                SUDO="sudo"
+              elif [ -n "${SECRET_SERVER_SUDO_PASS:-}" ]; then
+                SUDO_RAM_DIR="/dev/shm"
+                [ ! -d "$SUDO_RAM_DIR" ] || [ ! -w "$SUDO_RAM_DIR" ] && SUDO_RAM_DIR="${TMPDIR:-/tmp}"
+                CLEAN_SUDO_PASS="${SECRET_SERVER_SUDO_PASS%$'\n'}"
+                CLEAN_SUDO_PASS="${CLEAN_SUDO_PASS%$'\r'}"
+                SUDO_ASKPASS_SECRET="$(umask 077 && mktemp "$SUDO_RAM_DIR/.mood_rb_sec.XXXXXX")"
+                chmod 600 "$SUDO_ASKPASS_SECRET"
+                printf '%s\n' "$CLEAN_SUDO_PASS" > "$SUDO_ASKPASS_SECRET"
+                unset CLEAN_SUDO_PASS SECRET_SERVER_SUDO_PASS
+
+                SUDO_ASKPASS_SCRIPT="$(umask 077 && mktemp "$SUDO_RAM_DIR/.mood_rb_ask.XXXXXX")"
+                chmod 700 "$SUDO_ASKPASS_SCRIPT"
+                printf '#!/bin/sh\ncat "%s"\n' "$SUDO_ASKPASS_SECRET" > "$SUDO_ASKPASS_SCRIPT"
+                export SUDO_ASKPASS="$SUDO_ASKPASS_SCRIPT"
+                if ! command sudo -A -v 2>/dev/null; then
+                  echo "ERROR: SERVER_SUDO_PASS rechazado por sudo." >&2
+                  exit 1
+                fi
+                sudo() {
+                  command sudo -A "$@"
+                }
+                SUDO="sudo"
+              fi
+            fi
+            unset SECRET_SERVER_SUDO_PASS 2>/dev/null || true
+
+            DOCKER_CMD="docker"
+            if ! docker info >/dev/null 2>&1; then
+              DOCKER_CMD="${SUDO:+$SUDO }docker"
+            fi
+
+            ENV_TMP_DIR="/dev/shm"
+            [ ! -d "$ENV_TMP_DIR" ] || [ ! -w "$ENV_TMP_DIR" ] && ENV_TMP_DIR="${TMPDIR:-/tmp}"
+            DEPLOY_ENV_FILE="$(umask 077 && mktemp "$ENV_TMP_DIR/.mood_rb_env.XXXXXX")"
+            chmod 600 "$DEPLOY_ENV_FILE"
+
+            FINAL_DB_PASS="${SECRET_DB_PASS:-}"
+            if [ -z "$FINAL_DB_PASS" ] && [ -f ".env" ]; then
+              FINAL_DB_PASS="$(grep -E '^DB_PASS=' .env | tail -n 1 | cut -d= -f2- | tr -d '"\r' || true)"
+            fi
+            if [ -z "$FINAL_DB_PASS" ]; then
+              echo "ERROR: Falta DB_PASS para gestionar servicios Docker en rollback." >&2
+              exit 1
+            fi
+
+            APP_UID="$(id -u)"
+            APP_GID="$(id -g)"
+            TS_DNS=""
+            if command -v tailscale >/dev/null 2>&1; then
+              TS_DNS="$((tailscale status --json 2>/dev/null || $SUDO tailscale status --json 2>/dev/null || true) | python3 -c "import json,sys; d=json.load(sys.stdin); print((d.get('Self',{}).get('DNSName') or '').rstrip('.'))" 2>/dev/null || true)"
+            fi
+            FINAL_PORT="${SECRET_PORT:-3000}"
+            FINAL_PROXY_HTTP_PORT="${SECRET_PROXY_HTTP_PORT:-8080}"
+            FINAL_APP_BASE_URL="${SECRET_APP_BASE_URL:-}"
+            [ -z "$FINAL_APP_BASE_URL" ] && [ -n "$TS_DNS" ] && FINAL_APP_BASE_URL="https://${TS_DNS}"
+            FINAL_APP_BASE_URL="${FINAL_APP_BASE_URL:-http://${DEPLOY_EC2_HOST}:${FINAL_PORT}}"
+            FINAL_TRUST_PROXY="${SECRET_TRUST_PROXY:-}"
+            [ -z "$FINAL_TRUST_PROXY" ] && FINAL_TRUST_PROXY="$([ -n "$TS_DNS" ] && echo 2 || echo 1)"
+            FINAL_REQUIRE_HTTPS="${SECRET_REQUIRE_HTTPS:-}"
+            if [ -z "$FINAL_REQUIRE_HTTPS" ]; then
+              case "$FINAL_APP_BASE_URL" in
+                https://*) FINAL_REQUIRE_HTTPS="true" ;;
+                *) FINAL_REQUIRE_HTTPS="false" ;;
+              esac
+            fi
+
+            RB_APP_VERSION=""
+            if [ "$ROLLBACK_MODE" = "specific-tag" ]; then
+              RB_APP_VERSION="${TARGET_TAG#v}"
+            fi
+
+            {
+              printf 'DB_HOST=%s\n' "${SECRET_DB_HOST:-db}"
+              printf 'DB_USER=%s\n' "${SECRET_DB_USER:-root}"
+              printf 'DB_PASS=%s\n' "$FINAL_DB_PASS"
+              printf 'DB_NAME=%s\n' "${SECRET_DB_NAME:-MoodTrackerLocal}"
+              printf 'PORT=%s\n' "$FINAL_PORT"
+              printf 'BLUE_PORT=3001\n'
+              printf 'GREEN_PORT=3002\n'
+              printf 'APP_VERSION=%s\n' "$RB_APP_VERSION"
+              printf 'TZ=%s\n' "${SECRET_TZ:-America/Monterrey}"
+              printf 'APP_UID=%s\n' "$APP_UID"
+              printf 'APP_GID=%s\n' "$APP_GID"
+              printf 'TRUST_PROXY=%s\n' "$FINAL_TRUST_PROXY"
+              printf 'REQUIRE_HTTPS=%s\n' "$FINAL_REQUIRE_HTTPS"
+              printf 'REQUIRE_PC_BRIDGE_AUTH=%s\n' "${SECRET_REQUIRE_PC_BRIDGE_AUTH:-true}"
+              printf 'CORS_ALLOWED_ORIGINS=%s\n' "${SECRET_CORS_ALLOWED_ORIGINS:-}"
+              printf 'SERVER_AUTONOMOUS_NOTES=true\n'
+              printf 'DB_RETENTION_DAYS=%s\n' "${SECRET_DB_RETENTION_DAYS:-0}"
+              printf 'ENABLE_LOGIN_MFA=%s\n' "${SECRET_ENABLE_LOGIN_MFA:-false}"
+              printf 'REQUIRE_DRIVE_BACKUP=%s\n' "${SECRET_REQUIRE_DRIVE_BACKUP:-false}"
+              printf 'ADMIN_EMAIL=%s\n' "${SECRET_ADMIN_EMAIL:-}"
+              printf 'ADMIN_SECRET=%s\n' "${SECRET_ADMIN_SECRET:-}"
+              printf 'WORD_PASSWORD=%s\n' "${SECRET_WORD_PASSWORD:-}"
+              printf 'JOURNAL_SECRET_KEY=%s\n' "${SECRET_JOURNAL_SECRET_KEY:-}"
+              printf 'SMTP_USER=%s\n' "${SECRET_SMTP_USER:-${SECRET_ADMIN_EMAIL:-}}"
+              printf 'SMTP_PASS=%s\n' "${SECRET_SMTP_PASS:-}"
+              printf 'APP_BASE_URL=%s\n' "$FINAL_APP_BASE_URL"
+              printf 'SITE_ADDRESS=%s\n' "${SECRET_SITE_ADDRESS:-:80}"
+              printf 'PROXY_HTTP_PORT=%s\n' "$FINAL_PROXY_HTTP_PORT"
+              printf 'PROXY_HTTPS_PORT=%s\n' "${SECRET_PROXY_HTTPS_PORT:-8443}"
+              printf 'RCLONE_REMOTE=%s\n' "${SECRET_RCLONE_REMOTE:-gdrive}"
+              printf 'RCLONE_BACKUP_DIR=%s\n' "${SECRET_RCLONE_BACKUP_DIR:-RespaldosApp}"
+              printf 'STUDY_RCLONE_REMOTE=%s\n' "${SECRET_STUDY_RCLONE_REMOTE:-}"
+              printf 'STUDY_RCLONE_DIR=%s\n' "${SECRET_STUDY_RCLONE_DIR:-NotasIdiomas}"
+              printf 'RCLONE_CONF_B64=%s\n' "$(printf '%s' "${RCLONE_CONF_B64:-}" | tr -d ' \n\r')"
+              printf 'STUDY_RCLONE_CONF_B64=%s\n' "$(printf '%s' "${STUDY_RCLONE_CONF_B64:-}" | tr -d ' \n\r')"
+              printf 'GEMINI_API_KEY=%s\n' "${SECRET_GEMINI_API_KEY:-}"
+              printf 'YOUTUBE_API_KEY=%s\n' "${SECRET_YOUTUBE_API_KEY:-}"
+              printf 'YT_DLP_PATH=%s\n' "${SECRET_YT_DLP_PATH:-}"
+            } > "$DEPLOY_ENV_FILE"
+
+            chmod +x scripts/blue-green.sh
+            echo "📋 Rollback solicitado (${ROLLBACK_MODE}): ${ROLLBACK_REASON:-sin detalle}"
+
+            if [ "$ROLLBACK_MODE" = "instant-switch" ]; then
+              PROXY_HTTP_PORT="$FINAL_PROXY_HTTP_PORT" ENV_FILE_OVERRIDE="$DEPLOY_ENV_FILE" ./scripts/blue-green.sh rollback
+            else
+              CURRENT_ACTIVE="blue"
+              if [ -r "data/deploy-state/active-slot" ]; then
+                RAW_ACTIVE="$(tr -d ' \t\r\n' < data/deploy-state/active-slot 2>/dev/null || true)"
+                if [ "$RAW_ACTIVE" = "blue" ] || [ "$RAW_ACTIVE" = "green" ]; then
+                  CURRENT_ACTIVE="$RAW_ACTIVE"
+                fi
+              fi
+              if [ "$CURRENT_ACTIVE" = "blue" ]; then
+                TARGET_SLOT="green"
+                TARGET_PORT="3002"
+              else
+                TARGET_SLOT="blue"
+                TARGET_PORT="3001"
+              fi
+              TARGET_CONTAINER="mood_app_${TARGET_SLOT}"
+
+              if $DOCKER_CMD image inspect "personal-daily-hub-app:${TARGET_TAG}" >/dev/null 2>&1; then
+                echo "♻️ Reutilizando imagen local personal-daily-hub-app:${TARGET_TAG} sin recompilar..."
+              else
+                echo "📦 Imagen ${TARGET_TAG} no está en caché local; compilando desde tag Git temporal sin tocar main..."
+                git fetch origin --tags --force
+                if ! git rev-parse -q --verify "refs/tags/${TARGET_TAG}" >/dev/null 2>&1; then
+                  echo "ERROR: El tag '${TARGET_TAG}' no existe en el repositorio Git." >&2
+                  exit 1
+                fi
+                TEMP_WORKTREE="$(mktemp -d "${ENV_TMP_DIR}/pdh-wt.XXXXXX")"
+                git worktree add --detach "$TEMP_WORKTREE" "$TARGET_TAG"
+                rm -rf "$TEMP_WORKTREE/sincronitation"
+                $DOCKER_CMD build -t "personal-daily-hub-app:${TARGET_TAG}" "$TEMP_WORKTREE"
+                git worktree remove --force "$TEMP_WORKTREE" 2>/dev/null || rm -rf "$TEMP_WORKTREE"
+                TEMP_WORKTREE=""
+              fi
+
+              $DOCKER_CMD tag "personal-daily-hub-app:${TARGET_TAG}" "personal-daily-hub-app:${TARGET_SLOT}"
+              BLUE_IMAGE_TAG=blue GREEN_IMAGE_TAG=green $DOCKER_CMD compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --no-build "app_${TARGET_SLOT}"
+
+              SLOT_OK=0
+              for _w in $(seq 1 20); do
+                CS="$($DOCKER_CMD inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$TARGET_CONTAINER" 2>/dev/null || echo 'missing|none')"
+                if [ "$CS" = "running|healthy" ]; then
+                  SLOT_OK=1
+                  break
+                fi
+                sleep 3
+              done
+              if [ "$SLOT_OK" -ne 1 ]; then
+                echo "ERROR: ${TARGET_CONTAINER} con tag ${TARGET_TAG} no alcanzó running|healthy. Tráfico en '${CURRENT_ACTIVE}' intacto." >&2
+                $DOCKER_CMD logs --tail 80 "$TARGET_CONTAINER" 2>/dev/null || true
+                exit 1
+              fi
+
+              HC="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 "http://127.0.0.1:${TARGET_PORT}/healthz" 2>/dev/null || echo '000')"
+              RC="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${TARGET_PORT}/" 2>/dev/null || echo '000')"
+              VC="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 -H "X-Forwarded-Proto: https" "http://127.0.0.1:${TARGET_PORT}/vendor/crypto-js.min.js" 2>/dev/null || echo '000')"
+              if [ "$HC" != "200" ] || [ "$RC" != "200" ] || [ "$VC" != "200" ]; then
+                echo "ERROR: Smoke test falló para ${TARGET_TAG} (/healthz=${HC}, /=${RC}, vendor=${VC}). Tráfico intacto." >&2
+                exit 1
+              fi
+
+              PROXY_HTTP_PORT="$FINAL_PROXY_HTTP_PORT" ENV_FILE_OVERRIDE="$DEPLOY_ENV_FILE" ./scripts/blue-green.sh switch "${TARGET_SLOT}" "${TARGET_TAG}"
+            fi
+
+            PROXY_STATUS_JSON="$(curl -fsS --max-time 6 "http://127.0.0.1:${FINAL_PROXY_HTTP_PORT}/healthz")"
+            echo "Proxy /healthz activo: ${PROXY_STATUS_JSON}"
+            ./scripts/blue-green.sh status
+
+      - name: Publicar resumen de Rollback
+        if: always()
+        env:
+          RB_MODE: ${{ steps.validate.outputs.mode }}
+          RB_TAG: ${{ steps.validate.outputs.normalized_version }}
+          RB_REASON: ${{ github.event.inputs.reason }}
+          RB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## Rollback Blue-Green (${RB_STATUS})"
+            echo "- Modo: \`${RB_MODE}\`"
+            echo "- Versión objetivo: \`${RB_TAG}\`"
+            echo "- Motivo: ${RB_REASON}"
+          } >> "$GITHUB_STEP_SUMMARY"

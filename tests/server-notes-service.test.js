@@ -37,6 +37,18 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
         assert.strictEqual(badDec.ok, false);
         assert.strictEqual(badDec.reason, 'E2EE_KEY_MISMATCH');
 
+        for (let i = 0; i < 1000; i++) {
+            const randomWrongCipher = serverNotes.encryptClientE2ee('Secret journal text', wrongKey32);
+            const decAttempt = serverNotes.decryptClientE2ee(randomWrongCipher, key32);
+            assert.strictEqual(decAttempt.ok, false, `Iteración ${i}: llave errónea nunca debe pasar por colisión PKCS#7`);
+            assert.strictEqual(decAttempt.reason, 'E2EE_KEY_MISMATCH');
+        }
+
+        const multiLangSample = 'Nota clínica 🦉\n사랑해 · 日本語 · Café\tOK\r\nFin';
+        const multiDec = serverNotes.decryptClientE2ee(serverNotes.encryptClientE2ee(multiLangSample, key32), key32);
+        assert.strictEqual(multiDec.ok, true);
+        assert.strictEqual(multiDec.plainText, multiLangSample);
+
         assert.strictEqual(serverNotes.isValidE2eeEnvelope('cipher-1'), false);
         assert.strictEqual(serverNotes.decryptClientE2ee('cipher-1', key32).reason, 'NOT_E2EE_ENVELOPE');
     });
