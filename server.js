@@ -3547,7 +3547,7 @@ app.get('/api/pull-english', pcPullLimiter.middleware, requirePcBridgeAuthIfConf
 // ==========================================
 // RUTAS PARA LA AGENDA PERSONAL SEMANAL (SOLO ADMIN)
 // ==========================================
-const BLOQUES_VALIDOS = new Set(['manana', 'cole', 'tarde', 'noche']);
+const BLOQUES_VALIDOS = new Set(['manana', 'cole', 'escuela', 'tarde', 'noche']);
 const AGENDA_TIPOS_VALIDOS = new Set(['evento', 'tarea']);
 const AGENDA_CATEGORIAS_VALIDAS = new Set(['universidad', 'personal']);
 const AGENDA_ESTADOS_VALIDOS = new Set(['todo', 'in_progress', 'done', 'skipped']);
@@ -3945,12 +3945,54 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
     try {
         const { fecha, hora } = req.body;
         const { tipo, categoria, estado, recordatorioMin } = normalizeAgendaItemFields(req.body);
+        const enforcePreventBackdate = req.body.preventBackdate === true || req.body.preventBackdate === 'true';
+        let existingRow = null;
+        let cachedSettings = null;
+
+        if (enforcePreventBackdate) {
+            const existingRows = await dbQueryAsync(
+                `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, bloque, materia_id, materia_nombre
+                 FROM RegistrosAgenda
+                 WHERE id = ?
+                 LIMIT 1`,
+                [id]
+            );
+            if (!Array.isArray(existingRows) || existingRows.length === 0) {
+                return res.status(404).send('Activity not found.');
+            }
+            existingRow = existingRows[0];
+            const sourceFecha = existingRow.fecha instanceof Date
+                ? existingRow.fecha.toISOString().slice(0, 10)
+                : String(existingRow.fecha || '').slice(0, 10);
+            cachedSettings = await loadUserSettings(req.user.id);
+            const todayIso = getLocalNowParts(cachedSettings?.timezone).dateStr;
+            if (
+                (/^\d{4}-\d{2}-\d{2}$/.test(sourceFecha) && fecha < sourceFecha) ||
+                (/^\d{4}-\d{2}-\d{2}$/.test(todayIso) && fecha < todayIso)
+            ) {
+                return res.status(400).send('Cannot move an activity to an earlier date.');
+            }
+        }
+
         let courseLink = { error: null, materia_id: null, materia_nombre: null };
         if (categoria === 'universidad' && (req.body.materia_id || req.body.materia_nombre)) {
-            const settings = await loadUserSettings(req.user.id);
+            const settings = cachedSettings || await loadUserSettings(req.user.id);
             courseLink = resolveAgendaCourseLink(req.body, categoria, settings);
             if (courseLink.error) {
-                return res.status(400).send(courseLink.error);
+                if (
+                    enforcePreventBackdate &&
+                    existingRow &&
+                    req.body.materia_id &&
+                    String(existingRow.materia_id || '') === String(req.body.materia_id || '').trim()
+                ) {
+                    courseLink = {
+                        error: null,
+                        materia_id: existingRow.materia_id,
+                        materia_nombre: existingRow.materia_nombre || (req.body.materia_nombre ? String(req.body.materia_nombre).trim().slice(0, 120) : null)
+                    };
+                } else {
+                    return res.status(400).send(courseLink.error);
+                }
             }
         }
 

@@ -1764,8 +1764,6 @@
                             <button type="button" class="agenda-nav-btn" id="btnAgendaNextWeek"
                                 aria-label="Next week">▶</button>
                             <button type="button" class="agenda-chip-btn" id="btnAgendaToday">Today</button>
-                            <button type="button" class="agenda-chip-btn icon-only-mobile" id="btnToggleAgendaCalendar"
-                                aria-expanded="false" title="Abrir calendario mensual para navegar semanas" aria-label="Abrir calendario mensual para navegar semanas"><span class="btn-icon-glyph" aria-hidden="true">📅</span><span class="btn-responsive-text">Calendario</span></button>
                         </div>
                         <div class="agenda-view-controls">
                             <button type="button" class="agenda-chip-btn" id="btnToggleWeekend">Mon - Fri Only</button>
@@ -1773,7 +1771,7 @@
                         </div>
                     </div>
 
-                    <div class="agenda-calendar-popover" id="agendaCalendarDropdown" hidden aria-label="Calendario mensual de agenda">
+                    <div class="agenda-calendar-panel agenda-calendar-popover" id="agendaCalendarDropdown" aria-label="Calendario mensual de agenda">
                         <div class="agenda-cal-header">
                             <button type="button" class="agenda-nav-btn" id="btnAgendaCalPrevMonth" aria-label="Mes anterior">◀</button>
                             <strong id="agendaCalMonthLabel" class="agenda-cal-month-title">--</strong>
@@ -1821,8 +1819,32 @@
                     <div class="agenda-day-tabs" id="agendaDayTabs" hidden></div>
                     <div class="agenda-day-board" id="agendaDayBoard" hidden></div>
 
-                    <div class="agenda-table-scroll" id="agendaTableScroll">
-                        <div class="agenda-week-board" id="agendaWeekBoard"></div>
+                    <div class="agenda-grid-sections" id="agendaGridSections">
+                        <section class="agenda-board-section agenda-personal-section" id="agendaPersonalSection" aria-labelledby="agendaPersonalSectionTitle">
+                            <div class="agenda-section-head">
+                                <div class="agenda-section-title-wrap">
+                                    <h2 class="agenda-section-title" id="agendaPersonalSectionTitle">👤 Personal Agenda</h2>
+                                    <span class="agenda-section-count" id="agendaPersonalCountBadge">0</span>
+                                </div>
+                                <span class="agenda-section-sub muted-text">Morning · Afternoon · Night</span>
+                            </div>
+                            <div class="agenda-table-scroll" id="agendaTableScroll">
+                                <div class="agenda-week-board" id="agendaWeekBoard"></div>
+                            </div>
+                        </section>
+
+                        <section class="agenda-board-section agenda-school-section" id="agendaSchoolSection" aria-labelledby="agendaSchoolSectionTitle">
+                            <div class="agenda-section-head">
+                                <div class="agenda-section-title-wrap">
+                                    <h2 class="agenda-section-title" id="agendaSchoolSectionTitle">🎓 School / University</h2>
+                                    <span class="agenda-section-count" id="agendaSchoolCountBadge">0</span>
+                                </div>
+                                <span class="agenda-section-sub muted-text">Classes, exams &amp; academic tasks</span>
+                            </div>
+                            <div class="agenda-table-scroll" id="agendaSchoolTableScroll">
+                                <div class="agenda-week-board agenda-school-week-board" id="agendaSchoolWeekBoard"></div>
+                            </div>
+                        </section>
                     </div>
                 </div>
             </section>
@@ -3637,6 +3659,40 @@
                     <button type="button" class="btn-submit btn-modal-save" id="btnConfirmMapPickerLocation">✅ Confirm This Location</button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Modal to confirm new time after dragging an Agenda activity to another day -->
+    <div class="modal-overlay" id="agendaDropTimeModal" hidden aria-modal="true" role="dialog"
+        aria-labelledby="agendaDropTimeModalTitle">
+        <div class="modal-card modal-card-compact agenda-drop-time-modal-card">
+            <div class="modal-header">
+                <h3 id="agendaDropTimeModalTitle">🕒 Confirm New Time</h3>
+                <button type="button" class="modal-close-btn" id="btnCloseAgendaDropTimeModal" aria-label="Close">✕</button>
+            </div>
+            <form id="agendaDropTimeForm" autocomplete="off">
+                <div class="agenda-drop-summary-box" id="agendaDropSummaryBox">
+                    <strong class="agenda-drop-item-title" id="agendaDropItemTitle">--</strong>
+                    <span class="agenda-drop-date-change" id="agendaDropDateChange">--</span>
+                    <span class="agenda-drop-cat-badge" id="agendaDropCatBadge"></span>
+                </div>
+                <div class="form-group">
+                    <label for="agendaDropTimeInput">New time:</label>
+                    <input type="time" id="agendaDropTimeInput" required>
+                </div>
+                <div class="form-group" id="agendaDropBlockGroup">
+                    <label for="agendaDropBlockSelect">Personal time block:</label>
+                    <select id="agendaDropBlockSelect">
+                        <option value="manana">☕ Morning</option>
+                        <option value="tarde">☀️ Afternoon</option>
+                        <option value="noche">🌙 Night</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-cancel" id="btnCancelAgendaDropTime">Cancel</button>
+                    <button type="submit" class="btn-submit btn-modal-save" id="btnConfirmAgendaDropTime">Confirm Change</button>
+                </div>
+            </form>
         </div>
     </div>
 

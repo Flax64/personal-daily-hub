@@ -1961,7 +1961,24 @@
         ['Could not decrypt journal file with that password.', 'No se pudo descifrar el archivo del diario con esa contraseña.'],
         ['Decrypted file is not a valid Word (.docx) document.', 'El archivo descifrado no es un documento Word (.docx) válido.'],
         ['Configure or enter a download password first.', 'Configura o ingresa primero una contraseña de descarga.'],
-        ['Download password must be between 8 and 128 characters.', 'La contraseña de descarga debe tener entre 8 y 128 caracteres.']
+        ['Download password must be between 8 and 128 characters.', 'La contraseña de descarga debe tener entre 8 y 128 caracteres.'],
+        ['👤 Personal Agenda', '👤 Agenda Personal'],
+        ['School / University', 'Escuela / Universidad'],
+        ['Morning · Afternoon · Night', 'Mañana · Tarde · Noche'],
+        ['Classes, exams & academic tasks', 'Clases, exámenes y tareas académicas'],
+        ['No personal activities in this block', 'Sin actividades personales en este bloque'],
+        ['No university activities for this day', 'Sin actividades escolares para este día'],
+        ['Add school activity', 'Agregar actividad escolar'],
+        ['Drag to another day', 'Arrastrar a otro día'],
+        ['🕒 Confirm New Time', '🕒 Confirmar nueva hora'],
+        ['New time:', 'Nueva hora:'],
+        ['Personal time block:', 'Bloque personal:'],
+        ['Confirm Change', 'Confirmar cambio'],
+        ['Cannot move an activity to an earlier date.', 'No puedes mover una actividad hacia una fecha anterior.'],
+        ['Drop this activity inside its matching section or on the calendar.', 'Suelta esta actividad dentro de su sección correspondiente o en el calendario.'],
+        ['Choose a valid time (HH:MM).', 'Elige una hora válida (HH:MM).'],
+        ['Activity rescheduled!', '¡Actividad reagendada!'],
+        ['Failed to reschedule activity', 'No se pudo reagendar la actividad']
     ];
 
     var EN_FROM_KEY = new Map();
@@ -2211,7 +2228,7 @@
 
     function agendaBlockLabel(blockKey) {
         if (blockKey === 'manana') return pick('Morning', 'Mañana');
-        if (blockKey === 'cole') return pick('At School / Classes', 'En Escuela / Clases');
+        if (blockKey === 'cole' || blockKey === 'escuela') return pick('At School / Classes', 'En Escuela / Clases');
         if (blockKey === 'tarde') return pick('Afternoon', 'Tarde');
         if (blockKey === 'noche') return pick('Night', 'Noche');
         return String(blockKey || '');
@@ -2500,6 +2517,13 @@
                 'Journal decrypted and downloaded (' + m[1] + ').',
                 'Diario descifrado y descargado (' + m[1] + ').'
             );
+        }
+        if ((m = trim.match(/^(\d+)\s+(activity|activities|actividad|actividades)$/i))) {
+            var actCount = Number(m[1]);
+            return m[1] + ' ' + (actCount === 1 ? pick('activity', 'actividad') : pick('activities', 'actividades'));
+        }
+        if ((m = trim.match(/^(?:Failed to reschedule activity|No se pudo reagendar la actividad):\s*(.+)$/i))) {
+            return pick('Failed to reschedule activity: ', 'No se pudo reagendar la actividad: ') + translateText(m[1]);
         }
         return null;
     }
