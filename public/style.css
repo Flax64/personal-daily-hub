@@ -11779,3 +11779,293 @@ input[type="password"] {
         margin-left: auto;
     }
 }
+
+/* =========================================================================
+   AGENDA V3: SEPARACIÓN PERSONAL VS ESCUELA, CALENDARIO FIJO & DRAG & DROP
+   ========================================================================= */
+.agenda-calendar-panel {
+    margin: 0 0 16px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--border-color, rgba(148, 163, 184, 0.28));
+    background: var(--bg-surface-alt, #f8fafc);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.agenda-calendar-panel .agenda-cal-grid {
+    gap: 4px;
+}
+
+.agenda-calendar-panel .agenda-cal-day {
+    min-height: 36px;
+    padding: 3px 2px;
+    font-size: 0.78rem;
+    min-width: 0;
+    transition: transform 0.14s ease, opacity 0.14s ease;
+}
+
+.agenda-grid-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+    min-width: 0;
+}
+
+.agenda-grid-sections[hidden],
+.agenda-board-section[hidden] {
+    display: none !important;
+}
+
+.agenda-board-section,
+.agenda-day-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    min-width: 0;
+}
+
+.agenda-day-section + .agenda-day-section {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color, #e2e8f0);
+}
+
+.agenda-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--bg-surface-alt, #f8fafc);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-left: 4px solid var(--brand-primary);
+}
+
+.agenda-section-head.is-compact {
+    padding: 8px 12px;
+}
+
+.agenda-section-title-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.agenda-section-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 800;
+    color: var(--text-main);
+    letter-spacing: 0.01em;
+}
+
+.agenda-section-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 700;
+    background: var(--brand-primary-soft);
+    color: var(--brand-primary);
+    border: 1px solid var(--brand-primary-border);
+    white-space: nowrap;
+}
+
+.agenda-section-sub {
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.agenda-school-week-board .agenda-school-cell {
+    min-height: 136px;
+}
+
+.agenda-block-header.is-school-block-header {
+    border-left: 3px solid var(--brand-primary);
+}
+
+/* Drag & Drop Handle, Ghost & Drop Zone Feedback */
+.agenda-drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 4px;
+    border-radius: 5px;
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1;
+    color: var(--text-muted, #64748b);
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    flex-shrink: 0;
+    opacity: 0.78;
+    transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.agenda-drag-handle:hover,
+.agenda-drag-handle:focus-visible {
+    opacity: 1;
+    background: rgba(59, 130, 246, 0.14);
+    color: var(--brand-primary);
+}
+
+.agenda-drag-handle:active {
+    cursor: grabbing;
+}
+
+body.agenda-dragging-active {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.agenda-item.is-dragging {
+    opacity: 0.42;
+    transform: scale(0.98);
+}
+
+.agenda-drag-ghost {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 2400;
+    pointer-events: none;
+    max-width: min(260px, 78vw);
+    padding: 7px 11px;
+    border-radius: 10px;
+    background: var(--brand-primary);
+    color: #ffffff;
+    font-size: 0.8rem;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.36);
+    opacity: 0.95;
+    will-change: transform;
+}
+
+.is-drop-valid {
+    outline: 2px dashed var(--brand-primary);
+    outline-offset: -2px;
+    transition: transform 0.14s ease, opacity 0.14s ease;
+}
+
+.is-drop-valid.is-drop-hover {
+    outline: 2px solid #10b981;
+    background-color: rgba(16, 185, 129, 0.14) !important;
+    transform: scale(1.01);
+}
+
+.is-drop-invalid {
+    cursor: not-allowed !important;
+    opacity: 0.56;
+    transition: opacity 0.14s ease;
+}
+
+.is-drop-invalid.is-drop-hover {
+    outline: 2px dashed rgba(239, 68, 68, 0.72);
+    outline-offset: -2px;
+}
+
+/* Drop Time Confirmation Modal */
+.agenda-drop-time-modal-card {
+    max-width: 430px;
+}
+
+.agenda-drop-summary-box {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+    border-radius: 10px;
+    background: var(--bg-surface-alt, #f8fafc);
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-left: 3px solid var(--brand-primary);
+}
+
+.agenda-drop-item-title {
+    font-size: 0.94rem;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+}
+
+.agenda-drop-date-change {
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: var(--brand-primary);
+}
+
+.agenda-drop-cat-badge {
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+:root[data-theme="dark"] .agenda-calendar-panel,
+:root[data-theme="dark"] .agenda-section-head,
+:root[data-theme="dark"] .agenda-drop-summary-box {
+    background: #0f172a;
+    border-color: #334155;
+}
+
+:root[data-theme="dark"] .agenda-section-head,
+:root[data-theme="dark"] .agenda-drop-summary-box {
+    border-left-color: var(--brand-primary);
+}
+
+:root[data-theme="dark"] .agenda-section-count {
+    color: #93c5fd;
+}
+
+@media (max-width: 640px) {
+    .agenda-calendar-panel {
+        padding: 8px 10px;
+    }
+
+    .agenda-calendar-panel .agenda-cal-day {
+        min-height: 32px;
+        font-size: 0.74rem;
+    }
+
+    .agenda-calendar-panel .agenda-cal-legend {
+        gap: 6px 10px;
+        font-size: 0.7rem;
+    }
+
+    .agenda-section-head {
+        padding: 9px 12px;
+    }
+
+    .agenda-section-title {
+        font-size: 0.94rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .agenda-drag-handle,
+    .agenda-item.is-dragging,
+    .agenda-drag-ghost,
+    .is-drop-valid,
+    .is-drop-valid.is-drop-hover,
+    .is-drop-invalid,
+    .agenda-calendar-panel .agenda-cal-day {
+        transition: none !important;
+        transform: none !important;
+    }
+}

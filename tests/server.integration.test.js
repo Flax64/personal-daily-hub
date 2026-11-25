@@ -1734,6 +1734,98 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(postponeTargetDate.status, 200);
         assert.strictEqual(JSON.parse(postponeTargetDate.body).fecha, '2026-11-25');
 
+        // 3c. Drag & Drop preventBackdate en PUT /api/update-agenda/:id (permite futuro + nueva hora, rechaza fecha anterior sin modificar)
+        const addDaysIso = (delta) => {
+            const d = new Date(Date.now() + (delta * 24 * 60 * 60 * 1000));
+            return d.toISOString().slice(0, 10);
+        };
+        const dndSourceDate = addDaysIso(2);
+        const dndFutureDate = addDaysIso(5);
+        const dndEarlierDate = addDaysIso(1);
+
+        const dndCreated = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-dnd-create-1' },
+            body: {
+                fecha: dndSourceDate,
+                bloque: 'escuela',
+                hora: '10:00',
+                titulo: 'Entrega Arquitectura Cloud',
+                descripcion: 'Laboratorio Sistemas',
+                tipo: 'tarea',
+                categoria: 'universidad',
+                materia_nombre: 'Arquitectura de Computadoras',
+                estado: 'in_progress',
+                recordatorio_min: 30
+            }
+        });
+        assert.strictEqual(dndCreated.status, 201);
+        const dndItem = JSON.parse(dndCreated.body).item;
+        assert.ok(dndItem && dndItem.id);
+
+        const dndMoveForward = await request({
+            port,
+            method: 'PUT',
+            reqPath: `/api/update-agenda/${dndItem.id}`,
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: dndFutureDate,
+                bloque: 'escuela',
+                hora: '16:45',
+                titulo: 'Entrega Arquitectura Cloud',
+                descripcion: 'Laboratorio Sistemas',
+                tipo: 'tarea',
+                categoria: 'universidad',
+                materia_nombre: 'Arquitectura de Computadoras',
+                estado: 'in_progress',
+                recordatorio_min: 30,
+                preventBackdate: true
+            }
+        });
+        assert.strictEqual(dndMoveForward.status, 200);
+        const dndMovedBody = JSON.parse(dndMoveForward.body);
+        assert.strictEqual(dndMovedBody.item.fecha, dndFutureDate);
+        assert.strictEqual(dndMovedBody.item.hora, '16:45');
+        assert.strictEqual(dndMovedBody.item.categoria, 'universidad');
+        assert.strictEqual(dndMovedBody.item.materia_nombre, 'Arquitectura de Computadoras');
+        assert.strictEqual(dndMovedBody.item.estado, 'in_progress');
+
+        const dndMoveBackwards = await request({
+            port,
+            method: 'PUT',
+            reqPath: `/api/update-agenda/${dndItem.id}`,
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: dndEarlierDate,
+                bloque: 'escuela',
+                hora: '09:15',
+                titulo: 'Entrega Arquitectura Cloud',
+                descripcion: 'Laboratorio Sistemas',
+                tipo: 'tarea',
+                categoria: 'universidad',
+                materia_nombre: 'Arquitectura de Computadoras',
+                estado: 'in_progress',
+                recordatorio_min: 30,
+                preventBackdate: true
+            }
+        });
+        assert.strictEqual(dndMoveBackwards.status, 400);
+
+        const dndVerifyUnchanged = await request({
+            port,
+            reqPath: `/api/get-agenda?begin=${dndEarlierDate}&end=${dndFutureDate}`,
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(dndVerifyUnchanged.status, 200);
+        const persistedDnd = JSON.parse(dndVerifyUnchanged.body).find((r) => r.id === dndItem.id);
+        assert.ok(persistedDnd, 'La actividad debe seguir existiendo en RegistrosAgenda');
+        assert.strictEqual(persistedDnd.fecha, dndFutureDate, 'Un intento rechazado con preventBackdate no debe alterar la fecha');
+        assert.strictEqual(persistedDnd.hora, '16:45', 'Un intento rechazado con preventBackdate no debe alterar la hora');
+        assert.strictEqual(persistedDnd.categoria, 'universidad');
+        assert.strictEqual(persistedDnd.materia_nombre, 'Arquitectura de Computadoras');
+
         // 4. Configuración: verifica valores por defecto (English OFF, Madrugada OFF, Desktop OFF)
         const getDefaults = await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } });
         assert.strictEqual(getDefaults.status, 200);
@@ -2494,15 +2586,29 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
 
         // 9. Flujo ntfy OK (action=ack) y reemplazo automático de etapas previas en traslado a clases
         const candidateTzs = [
-            'UTC', 'America/Monterrey', 'Europe/London', 'Asia/Tokyo',
-            'Pacific/Auckland', 'America/Anchorage', 'America/Sao_Paulo', 'Asia/Kolkata'
+            'UTC', 'America/Monterrey', 'Europe/London', 'Europe/Berlin', 'Asia/Dubai',
+            'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Tokyo',
+            'Pacific/Auckland', 'America/Anchorage', 'America/Los_Angeles', 'America/Sao_Paulo'
         ];
-        const getTzHour = (tz) => Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+        const getTzMinOfDay = (tz) => {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: tz,
+                hour: '2-digit',
+                minute: '2-digit',
+                hourCycle: 'h23'
+            }).formatToParts(new Date());
+            const hr = Number(parts.find((p) => p.type === 'hour')?.value || 0);
+            const mn = Number(parts.find((p) => p.type === 'minute')?.value || 0);
+            return (hr * 60) + mn;
+        };
         const safeMiddayTz =
-            candidateTzs.find((tz) => [10, 11, 15, 16].includes(getTzHour(tz))) ||
             candidateTzs.find((tz) => {
-                const hr = getTzHour(tz);
-                return hr >= 8 && hr <= 20;
+                const m = getTzMinOfDay(tz);
+                return (m >= 9 * 60 + 20 && m <= 12 * 60 + 10) || (m >= 15 * 60 + 20 && m <= 16 * 60 + 40);
+            }) ||
+            candidateTzs.find((tz) => {
+                const m = getTzMinOfDay(tz);
+                return m >= 8 * 60 && m <= 20 * 60;
             }) ||
             'UTC';
         const prevSettingsForAck = JSON.parse((await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } })).body).settings || {};

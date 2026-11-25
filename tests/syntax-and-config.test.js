@@ -1438,10 +1438,28 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
         assert.equal(sandbox.extractLyricsForActiveLanguage(fullMulti, 'original').langCode, 'original');
         assert.equal(sandbox.extractLyricsForActiveLanguage(fullMulti, 'all').langCode, 'all');
 
-        // Regresión Planificador Semanal V2: orden Título/Descripción arriba, Posponer, Skip, Repeticiones y Calendarios
+        // Regresión Planificador Semanal V2/V3: orden Título/Descripción arriba, Calendario fijo siempre visible, Personal vs Escuela separados y Drag & Drop con hora
+        assert.equal(
+            indexHtml.includes('id="btnToggleAgendaCalendar"'),
+            false,
+            'public/index.html debe eliminar el botón #btnToggleAgendaCalendar'
+        );
+        const fixedCalMatch = indexHtml.match(/<div[^>]*\bid="agendaCalendarDropdown"[^>]*>/i);
+        assert.ok(fixedCalMatch, 'public/index.html debe incluir #agendaCalendarDropdown');
+        assert.equal(
+            /\bhidden\b/i.test(fixedCalMatch[0]),
+            false,
+            '#agendaCalendarDropdown debe mostrarse fijo y siempre visible (sin atributo hidden)'
+        );
+
         for (const reqAgendaSel of [
-            'id="btnToggleAgendaCalendar"',
             'id="agendaCalendarDropdown"',
+            'id="agendaPersonalSection"',
+            'id="agendaSchoolSection"',
+            'id="agendaSchoolWeekBoard"',
+            'id="agendaDropTimeModal"',
+            'id="agendaDropTimeInput"',
+            'id="btnConfirmAgendaDropTime"',
             'id="agendaModalQuickDateBar"',
             'id="agendaModalCalendarBox"',
             'id="agendaRepeatMode"',
@@ -1459,13 +1477,40 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
         assert.ok(actPos > modalStartIdx && descPos > actPos && datePos > descPos && repModePos > datePos,
             'En #agendaModal, Título y Descripción deben aparecer antes que Fecha y Repeticiones');
 
-        for (const cssCls of ['.agenda-item.is-skipped', '.agenda-calendar-popover', '.agenda-postpone-popover', '.agenda-repeat-section']) {
+        for (const cssCls of [
+            '.agenda-item.is-skipped',
+            '.agenda-calendar-popover',
+            '.agenda-calendar-panel',
+            '.agenda-postpone-popover',
+            '.agenda-repeat-section',
+            '.agenda-drag-handle',
+            '.is-drop-valid',
+            '.is-drop-invalid',
+            'prefers-reduced-motion'
+        ]) {
             assert.ok(styleCss.includes(cssCls), `public/style.css debe definir ${cssCls}`);
         }
         assert.ok(frontendJs.includes('posponerAgendaItem') && frontendJs.includes('openAgendaPostponePopover'));
+        assert.ok(
+            frontendJs.includes('function canMoveAgendaItemToDate(') && frontendJs.includes('function cleanupAgendaDragState('),
+            'public/frontend.js debe definir canMoveAgendaItemToDate y cleanupAgendaDragState'
+        );
 
         const agendaSandbox = {};
         vm.runInNewContext(extractFnBlock('shiftYmdDateClient', 'toggleAgendaItem'), agendaSandbox);
+        assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-25', '2026-11-24', '2026-11-24'), false, 'No debe permitir mover hacia atrás respecto a la fecha origen');
+        assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-20', '2026-11-22', '2026-11-24'), false, 'No debe permitir mover hacia una fecha pasada respecto a hoy');
+        assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-24', '2026-11-24', '2026-11-24'), false, 'No debe mover al mismo día sin cambio de bloque personal');
+        assert.equal(
+            agendaSandbox.canMoveAgendaItemToDate('2026-11-24', '2026-11-24', '2026-11-24', {
+                categoria: 'personal',
+                sourceBlock: 'manana',
+                targetBlock: 'tarde'
+            }),
+            true,
+            'Debe permitir cambiar de bloque personal (ej. Mañana -> Tarde) en fecha actual o futura'
+        );
+        assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-24', '2026-11-27', '2026-11-24'), true, 'Debe permitir mover hacia días futuros');
         assert.deepEqual(
             Array.from(agendaSandbox.computeAgendaRepeatDates({
                 startDate: '2026-11-18',

@@ -2212,6 +2212,8 @@ if (appShell) {
         if (e.key === 'Escape') {
             setMobileMenuOpen(false);
             cerrarAgendaModal();
+            if (typeof closeAgendaDropTimeModal === 'function') closeAgendaDropTimeModal();
+            if (typeof cleanupAgendaDragState === 'function') cleanupAgendaDragState();
             closeE2eeModal(null);
             closeConfirmDialog(false);
         }
@@ -11378,6 +11380,33 @@ const AGENDA_BLOQUES = [
     }
 ];
 
+const AGENDA_PERSONAL_BLOQUES = AGENDA_BLOQUES.filter(b => b.id !== 'cole');
+const AGENDA_SCHOOL_BLOQUE = AGENDA_BLOQUES.find(b => b.id === 'cole') || {
+    id: 'cole',
+    label: 'School / University',
+    defaultHora: '10:00',
+    svg: ''
+};
+const AGENDA_DROP_BLOCK_DEFAULTS = {
+    manana: '09:00',
+    tarde: '15:00',
+    noche: '20:00'
+};
+
+function resolvePersonalAgendaBlock(item) {
+    const raw = String(item?.bloque || '').trim().toLowerCase();
+    if (raw === 'manana' || raw === 'tarde' || raw === 'noche') return raw;
+    return inferAgendaBlockClient(item?.hora || '09:00', 'personal');
+}
+
+function sortAgendaItemsByTime(list) {
+    return (Array.isArray(list) ? list.slice() : []).sort((a, b) => {
+        const cmp = String(a?.hora || '').localeCompare(String(b?.hora || ''));
+        if (cmp !== 0) return cmp;
+        return (Number(a?.id) || 0) - (Number(b?.id) || 0);
+    });
+}
+
 const AGENDA_DIAS = [
     { key: 'lun', nombre: 'Monday', corto: 'Mon', offset: 0 },
     { key: 'mar', nombre: 'Tuesday', corto: 'Tue', offset: 1 },
@@ -11598,6 +11627,19 @@ function crearElementoActividad(item) {
 
     const row = document.createElement('div');
     row.className = `agenda-item${isDone ? ' is-done' : ''}${isSkipped ? ' is-skipped' : ''}`;
+    if (item.id !== undefined && item.id !== null) {
+        row.dataset.agendaId = String(item.id);
+    }
+    row.dataset.date = String(item.fecha || '');
+    row.dataset.categoria = categoria;
+
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'agenda-drag-handle';
+    dragHandle.setAttribute('role', 'button');
+    dragHandle.tabIndex = 0;
+    dragHandle.title = tUi('Drag to another day', 'Arrastrar a otro día');
+    dragHandle.setAttribute('aria-label', tUi('Drag to another day', 'Arrastrar a otro día'));
+    dragHandle.textContent = '⋮⋮';
 
     const checkBtn = document.createElement('button');
     checkBtn.type = 'button';
@@ -11743,17 +11785,27 @@ function crearElementoActividad(item) {
     delBtn.addEventListener('click', () => eliminarAgendaItem(item.id, uiRefs));
 
     actions.append(postponeBtn, skipBtn, editBtn, delBtn);
-    topLeft.append(checkBtn, timePill);
+    topLeft.append(dragHandle, checkBtn, timePill);
     topRow.append(topLeft, actions);
     row.append(topRow, content);
+    if (typeof wireAgendaCardDrag === 'function') {
+        wireAgendaCardDrag(row, dragHandle, item);
+    }
     return row;
 }
 
 function renderAgendaBoard() {
     const weekBoard = document.getElementById('agendaWeekBoard');
+    const schoolWeekBoard = document.getElementById('agendaSchoolWeekBoard');
+    const gridSections = document.getElementById('agendaGridSections');
+    const personalSection = document.getElementById('agendaPersonalSection');
+    const schoolSection = document.getElementById('agendaSchoolSection');
+    const personalCountBadge = document.getElementById('agendaPersonalCountBadge');
+    const schoolCountBadge = document.getElementById('agendaSchoolCountBadge');
     const dayTabs = document.getElementById('agendaDayTabs');
     const dayBoard = document.getElementById('agendaDayBoard');
     const tableScroll = document.getElementById('agendaTableScroll');
+    const schoolTableScroll = document.getElementById('agendaSchoolTableScroll');
     const weekLabel = document.getElementById('agendaWeekLabel');
     const weekStats = document.getElementById('agendaWeekStats');
     const btnToggleWeekend = document.getElementById('btnToggleWeekend');
@@ -11788,12 +11840,33 @@ function renderAgendaBoard() {
     const visibleDatesSet = new Set(diasVisibles.map(d => d.fecha));
     const filteredItems = agendaState.items.filter(matchesAgendaFilters);
     const visibleItems = filteredItems.filter(i => visibleDatesSet.has(i.fecha));
+    const visibleUniItems = visibleItems.filter(i => (i.categoria || 'personal') === 'universidad');
+    const visiblePersonalItems = visibleItems.filter(i => (i.categoria || 'personal') !== 'universidad');
     const doneCount = visibleItems.filter(i => getAgendaItemStatus(i) === 'done').length;
     const inProgCount = visibleItems.filter(i => getAgendaItemStatus(i) === 'in_progress').length;
     const skippedCount = visibleItems.filter(i => getAgendaItemStatus(i) === 'skipped').length;
     const todoCount = visibleItems.length - doneCount - inProgCount - skippedCount;
-    const uniCount = visibleItems.filter(i => (i.categoria || 'personal') === 'universidad').length;
-    const perCount = visibleItems.length - uniCount;
+    const uniCount = visibleUniItems.length;
+    const perCount = visiblePersonalItems.length;
+
+    const hasCourseFilter = Boolean(agendaState.filterCourse && agendaState.filterCategory !== 'personal');
+    const showPersonalSection = agendaState.filterCategory === 'all'
+        ? !hasCourseFilter
+        : agendaState.filterCategory === 'personal';
+    const showSchoolSection = agendaState.filterCategory === 'all'
+        ? true
+        : agendaState.filterCategory === 'universidad';
+
+    if (personalCountBadge) {
+        personalCountBadge.textContent = perCount === 1
+            ? tUi('1 activity', '1 actividad')
+            : tUi(`${perCount} activities`, `${perCount} actividades`);
+    }
+    if (schoolCountBadge) {
+        schoolCountBadge.textContent = uniCount === 1
+            ? tUi('1 activity', '1 actividad')
+            : tUi(`${uniCount} activities`, `${uniCount} actividades`);
+    }
 
     if (weekStats) {
         weekStats.textContent = visibleItems.length
@@ -11820,28 +11893,46 @@ function renderAgendaBoard() {
     const isDayLayout = agendaState.layoutMode === 'day';
     dayTabs.hidden = !isDayLayout;
     dayBoard.hidden = !isDayLayout;
-    tableScroll.hidden = isDayLayout;
+    if (gridSections) {
+        gridSections.hidden = isDayLayout;
+    }
+    tableScroll.hidden = isDayLayout || !showPersonalSection;
+    if (schoolTableScroll) {
+        schoolTableScroll.hidden = isDayLayout || !showSchoolSection;
+    }
+    if (personalSection) {
+        personalSection.hidden = isDayLayout || !showPersonalSection;
+    }
+    if (schoolSection) {
+        schoolSection.hidden = isDayLayout || !showSchoolSection;
+    }
 
-    const defaultModalCategory = agendaState.filterCategory !== 'all'
-        ? agendaState.filterCategory
-        : (currentSettings && currentSettings.defaultAgendaCategory && currentSettings.defaultAgendaCategory !== 'all'
-            ? currentSettings.defaultAgendaCategory
-            : 'personal');
     const defaultModalType = agendaState.filterType !== 'all' ? agendaState.filterType : 'evento';
+    const schoolTitleLoc = tUi('School / University', 'Escuela / Universidad');
 
-    // 1. Day View (mobile / focus mode)
+    if (typeof renderAgendaHeaderCalendar === 'function') {
+        renderAgendaHeaderCalendar(false);
+    }
+
+    // 1. Day View (mobile / focus mode): Personal (Morning / Afternoon / Night) above, School / University below
     if (isDayLayout) {
         dayTabs.innerHTML = '';
         dayTabs.style.setProperty('--agenda-cols', String(diasVisibles.length));
         dayTabs.classList.toggle('cols-5', diasVisibles.length === 5);
         diasVisibles.forEach(dia => {
-            const count = filteredItems.filter(i => i.fecha === dia.fecha).length;
+            const count = filteredItems.filter(i => {
+                if (i.fecha !== dia.fecha) return false;
+                const isUni = (i.categoria || 'personal') === 'universidad';
+                return isUni ? showSchoolSection : showPersonalSection;
+            }).length;
             const dayShortLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaDayName === 'function')
                 ? window.DailyHubI18n.agendaDayName(dia.nombre, true)
                 : dia.corto;
             const tab = document.createElement('button');
             tab.type = 'button';
             tab.className = `agenda-day-tab day-${dia.key}${dia.fecha === agendaState.selectedDate ? ' active' : ''}`;
+            tab.dataset.dropZone = 'day-tab';
+            tab.dataset.date = dia.fecha;
             tab.innerHTML = `
                 <span class="tab-day">${dayShortLoc}${dia.fecha === hoyStr ? ' •' : ''}</span>
                 <span class="tab-date">${dia.dateObj.toLocaleDateString(tLocale(), { month: 'short', day: 'numeric' })}</span>
@@ -11857,124 +11948,282 @@ function renderAgendaBoard() {
         dayBoard.innerHTML = '';
         const activeDay = diasVisibles.find(d => d.fecha === agendaState.selectedDate) || diasVisibles[0];
 
-        AGENDA_BLOQUES.forEach(bloque => {
-            const blockItems = filteredItems.filter(
-                i => i.fecha === activeDay.fecha && i.bloque === bloque.id
+        if (showPersonalSection) {
+            const dayPersonalItems = filteredItems.filter(
+                i => i.fecha === activeDay.fecha && (i.categoria || 'personal') !== 'universidad'
             );
+            const personalWrap = document.createElement('div');
+            personalWrap.className = 'agenda-day-section agenda-day-personal-section';
 
-            const bloqueLabelLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaBlockLabel === 'function')
-                ? window.DailyHubI18n.agendaBlockLabel(bloque.id)
-                : bloque.label;
+            const secHead = document.createElement('div');
+            secHead.className = 'agenda-section-head is-compact';
+            secHead.innerHTML = `
+                <div class="agenda-section-title-wrap">
+                    <h3 class="agenda-section-title">${tUi('👤 Personal Agenda', '👤 Agenda Personal')}</h3>
+                    <span class="agenda-section-count">${dayPersonalItems.length}</span>
+                </div>
+            `;
+            personalWrap.appendChild(secHead);
+
+            AGENDA_PERSONAL_BLOQUES.forEach(bloque => {
+                const blockItems = sortAgendaItemsByTime(
+                    dayPersonalItems.filter(i => resolvePersonalAgendaBlock(i) === bloque.id)
+                );
+
+                const bloqueLabelLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaBlockLabel === 'function')
+                    ? window.DailyHubI18n.agendaBlockLabel(bloque.id)
+                    : bloque.label;
+
+                const card = document.createElement('div');
+                card.className = `agenda-mobile-block-card day-${activeDay.key}`;
+                card.dataset.dropZone = 'personal-cell';
+                card.dataset.date = activeDay.fecha;
+                card.dataset.bloque = bloque.id;
+                card.dataset.categoria = 'personal';
+
+                const head = document.createElement('div');
+                head.className = 'agenda-mobile-block-head';
+                head.innerHTML = `
+                    <div class="agenda-mobile-block-head-left">
+                        ${bloque.svg}
+                        <span>${bloqueLabelLoc}</span>
+                    </div>
+                    <span>${blockItems.length}</span>
+                `;
+
+                const body = document.createElement('div');
+                body.className = 'agenda-mobile-block-body';
+
+                if (!blockItems.length) {
+                    const empty = document.createElement('p');
+                    empty.className = 'agenda-empty-block';
+                    empty.textContent = tUi('No personal activities in this block', 'Sin actividades personales en este bloque');
+                    body.appendChild(empty);
+                } else {
+                    blockItems.forEach(item => body.appendChild(crearElementoActividad(item)));
+                }
+
+                const addBtn = document.createElement('button');
+                addBtn.type = 'button';
+                addBtn.className = 'agenda-cell-add';
+                addBtn.textContent = `+ ${tUi('Add to', 'Agregar a')} ${bloqueLabelLoc.toLowerCase()}`;
+                addBtn.addEventListener('click', () => abrirAgendaModal({
+                    fecha: activeDay.fecha,
+                    bloque: bloque.id,
+                    hora: bloque.defaultHora,
+                    categoria: 'personal',
+                    tipo: defaultModalType
+                }));
+
+                body.appendChild(addBtn);
+                card.append(head, body);
+                personalWrap.appendChild(card);
+            });
+
+            dayBoard.appendChild(personalWrap);
+        }
+
+        if (showSchoolSection) {
+            const daySchoolItems = sortAgendaItemsByTime(
+                filteredItems.filter(
+                    i => i.fecha === activeDay.fecha && (i.categoria || 'personal') === 'universidad'
+                )
+            );
+            const schoolWrap = document.createElement('div');
+            schoolWrap.className = 'agenda-day-section agenda-day-school-section';
+
+            const secHead = document.createElement('div');
+            secHead.className = 'agenda-section-head is-compact';
+            secHead.innerHTML = `
+                <div class="agenda-section-title-wrap">
+                    <h3 class="agenda-section-title">${tUi('🎓 School / University', '🎓 Escuela / Universidad')}</h3>
+                    <span class="agenda-section-count">${daySchoolItems.length}</span>
+                </div>
+            `;
+            schoolWrap.appendChild(secHead);
 
             const card = document.createElement('div');
-            card.className = `agenda-mobile-block-card day-${activeDay.key}`;
+            card.className = `agenda-mobile-block-card is-school-card day-${activeDay.key}`;
+            card.dataset.dropZone = 'school-cell';
+            card.dataset.date = activeDay.fecha;
+            card.dataset.bloque = 'escuela';
+            card.dataset.categoria = 'universidad';
 
             const head = document.createElement('div');
             head.className = 'agenda-mobile-block-head';
             head.innerHTML = `
                 <div class="agenda-mobile-block-head-left">
-                    ${bloque.svg}
-                    <span>${bloqueLabelLoc}</span>
+                    ${AGENDA_SCHOOL_BLOQUE.svg}
+                    <span>${schoolTitleLoc}</span>
                 </div>
-                <span>${blockItems.length}</span>
+                <span>${daySchoolItems.length}</span>
             `;
 
             const body = document.createElement('div');
             body.className = 'agenda-mobile-block-body';
 
-            if (!blockItems.length) {
+            if (!daySchoolItems.length) {
                 const empty = document.createElement('p');
                 empty.className = 'agenda-empty-block';
-                empty.textContent = tUi('No activities matching active filters', 'Sin actividades con los filtros activos');
+                empty.textContent = tUi('No university activities for this day', 'Sin actividades escolares para este día');
                 body.appendChild(empty);
             } else {
-                appendCategorizedAgendaItems(body, blockItems);
+                daySchoolItems.forEach(item => body.appendChild(crearElementoActividad(item)));
             }
 
             const addBtn = document.createElement('button');
             addBtn.type = 'button';
             addBtn.className = 'agenda-cell-add';
-            addBtn.textContent = `+ ${tUi('Add to', 'Agregar a')} ${bloqueLabelLoc.toLowerCase()}`;
+            addBtn.textContent = `+ ${tUi('Add school activity', 'Agregar actividad escolar')}`;
             addBtn.addEventListener('click', () => abrirAgendaModal({
                 fecha: activeDay.fecha,
-                bloque: bloque.id,
-                hora: bloque.defaultHora,
-                categoria: defaultModalCategory,
+                bloque: 'escuela',
+                hora: AGENDA_SCHOOL_BLOQUE.defaultHora || '10:00',
+                categoria: 'universidad',
                 tipo: defaultModalType
             }));
 
             body.appendChild(addBtn);
             card.append(head, body);
-            dayBoard.appendChild(card);
-        });
+            schoolWrap.appendChild(card);
+            dayBoard.appendChild(schoolWrap);
+        }
         return;
     }
 
-    // 2. Pastel Weekly Grid View
+    const appendWeekDayHeaders = (boardEl, cornerLabel) => {
+        const corner = document.createElement('div');
+        corner.className = 'agenda-corner-cell';
+        corner.textContent = cornerLabel;
+        boardEl.appendChild(corner);
+
+        diasVisibles.forEach(dia => {
+            const header = document.createElement('div');
+            header.className = `agenda-day-header day-${dia.key}${dia.fecha === hoyStr ? ' is-today' : ''}`;
+            const dayNameLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaDayName === 'function')
+                ? window.DailyHubI18n.agendaDayName(dia.nombre, false)
+                : dia.nombre;
+            const dateLabel = dia.dateObj.toLocaleDateString(tLocale(), { month: 'short', day: 'numeric' });
+            header.innerHTML = `
+                        <span class="agenda-day-name">${dayNameLoc}</span>
+                        <span class="agenda-day-date">${dateLabel}${dia.fecha === hoyStr ? tUi(' · Today', ' · Hoy') : ''}</span>
+                    `;
+            boardEl.appendChild(header);
+        });
+    };
+
+    // 2A. Weekly Grid View — Section 1: Personal Agenda (Morning / Afternoon / Night)
     weekBoard.innerHTML = '';
     weekBoard.style.setProperty('--agenda-cols', String(diasVisibles.length));
     weekBoard.classList.toggle('cols-5', diasVisibles.length === 5);
 
-    const corner = document.createElement('div');
-    corner.className = 'agenda-corner-cell';
-    corner.textContent = tUi('Block / Day', 'Bloque / Día');
-    weekBoard.appendChild(corner);
+    if (showPersonalSection) {
+        appendWeekDayHeaders(weekBoard, tUi('Block / Day', 'Bloque / Día'));
 
-    diasVisibles.forEach(dia => {
-        const header = document.createElement('div');
-        header.className = `agenda-day-header day-${dia.key}${dia.fecha === hoyStr ? ' is-today' : ''}`;
-        const dayNameLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaDayName === 'function')
-            ? window.DailyHubI18n.agendaDayName(dia.nombre, false)
-            : dia.nombre;
-        const dateLabel = dia.dateObj.toLocaleDateString(tLocale(), { month: 'short', day: 'numeric' });
-        header.innerHTML = `
-                    <span class="agenda-day-name">${dayNameLoc}</span>
-                    <span class="agenda-day-date">${dateLabel}${dia.fecha === hoyStr ? tUi(' · Today', ' · Hoy') : ''}</span>
-                `;
-        weekBoard.appendChild(header);
-    });
+        AGENDA_PERSONAL_BLOQUES.forEach(bloque => {
+            const bloqueLabelLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaBlockLabel === 'function')
+                ? window.DailyHubI18n.agendaBlockLabel(bloque.id)
+                : bloque.label;
+            const blockHeader = document.createElement('div');
+            blockHeader.className = 'agenda-block-header';
+            blockHeader.innerHTML = `
+                        ${bloque.svg}
+                        <span class="agenda-block-title">${bloqueLabelLoc}</span>
+                    `;
+            weekBoard.appendChild(blockHeader);
 
-    AGENDA_BLOQUES.forEach(bloque => {
-        const bloqueLabelLoc = (window.DailyHubI18n && typeof window.DailyHubI18n.agendaBlockLabel === 'function')
-            ? window.DailyHubI18n.agendaBlockLabel(bloque.id)
-            : bloque.label;
-        const blockHeader = document.createElement('div');
-        blockHeader.className = 'agenda-block-header';
-        blockHeader.innerHTML = `
-                    ${bloque.svg}
-                    <span class="agenda-block-title">${bloqueLabelLoc}</span>
-                `;
-        weekBoard.appendChild(blockHeader);
+            diasVisibles.forEach(dia => {
+                const cell = document.createElement('div');
+                cell.className = `agenda-cell day-${dia.key}`;
+                cell.dataset.dropZone = 'personal-cell';
+                cell.dataset.date = dia.fecha;
+                cell.dataset.bloque = bloque.id;
+                cell.dataset.categoria = 'personal';
 
-        diasVisibles.forEach(dia => {
-            const cell = document.createElement('div');
-            cell.className = `agenda-cell day-${dia.key}`;
+                const list = document.createElement('div');
+                list.className = 'agenda-items-list';
 
-            const list = document.createElement('div');
-            list.className = 'agenda-items-list';
+                const cellItems = sortAgendaItemsByTime(
+                    filteredItems.filter(
+                        i => i.fecha === dia.fecha
+                            && (i.categoria || 'personal') !== 'universidad'
+                            && resolvePersonalAgendaBlock(i) === bloque.id
+                    )
+                );
 
-            const cellItems = filteredItems.filter(
-                i => i.fecha === dia.fecha && i.bloque === bloque.id
-            );
+                cellItems.forEach(item => list.appendChild(crearElementoActividad(item)));
 
-            appendCategorizedAgendaItems(list, cellItems);
+                const addBtn = document.createElement('button');
+                addBtn.type = 'button';
+                addBtn.className = 'agenda-cell-add';
+                addBtn.textContent = tUi('+ Add', '+ Agregar');
+                addBtn.addEventListener('click', () => abrirAgendaModal({
+                    fecha: dia.fecha,
+                    bloque: bloque.id,
+                    hora: bloque.defaultHora,
+                    categoria: 'personal',
+                    tipo: defaultModalType
+                }));
 
-            const addBtn = document.createElement('button');
-            addBtn.type = 'button';
-            addBtn.className = 'agenda-cell-add';
-            addBtn.textContent = tUi('+ Add', '+ Agregar');
-            addBtn.addEventListener('click', () => abrirAgendaModal({
-                fecha: dia.fecha,
-                bloque: bloque.id,
-                hora: bloque.defaultHora,
-                categoria: defaultModalCategory,
-                tipo: defaultModalType
-            }));
-
-            cell.append(list, addBtn);
-            weekBoard.appendChild(cell);
+                cell.append(list, addBtn);
+                weekBoard.appendChild(cell);
+            });
         });
-    });
+    }
+
+    // 2B. Weekly Grid View — Section 2: School / University (independent board below Personal)
+    if (schoolWeekBoard) {
+        schoolWeekBoard.innerHTML = '';
+        schoolWeekBoard.style.setProperty('--agenda-cols', String(diasVisibles.length));
+        schoolWeekBoard.classList.toggle('cols-5', diasVisibles.length === 5);
+
+        if (showSchoolSection) {
+            appendWeekDayHeaders(schoolWeekBoard, tUi('University', 'Universidad'));
+
+            const schoolHeader = document.createElement('div');
+            schoolHeader.className = 'agenda-block-header is-school-block-header';
+            schoolHeader.innerHTML = `
+                        ${AGENDA_SCHOOL_BLOQUE.svg}
+                        <span class="agenda-block-title">${schoolTitleLoc}</span>
+                    `;
+            schoolWeekBoard.appendChild(schoolHeader);
+
+            diasVisibles.forEach(dia => {
+                const cell = document.createElement('div');
+                cell.className = `agenda-cell agenda-school-cell day-${dia.key}`;
+                cell.dataset.dropZone = 'school-cell';
+                cell.dataset.date = dia.fecha;
+                cell.dataset.bloque = 'escuela';
+                cell.dataset.categoria = 'universidad';
+
+                const list = document.createElement('div');
+                list.className = 'agenda-items-list';
+
+                const schoolDayItems = sortAgendaItemsByTime(
+                    filteredItems.filter(
+                        i => i.fecha === dia.fecha && (i.categoria || 'personal') === 'universidad'
+                    )
+                );
+
+                schoolDayItems.forEach(item => list.appendChild(crearElementoActividad(item)));
+
+                const addBtn = document.createElement('button');
+                addBtn.type = 'button';
+                addBtn.className = 'agenda-cell-add';
+                addBtn.textContent = tUi('+ Add', '+ Agregar');
+                addBtn.addEventListener('click', () => abrirAgendaModal({
+                    fecha: dia.fecha,
+                    bloque: 'escuela',
+                    hora: AGENDA_SCHOOL_BLOQUE.defaultHora || '10:00',
+                    categoria: 'universidad',
+                    tipo: defaultModalType
+                }));
+
+                cell.append(list, addBtn);
+                schoolWeekBoard.appendChild(cell);
+            });
+        }
+    }
 }
 
 function cargarAgendaSemana() {
@@ -12025,6 +12274,9 @@ function cargarAgendaSemana() {
             }
             agendaState.items = Array.isArray(items) ? items : [];
             renderAgendaBoard();
+            if (typeof renderAgendaHeaderCalendar === 'function') {
+                renderAgendaHeaderCalendar(true);
+            }
         })
         .catch(err => {
             if (isAbortError(err) || !agendaLoadTracker.isCurrent(reqToken.seq)) return;
@@ -12035,6 +12287,9 @@ function cargarAgendaSemana() {
             }
             agendaState.items = [];
             renderAgendaBoard();
+            if (typeof renderAgendaHeaderCalendar === 'function') {
+                renderAgendaHeaderCalendar(false);
+            }
             if (weekStats) {
                 weekStats.textContent = tUi('Could not load agenda (check RegistrosAgenda table in DB).', 'No se pudo cargar la agenda (revisa la tabla RegistrosAgenda en la BD).');
             }
@@ -12154,6 +12409,30 @@ function computeAgendaRepeatDates({
         }
     }
     return dates;
+}
+
+function canMoveAgendaItemToDate(sourceDateIso, targetDateIso, todayIso, moveMeta = {}) {
+    const src = String(sourceDateIso || '').trim();
+    const tgt = String(targetDateIso || '').trim();
+    const today = String(todayIso || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(src) || !/^\d{4}-\d{2}-\d{2}$/.test(tgt)) {
+        return false;
+    }
+    const effectiveToday = /^\d{4}-\d{2}-\d{2}$/.test(today) ? today : src;
+    if (tgt < src || tgt < effectiveToday) {
+        return false;
+    }
+    if (tgt > src) {
+        return true;
+    }
+    const cat = String(moveMeta?.categoria || '').trim().toLowerCase();
+    const srcBlock = String(moveMeta?.sourceBlock || '').trim().toLowerCase();
+    const tgtBlock = String(moveMeta?.targetBlock || '').trim().toLowerCase();
+    const personalBlocks = new Set(['manana', 'tarde', 'noche']);
+    if (cat === 'personal' && personalBlocks.has(srcBlock) && personalBlocks.has(tgtBlock) && srcBlock !== tgtBlock) {
+        return true;
+    }
+    return false;
 }
 
 function toggleAgendaItem(item, ui = {}, targetEstado = null) {
@@ -12420,6 +12699,7 @@ function renderAgendaCalendarGrid(gridEl, {
     activeWeekDatesSet = null,
     repeatDatesSet = null,
     dotCountsByDate = null,
+    dropZoneType = '',
     onSelectDate = null
 } = {}) {
     if (!gridEl) return;
@@ -12438,6 +12718,9 @@ function renderAgendaCalendarGrid(gridEl, {
             btn.classList.add('is-repeat-preview');
         }
         btn.dataset.date = cell.ymd;
+        if (dropZoneType) {
+            btn.dataset.dropZone = dropZoneType;
+        }
         btn.setAttribute('aria-label', cell.ymd);
 
         const numSpan = document.createElement('span');
@@ -12611,13 +12894,11 @@ function renderAgendaHeaderCalendar(fetchDots = false) {
             selectedDate: agendaState.selectedDate,
             activeWeekDatesSet: activeWeekSet,
             dotCountsByDate: agendaCalendarUiState.dotsByDate,
+            dropZoneType: 'calendar-day',
             onSelectDate: (ymd) => {
                 agendaState.weekOffset = computeWeekOffsetForDate(ymd);
                 agendaState.selectedDate = ymd;
                 cargarAgendaSemana();
-                dropdown.hidden = true;
-                const toggleBtn = document.getElementById('btnToggleAgendaCalendar');
-                if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
             }
         });
     };
@@ -12645,7 +12926,7 @@ function renderAgendaHeaderCalendar(fetchDots = false) {
                         }
                     });
                     agendaCalendarUiState.dotsByDate = dots;
-                    if (!dropdown.hidden) paintGrid();
+                    paintGrid();
                 })
                 .catch(() => { });
         }
@@ -12653,10 +12934,7 @@ function renderAgendaHeaderCalendar(fetchDots = false) {
 }
 
 function refreshOpenAgendaHeaderCalendar() {
-    const dropdown = document.getElementById('agendaCalendarDropdown');
-    if (dropdown && !dropdown.hidden) {
-        renderAgendaHeaderCalendar(true);
-    }
+    renderAgendaHeaderCalendar(true);
 }
 
 function renderPostponePopoverCalendar() {
@@ -12749,7 +13027,8 @@ function abrirAgendaModal(prefill = {}) {
         : prefill.categoria === 'personal'
             ? 'personal'
             : (agendaState.filterCategory !== 'all' ? agendaState.filterCategory : 'personal');
-    const resolvedBloque = prefill.bloque || inferAgendaBlockClient(resolvedHora, resolvedCategoria);
+    const normalizedPrefillBloque = prefill.bloque === 'escuela' ? 'cole' : prefill.bloque;
+    const resolvedBloque = normalizedPrefillBloque || inferAgendaBlockClient(resolvedHora, resolvedCategoria);
     const splitAct = splitAgendaActividadClient(prefill.actividad, prefill.titulo, prefill.descripcion);
     const resolvedTitulo = splitAct.titulo;
     const resolvedDescripcion = splitAct.descripcion;
@@ -12863,9 +13142,17 @@ if (agendaForm) {
         });
     }
 
+    const syncFixedHeaderCalendarToVisibleWeek = () => {
+        const days = getVisibleAgendaDays();
+        const refDate = (days[0] && days[0].dateObj) || new Date();
+        agendaCalendarUiState.headerYear = refDate.getFullYear();
+        agendaCalendarUiState.headerMonth = refDate.getMonth();
+    };
+
     if (btnPrevWeek) {
         btnPrevWeek.addEventListener('click', () => {
             agendaState.weekOffset -= 1;
+            syncFixedHeaderCalendarToVisibleWeek();
             cargarAgendaSemana();
             refreshOpenAgendaHeaderCalendar();
         });
@@ -12874,6 +13161,7 @@ if (agendaForm) {
     if (btnNextWeek) {
         btnNextWeek.addEventListener('click', () => {
             agendaState.weekOffset += 1;
+            syncFixedHeaderCalendarToVisibleWeek();
             cargarAgendaSemana();
             refreshOpenAgendaHeaderCalendar();
         });
@@ -12883,28 +13171,14 @@ if (agendaForm) {
         btnToday.addEventListener('click', () => {
             agendaState.weekOffset = 0;
             agendaState.selectedDate = formatLocalDate(new Date());
+            syncFixedHeaderCalendarToVisibleWeek();
             cargarAgendaSemana();
             refreshOpenAgendaHeaderCalendar();
         });
     }
 
-    // Calendario mensual desplegable en cabecera del planificador
-    const btnToggleCal = document.getElementById('btnToggleAgendaCalendar');
-    const headerCalDropdown = document.getElementById('agendaCalendarDropdown');
-    if (btnToggleCal && headerCalDropdown) {
-        btnToggleCal.addEventListener('click', () => {
-            const willOpen = headerCalDropdown.hidden;
-            headerCalDropdown.hidden = !willOpen;
-            btnToggleCal.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-            if (willOpen) {
-                const days = getVisibleAgendaDays();
-                const refDate = (days[0] && days[0].dateObj) || new Date();
-                agendaCalendarUiState.headerYear = refDate.getFullYear();
-                agendaCalendarUiState.headerMonth = refDate.getMonth();
-                renderAgendaHeaderCalendar(true);
-            }
-        });
-    }
+    // Calendario mensual fijo y siempre visible debajo de la barra semanal
+    renderAgendaHeaderCalendar(false);
     document.getElementById('btnAgendaCalPrevMonth')?.addEventListener('click', () => {
         const dt = new Date(agendaCalendarUiState.headerYear, agendaCalendarUiState.headerMonth - 1, 1);
         agendaCalendarUiState.headerYear = dt.getFullYear();
@@ -12981,11 +13255,6 @@ if (agendaForm) {
         document.addEventListener('keydown', (ev) => {
             if (ev.key === 'Escape') {
                 if (!postponePopover.hidden) postponePopover.hidden = true;
-                const calDrop = document.getElementById('agendaCalendarDropdown');
-                if (calDrop && !calDrop.hidden) {
-                    calDrop.hidden = true;
-                    document.getElementById('btnToggleAgendaCalendar')?.setAttribute('aria-expanded', 'false');
-                }
             }
         });
         const clampPostponeOnViewport = () => {
@@ -13291,6 +13560,466 @@ if (agendaForm) {
         }, { loadingText: tUi('Saving...', 'Guardando...') });
     });
 }
+
+// ==========================================
+// AGENDA DRAG & DROP (FORWARD-ONLY) + DROP TIME MODAL
+// ==========================================
+const agendaDragRuntime = {
+    item: null,
+    sourceEl: null,
+    handleEl: null,
+    ghostEl: null,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    started: false,
+    hoveredZoneEl: null,
+    detachTempListeners: null
+};
+let pendingAgendaDropContext = null;
+
+function formatAgendaHumanDayShort(ymd) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || '').trim())) return String(ymd || '');
+    const [y, m, d] = String(ymd).trim().split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    return dt.toLocaleDateString(tLocale(), { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+function evaluateAgendaDropZone(item, zoneEl, todayIso = formatLocalDate(new Date())) {
+    if (!item || !zoneEl || !zoneEl.dataset) {
+        return { valid: false, reason: 'none', targetDate: '', targetBlock: null };
+    }
+    const zoneType = String(zoneEl.dataset.dropZone || '').trim();
+    const targetDate = String(zoneEl.dataset.date || '').trim();
+    if (!zoneType || !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+        return { valid: false, reason: 'none', targetDate: '', targetBlock: null };
+    }
+    const itemCat = item.categoria === 'universidad' ? 'universidad' : 'personal';
+    const sourcePersonalBlock = itemCat === 'personal' ? resolvePersonalAgendaBlock(item) : '';
+
+    if (zoneType === 'personal-cell') {
+        if (itemCat !== 'personal') {
+            return { valid: false, reason: 'category', targetDate, targetBlock: null };
+        }
+        const targetBlock = String(zoneEl.dataset.bloque || '').trim().toLowerCase();
+        const isSameCell = targetDate === item.fecha && targetBlock === sourcePersonalBlock;
+        if (isSameCell) {
+            return { valid: false, reason: 'same', targetDate, targetBlock };
+        }
+        const ok = canMoveAgendaItemToDate(item.fecha, targetDate, todayIso, {
+            categoria: 'personal',
+            sourceBlock: sourcePersonalBlock,
+            targetBlock
+        });
+        return { valid: ok, reason: ok ? 'ok' : 'backdate', targetDate, targetBlock };
+    }
+
+    if (zoneType === 'school-cell') {
+        if (itemCat !== 'universidad') {
+            return { valid: false, reason: 'category', targetDate, targetBlock: null };
+        }
+        if (targetDate === item.fecha) {
+            return { valid: false, reason: 'same', targetDate, targetBlock: 'cole' };
+        }
+        const ok = canMoveAgendaItemToDate(item.fecha, targetDate, todayIso, {
+            categoria: 'universidad'
+        });
+        return { valid: ok, reason: ok ? 'ok' : 'backdate', targetDate, targetBlock: 'cole' };
+    }
+
+    if (zoneType === 'day-tab' || zoneType === 'calendar-day') {
+        if (targetDate === item.fecha) {
+            return { valid: false, reason: 'same', targetDate, targetBlock: null };
+        }
+        const ok = canMoveAgendaItemToDate(item.fecha, targetDate, todayIso, {
+            categoria: itemCat
+        });
+        return { valid: ok, reason: ok ? 'ok' : 'backdate', targetDate, targetBlock: null };
+    }
+
+    return { valid: false, reason: 'none', targetDate: '', targetBlock: null };
+}
+
+function cleanupAgendaDragState() {
+    if (typeof agendaDragRuntime.detachTempListeners === 'function') {
+        const detach = agendaDragRuntime.detachTempListeners;
+        agendaDragRuntime.detachTempListeners = null;
+        try { detach(); } catch (_) { /* ignore */ }
+    }
+    if (agendaDragRuntime.handleEl && agendaDragRuntime.pointerId !== null) {
+        try {
+            if (typeof agendaDragRuntime.handleEl.releasePointerCapture === 'function') {
+                agendaDragRuntime.handleEl.releasePointerCapture(agendaDragRuntime.pointerId);
+            }
+        } catch (_) { /* ignore */ }
+    }
+    if (agendaDragRuntime.ghostEl) {
+        try { agendaDragRuntime.ghostEl.remove(); } catch (_) { /* ignore */ }
+        agendaDragRuntime.ghostEl = null;
+    }
+    if (typeof document !== 'undefined') {
+        document.body?.classList?.remove('agenda-dragging-active');
+        document.querySelectorAll('.agenda-item.is-dragging').forEach(el => el.classList.remove('is-dragging'));
+        document.querySelectorAll('.is-drop-valid, .is-drop-invalid, .is-drop-hover').forEach(el => {
+            el.classList.remove('is-drop-valid', 'is-drop-invalid', 'is-drop-hover');
+        });
+    }
+    agendaDragRuntime.item = null;
+    agendaDragRuntime.sourceEl = null;
+    agendaDragRuntime.handleEl = null;
+    agendaDragRuntime.pointerId = null;
+    agendaDragRuntime.startX = 0;
+    agendaDragRuntime.startY = 0;
+    agendaDragRuntime.started = false;
+    agendaDragRuntime.hoveredZoneEl = null;
+}
+
+function paintAllAgendaDropZonesForActiveDrag(item) {
+    if (typeof document === 'undefined' || !item) return;
+    const todayIso = formatLocalDate(new Date());
+    document.querySelectorAll('#view-agenda [data-drop-zone]').forEach(zoneEl => {
+        zoneEl.classList.remove('is-drop-valid', 'is-drop-invalid', 'is-drop-hover');
+        const res = evaluateAgendaDropZone(item, zoneEl, todayIso);
+        if (res.valid) {
+            zoneEl.classList.add('is-drop-valid');
+        } else if (res.reason === 'backdate' || res.reason === 'category') {
+            zoneEl.classList.add('is-drop-invalid');
+        }
+    });
+}
+
+function openAgendaDropTimeModal(item, evalRes) {
+    const modal = document.getElementById('agendaDropTimeModal');
+    const titleEl = document.getElementById('agendaDropItemTitle');
+    const dateChangeEl = document.getElementById('agendaDropDateChange');
+    const catBadgeEl = document.getElementById('agendaDropCatBadge');
+    const timeInput = document.getElementById('agendaDropTimeInput');
+    const blockGroup = document.getElementById('agendaDropBlockGroup');
+    const blockSelect = document.getElementById('agendaDropBlockSelect');
+    if (!modal || !timeInput || !item || !evalRes?.targetDate) return;
+
+    const itemCat = item.categoria === 'universidad' ? 'universidad' : 'personal';
+    const parsed = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
+    const curHora = /^\d{2}:\d{2}/.test(String(item.hora || '').trim())
+        ? String(item.hora).trim().slice(0, 5)
+        : '09:00';
+    const sourcePersonalBlock = itemCat === 'personal' ? resolvePersonalAgendaBlock(item) : '';
+    const targetPersonalBlock = itemCat === 'personal'
+        ? (['manana', 'tarde', 'noche'].includes(evalRes.targetBlock) ? evalRes.targetBlock : sourcePersonalBlock)
+        : '';
+
+    let initialHora = curHora;
+    if (
+        itemCat === 'personal' &&
+        ['manana', 'tarde', 'noche'].includes(evalRes.targetBlock) &&
+        evalRes.targetBlock !== sourcePersonalBlock &&
+        inferAgendaBlockClient(curHora, 'personal') !== evalRes.targetBlock
+    ) {
+        initialHora = AGENDA_DROP_BLOCK_DEFAULTS[evalRes.targetBlock] || curHora;
+    }
+
+    pendingAgendaDropContext = {
+        item,
+        targetDate: evalRes.targetDate,
+        targetBlock: evalRes.targetBlock || null
+    };
+
+    if (titleEl) {
+        protectUserNode(titleEl);
+        titleEl.textContent = parsed.titulo || item.actividad || '--';
+    }
+    if (dateChangeEl) {
+        dateChangeEl.textContent = `${formatAgendaHumanDayShort(item.fecha)} → ${formatAgendaHumanDayShort(evalRes.targetDate)}`;
+    }
+    if (catBadgeEl) {
+        if (itemCat === 'universidad') {
+            const classMeta = resolveAgendaItemClassLabel(item);
+            protectUserNode(catBadgeEl);
+            catBadgeEl.textContent = classMeta
+                ? `🎓 ${classMeta.name}`
+                : tUi('🎓 School / University', '🎓 Escuela / Universidad');
+        } else {
+            catBadgeEl.textContent = tUi('👤 Personal Agenda', '👤 Agenda Personal');
+        }
+    }
+
+    timeInput.value = initialHora;
+    if (blockGroup && blockSelect) {
+        if (itemCat === 'personal') {
+            blockGroup.hidden = false;
+            blockSelect.value = ['manana', 'tarde', 'noche'].includes(targetPersonalBlock)
+                ? targetPersonalBlock
+                : inferAgendaBlockClient(initialHora, 'personal');
+        } else {
+            blockGroup.hidden = true;
+        }
+    }
+
+    modal.hidden = false;
+    if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+    setTimeout(() => timeInput.focus(), 40);
+}
+
+function closeAgendaDropTimeModal() {
+    pendingAgendaDropContext = null;
+    const modal = document.getElementById('agendaDropTimeModal');
+    if (modal) modal.hidden = true;
+    if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+}
+
+function wireAgendaCardDrag(cardEl, handleEl, item) {
+    if (!cardEl || !handleEl || !item || !item.id) return;
+
+    handleEl.addEventListener('dragstart', (ev) => ev.preventDefault());
+    handleEl.addEventListener('click', (ev) => ev.stopPropagation());
+
+    handleEl.addEventListener('pointerdown', (downEv) => {
+        if (downEv.button !== undefined && downEv.button !== 0) return;
+        if (busyActionElements.has(cardEl)) return;
+        downEv.stopPropagation();
+        if (downEv.cancelable) downEv.preventDefault();
+
+        cleanupAgendaDragState();
+
+        agendaDragRuntime.item = item;
+        agendaDragRuntime.sourceEl = cardEl;
+        agendaDragRuntime.handleEl = handleEl;
+        agendaDragRuntime.pointerId = downEv.pointerId;
+        agendaDragRuntime.startX = downEv.clientX;
+        agendaDragRuntime.startY = downEv.clientY;
+        agendaDragRuntime.started = false;
+
+        try {
+            if (typeof handleEl.setPointerCapture === 'function') {
+                handleEl.setPointerCapture(downEv.pointerId);
+            }
+        } catch (_) { /* ignore */ }
+
+        const updateGhostPosition = (cx, cy) => {
+            if (!agendaDragRuntime.ghostEl) return;
+            const x = Math.round(cx + 10);
+            const y = Math.round(cy - 18);
+            agendaDragRuntime.ghostEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+        };
+
+        const autoScrollEdges = (cx, cy) => {
+            if (typeof window === 'undefined') return;
+            const vh = window.innerHeight || 640;
+            if (cy < 72) window.scrollBy(0, -10);
+            else if (cy > vh - 56) window.scrollBy(0, 10);
+
+            document.querySelectorAll('#view-agenda .agenda-table-scroll').forEach(sc => {
+                if (sc.hidden) return;
+                const r = sc.getBoundingClientRect();
+                if (cy >= r.top && cy <= r.bottom) {
+                    if (cx < r.left + 44) sc.scrollLeft -= 14;
+                    else if (cx > r.right - 44) sc.scrollLeft += 14;
+                }
+            });
+        };
+
+        const onPointerMove = (moveEv) => {
+            if (moveEv.pointerId !== agendaDragRuntime.pointerId) return;
+            const dx = moveEv.clientX - agendaDragRuntime.startX;
+            const dy = moveEv.clientY - agendaDragRuntime.startY;
+
+            if (!agendaDragRuntime.started) {
+                if (Math.hypot(dx, dy) < 5) return;
+                agendaDragRuntime.started = true;
+                cardEl.classList.add('is-dragging');
+                document.body?.classList?.add('agenda-dragging-active');
+
+                const ghost = document.createElement('div');
+                ghost.className = 'agenda-drag-ghost';
+                const parsed = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
+                ghost.textContent = `${item.hora || ''} · ${(parsed.titulo || item.actividad || '').slice(0, 38)}`;
+                document.body.appendChild(ghost);
+                agendaDragRuntime.ghostEl = ghost;
+                paintAllAgendaDropZonesForActiveDrag(item);
+            }
+
+            if (moveEv.cancelable) moveEv.preventDefault();
+            updateGhostPosition(moveEv.clientX, moveEv.clientY);
+            autoScrollEdges(moveEv.clientX, moveEv.clientY);
+
+            const hitEl = typeof document.elementFromPoint === 'function'
+                ? document.elementFromPoint(moveEv.clientX, moveEv.clientY)
+                : null;
+            const zoneEl = hitEl && typeof hitEl.closest === 'function'
+                ? hitEl.closest('#view-agenda [data-drop-zone]')
+                : null;
+
+            if (agendaDragRuntime.hoveredZoneEl && agendaDragRuntime.hoveredZoneEl !== zoneEl) {
+                agendaDragRuntime.hoveredZoneEl.classList.remove('is-drop-hover');
+            }
+            agendaDragRuntime.hoveredZoneEl = zoneEl;
+            if (zoneEl) {
+                zoneEl.classList.add('is-drop-hover');
+            }
+        };
+
+        const onPointerUp = (upEv) => {
+            if (upEv.pointerId !== agendaDragRuntime.pointerId) return;
+            const wasStarted = agendaDragRuntime.started;
+            const draggedItem = agendaDragRuntime.item;
+            let zoneEl = null;
+            try {
+                if (wasStarted && typeof document.elementFromPoint === 'function') {
+                    const hitEl = document.elementFromPoint(upEv.clientX, upEv.clientY);
+                    zoneEl = hitEl && typeof hitEl.closest === 'function'
+                        ? hitEl.closest('#view-agenda [data-drop-zone]')
+                        : null;
+                }
+                if (wasStarted && draggedItem && zoneEl) {
+                    const evalRes = evaluateAgendaDropZone(draggedItem, zoneEl, formatLocalDate(new Date()));
+                    if (evalRes.valid) {
+                        openAgendaDropTimeModal(draggedItem, evalRes);
+                    } else if (evalRes.reason === 'backdate') {
+                        showToast('info', tUi(
+                            'Cannot move an activity to an earlier date.',
+                            'No puedes mover una actividad hacia una fecha anterior.'
+                        ));
+                    } else if (evalRes.reason === 'category') {
+                        showToast('info', tUi(
+                            'Drop this activity inside its matching section or on the calendar.',
+                            'Suelta esta actividad dentro de su sección correspondiente o en el calendario.'
+                        ));
+                    }
+                }
+            } finally {
+                cleanupAgendaDragState();
+            }
+        };
+
+        const onPointerCancel = () => {
+            cleanupAgendaDragState();
+        };
+
+        window.addEventListener('pointermove', onPointerMove, { passive: false });
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('pointercancel', onPointerCancel);
+
+        agendaDragRuntime.detachTempListeners = () => {
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', onPointerUp);
+            window.removeEventListener('pointercancel', onPointerCancel);
+        };
+    });
+}
+
+(function initAgendaDragDropAndModalHandlers() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    window.addEventListener('blur', cleanupAgendaDragState);
+    window.addEventListener('dragend', cleanupAgendaDragState);
+    window.addEventListener('drop', cleanupAgendaDragState);
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) cleanupAgendaDragState();
+    });
+
+    const dropModal = document.getElementById('agendaDropTimeModal');
+    const dropForm = document.getElementById('agendaDropTimeForm');
+    const dropTimeInput = document.getElementById('agendaDropTimeInput');
+    const dropBlockSelect = document.getElementById('agendaDropBlockSelect');
+
+    document.getElementById('btnCloseAgendaDropTimeModal')?.addEventListener('click', closeAgendaDropTimeModal);
+    document.getElementById('btnCancelAgendaDropTime')?.addEventListener('click', closeAgendaDropTimeModal);
+    dropModal?.addEventListener('click', (ev) => {
+        if (ev.target === dropModal) closeAgendaDropTimeModal();
+    });
+
+    dropTimeInput?.addEventListener('change', () => {
+        if (!pendingAgendaDropContext || !dropBlockSelect) return;
+        const itemCat = pendingAgendaDropContext.item?.categoria === 'universidad' ? 'universidad' : 'personal';
+        if (itemCat === 'personal' && dropTimeInput.value) {
+            dropBlockSelect.value = inferAgendaBlockClient(dropTimeInput.value, 'personal');
+        }
+    });
+
+    dropForm?.addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        const btnConfirm = document.getElementById('btnConfirmAgendaDropTime');
+        if (!btnConfirm || busyActionElements.has(btnConfirm) || btnConfirm.disabled) return;
+        if (!pendingAgendaDropContext || !pendingAgendaDropContext.item) {
+            closeAgendaDropTimeModal();
+            return;
+        }
+
+        const { item, targetDate } = pendingAgendaDropContext;
+        const newHora = String(dropTimeInput?.value || '').trim().slice(0, 5);
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(newHora)) {
+            showToast('err', tUi('Choose a valid time (HH:MM).', 'Elige una hora válida (HH:MM).'));
+            return;
+        }
+
+        const itemCat = item.categoria === 'universidad' ? 'universidad' : 'personal';
+        const chosenPersonalBlock = dropBlockSelect?.value && ['manana', 'tarde', 'noche'].includes(dropBlockSelect.value)
+            ? dropBlockSelect.value
+            : inferAgendaBlockClient(newHora, 'personal');
+        const nextBloque = itemCat === 'universidad'
+            ? inferAgendaBlockClient(newHora, 'universidad')
+            : chosenPersonalBlock;
+
+        const todayIso = formatLocalDate(new Date());
+        const allowed = canMoveAgendaItemToDate(item.fecha, targetDate, todayIso, {
+            categoria: itemCat,
+            sourceBlock: itemCat === 'personal' ? resolvePersonalAgendaBlock(item) : item.bloque,
+            targetBlock: nextBloque
+        });
+        if (!allowed) {
+            showToast('err', tUi(
+                'Cannot move an activity to an earlier date.',
+                'No puedes mover una actividad hacia una fecha anterior.'
+            ));
+            closeAgendaDropTimeModal();
+            return;
+        }
+
+        const splitAct = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
+        const payload = {
+            fecha: targetDate,
+            bloque: nextBloque,
+            hora: newHora,
+            titulo: splitAct.titulo,
+            descripcion: splitAct.descripcion,
+            actividad: item.actividad,
+            tipo: item.tipo === 'tarea' ? 'tarea' : 'evento',
+            categoria: itemCat,
+            materia_id: itemCat === 'universidad' ? (item.materia_id || null) : null,
+            materia_nombre: itemCat === 'universidad' ? (item.materia_nombre || null) : null,
+            estado: getAgendaItemStatus(item),
+            recordatorio_min: item.recordatorio_min !== undefined && item.recordatorio_min !== null && item.recordatorio_min !== ''
+                ? Number(item.recordatorio_min)
+                : null,
+            preventBackdate: true
+        };
+
+        runWithButtonLock(btnConfirm, async () => {
+            try {
+                await submitMutationRequest({
+                    url: `/api/update-agenda/${item.id}`,
+                    method: 'PUT',
+                    scopeKey: `agenda-drop:${item.id}`,
+                    signature: `${targetDate}|${nextBloque}|${newHora}`,
+                    timeoutMs: 10000,
+                    maxRetries: 0,
+                    parseJson: true,
+                    buildBody: () => payload
+                });
+                closeAgendaDropTimeModal();
+                agendaState.selectedDate = targetDate;
+                cargarAgendaSemana();
+                renderAgendaHeaderCalendar(true);
+                cargarRecordatoriosActivos();
+                showToast('ok', tUi('Activity rescheduled!', '¡Actividad reagendada!'));
+            } catch (err) {
+                showToast('err', `${tUi('Failed to reschedule activity', 'No se pudo reagendar la actividad')}: ${tServer(err.message)}`);
+            } finally {
+                cleanupAgendaDragState();
+            }
+        }, { loadingText: tUi('Saving...', 'Guardando...') });
+    });
+})();
 
 // ==========================================
 // AUTHENTICATION, ROLES, SESSION & PSYCHIATRIST ACCESS
