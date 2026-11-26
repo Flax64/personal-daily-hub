@@ -63,6 +63,8 @@ const {
     validateLyricsUniquenessAgainstNotebook,
     checkLyricsSectionConsistency,
     resolveLyricsSectionMismatch,
+    classifySongLanguageOrigin,
+    resolveAllowedLyricsSections,
     compareExistingVsFreshLyrics,
     guardMusicEntryLyricsBeforeSave
 } = require('./lib/language-studio');
@@ -11040,19 +11042,26 @@ async function resolveAutonomousSongLyricsUncached({ song, uid, forceExtract = f
                             [nbSong.trackNumber, song.id, uid]
                         ).catch(() => {});
                     }
-                    const tracks = ytdlpService.classifyLyricsIntoFiveTracks(
+                    const rawTracks = ytdlpService.classifyLyricsIntoFiveTracks(
                         [{ rawLanguage: 'multi', lyrics: nbSong.lyrics, source: notebookData.source || 'drive-word' }],
                         { rawOriginal: nbSong.lyrics }
                     );
+                    const allowedNb = resolveAllowedLyricsSections({
+                        songLanguage: song.idioma || nbSong.fields?.language || '',
+                        rawLyrics: nbSong.lyrics,
+                        tracks: rawTracks
+                    });
+                    const tracks = allowedNb.tracks || rawTracks;
+                    const resolvedLyricsText = (allowedNb.formattedLyrics || nbSong.lyrics).slice(0, 50000);
                     const spanishFromTracksOrWord = String(tracks?.es || nbSong.spanishLyrics || '').trim();
                     return {
                         ok: true,
                         tier: 1,
                         songId: song.id,
                         videoId,
-                        lyrics: nbSong.lyrics.slice(0, 50000),
+                        lyrics: resolvedLyricsText,
                         tracks,
-                        trackList: [{ language: 'original', lyrics: nbSong.lyrics, source: notebookData.source || 'drive-word' }],
+                        trackList: [{ language: 'original', lyrics: resolvedLyricsText, source: notebookData.source || 'drive-word' }],
                         fields: nbSong.fields || null,
                         trackNumber: nbSong.trackNumber || null,
                         spanishSource: spanishFromTracksOrWord ? 'word-cache' : null,
@@ -11097,7 +11106,13 @@ async function resolveAutonomousSongLyricsUncached({ song, uid, forceExtract = f
     });
 
     if (extracted.ok && extracted.lyrics) {
-        const cleanLyrics = String(extracted.lyrics).trim().slice(0, 50000);
+        const rawCleanLyrics = String(extracted.lyrics).trim().slice(0, 50000);
+        const allowedExt = resolveAllowedLyricsSections({
+            songLanguage: song.idioma || extracted.language || '',
+            rawLyrics: rawCleanLyrics,
+            tracks: extracted.tracks || null
+        });
+        const cleanLyrics = (allowedExt.formattedLyrics || rawCleanLyrics).slice(0, 50000);
         const cleanSource = String(extracted.source || 'yt-dlp').trim().slice(0, 80) || 'yt-dlp';
         const isInnerTube = cleanSource.includes('innertube') || cleanSource.includes('ytmusic');
         serverLogger.info('YTDLP', 'Letra resuelta en servidor', {
@@ -11112,9 +11127,9 @@ async function resolveAutonomousSongLyricsUncached({ song, uid, forceExtract = f
             songId: song.id,
             videoId,
             lyrics: cleanLyrics,
-            tracks: extracted.tracks || null,
+            tracks: allowedExt.tracks || extracted.tracks || null,
             trackList: extracted.trackList || [],
-            spanishSource: extracted.tracks?.es ? 'yt-captions' : null,
+            spanishSource: (allowedExt.tracks?.es || extracted.tracks?.es) ? 'yt-captions' : null,
             tokensUsed: 0,
             source: cleanSource,
             language: extracted.language || '',
@@ -11200,16 +11215,22 @@ app.post('/api/english/music/songs/:id/lyrics/extract', apiWriteLimiter.middlewa
         });
 
         if (extracted.ok && extracted.lyrics) {
-            const cleanLyrics = String(extracted.lyrics).trim().slice(0, 50000);
+            const rawCleanLyrics = String(extracted.lyrics).trim().slice(0, 50000);
+            const allowedExt = resolveAllowedLyricsSections({
+                songLanguage: song.idioma || extracted.language || '',
+                rawLyrics: rawCleanLyrics,
+                tracks: extracted.tracks || null
+            });
+            const cleanLyrics = (allowedExt.formattedLyrics || rawCleanLyrics).slice(0, 50000);
             const cleanSource = String(extracted.source || 'yt-dlp').trim().slice(0, 80) || 'yt-dlp';
             return res.json({
                 ok: true,
                 songId,
                 videoId,
                 lyrics: cleanLyrics,
-                tracks: extracted.tracks || null,
+                tracks: allowedExt.tracks || extracted.tracks || null,
                 trackList: extracted.trackList || [],
-                spanishSource: extracted.tracks?.es ? 'yt-captions' : null,
+                spanishSource: (allowedExt.tracks?.es || extracted.tracks?.es) ? 'yt-captions' : null,
                 tokensUsed: 0,
                 source: cleanSource,
                 language: extracted.language || '',
@@ -11322,10 +11343,16 @@ app.post('/api/english/music/verify-replace-lyrics', apiWriteLimiter.middleware,
             });
         }
 
+        const effectiveLanguage = existingSong.fields?.language || resolvedLanguage;
+        const existingAllowed = resolveAllowedLyricsSections({
+            songLanguage: effectiveLanguage,
+            rawLyrics: existingSong.lyrics
+        });
+
         const extracted = await ytdlpService.extractSongLyrics({
             videoId,
             url: resolvedUrl,
-            idioma: resolvedLanguage,
+            idioma: effectiveLanguage,
             useInnerTube: true,
             useExternalFallbacks: true,
             enrichCaptions: true,
@@ -11335,7 +11362,35 @@ app.post('/api/english/music/verify-replace-lyrics', apiWriteLimiter.middleware,
             trackAlbum: existingSong.album || resolvedAlbum
         });
 
-        if (!extracted || !extracted.ok || !String(extracted.lyrics || '').trim()) {
+        let sanitizedFresh = '';
+        if (extracted && extracted.ok && String(extracted.lyrics || '').trim()) {
+            const cleanedFresh = ytdlpService.stripNonLyricAudioTags(extracted.lyrics).trim().slice(0, 50000);
+            const sectionFixedFresh = resolveLyricsSectionMismatch(notebookSnapshot, {
+                songTitle: existingSong.songTitle || resolvedTitle,
+                artistName: existingSong.artist || resolvedArtist,
+                language: effectiveLanguage,
+                lyrics: cleanedFresh
+            });
+            const candidateRaw = String(sectionFixedFresh.lyrics || cleanedFresh).trim();
+            const allowedFresh = resolveAllowedLyricsSections({
+                songLanguage: effectiveLanguage,
+                rawLyrics: candidateRaw,
+                tracks: sectionFixedFresh.fixed ? null : (extracted.tracks || null)
+            });
+            sanitizedFresh = String(allowedFresh.formattedLyrics || candidateRaw).trim().slice(0, 50000);
+        } else if (existingAllowed.isPureEnglish && existingAllowed.hadRedundantEnglish && existingAllowed.formattedLyrics) {
+            const selfCheck = compareExistingVsFreshLyrics(existingSong, existingAllowed.formattedLyrics, {
+                notebookData: notebookSnapshot,
+                songTitle: existingSong.songTitle || resolvedTitle,
+                artistName: existingSong.artist || resolvedArtist,
+                language: effectiveLanguage
+            });
+            if (selfCheck.freshValid) {
+                sanitizedFresh = existingAllowed.formattedLyrics.slice(0, 50000);
+            }
+        }
+
+        if (!sanitizedFresh) {
             return res.status(409).json({
                 ok: false,
                 action: 'rejected',
@@ -11343,15 +11398,6 @@ app.post('/api/english/music/verify-replace-lyrics', apiWriteLimiter.middleware,
                 message: 'No se pudo obtener una letra verificada para esta canción; el archivo Word no fue modificado.'
             });
         }
-
-        const cleanedFresh = ytdlpService.stripNonLyricAudioTags(extracted.lyrics).trim().slice(0, 50000);
-        const sectionFixedFresh = resolveLyricsSectionMismatch(notebookSnapshot, {
-            songTitle: existingSong.songTitle || resolvedTitle,
-            artistName: existingSong.artist || resolvedArtist,
-            language: existingSong.fields?.language || resolvedLanguage,
-            lyrics: cleanedFresh
-        });
-        const sanitizedFresh = String(sectionFixedFresh.lyrics || cleanedFresh).trim().slice(0, 50000);
 
         let comparisonResult = null;
         const saveRes = await runWithDocxLock('pdh_docx_english', () =>

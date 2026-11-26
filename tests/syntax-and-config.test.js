@@ -1439,6 +1439,27 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
         assert.equal(sandbox.extractLyricsForActiveLanguage(fullMulti, 'original').langCode, 'original');
         assert.equal(sandbox.extractLyricsForActiveLanguage(fullMulti, 'all').langCode, 'all');
 
+        // Regla visual por idioma original: Inglés puro oculta pestaña EN; K-Pop y J-Pop conservan EN/KO/JA
+        const pureEnSections = Array.from(sandbox.applySongLanguageSectionRulesClient(
+            sandbox.parseAndDivideLyricsByLanguage(
+                '[ORIGINAL]\nOh, hey now, come outside\n\n[EN]\nOh, hey now, come outside'
+            ),
+            'English'
+        ));
+        assert.deepEqual(pureEnSections.map(s => s.code), ['original']);
+        const pureEnWithEs = Array.from(sandbox.applySongLanguageSectionRulesClient(
+            sandbox.parseAndDivideLyricsByLanguage(
+                '[ORIGINAL]\nOh, hey now, come outside\n\n[EN]\nOh, hey now, come outside\n\n[ES]\nSal afuera'
+            ),
+            'English'
+        ));
+        assert.deepEqual(pureEnWithEs.map(s => s.code), ['original', 'es']);
+        const kpopVisSections = Array.from(sandbox.applySongLanguageSectionRulesClient(dividedMixed, 'en_ko'));
+        assert.deepEqual(kpopVisSections.map(s => s.code), ['original', 'ko', 'en']);
+        const jpopVisSections = Array.from(sandbox.applySongLanguageSectionRulesClient(jpopMixed, 'en_ja'));
+        assert.deepEqual(jpopVisSections.map(s => s.code), ['original', 'en', 'ja', 'es']);
+        assert.ok(frontendJs.includes('applySongLanguageSectionRulesClient(rawSections, songLanguage)'));
+
         // Regresión Planificador Semanal V2/V3: orden Título/Descripción arriba, Calendario fijo siempre visible, Personal vs Escuela separados y Drag & Drop con hora
         assert.equal(
             indexHtml.includes('id="btnToggleAgendaCalendar"'),

@@ -8761,7 +8761,46 @@ function parseAndDivideLyricsByLanguage(rawLyrics = '', structuredTracks = null)
         }));
 }
 
-function renderLyricsSectionsIntoContainer(host, rawLyrics = '', filterLang = 'all', { structuredTracks = null, onTabSelect = null } = {}) {
+function applySongLanguageSectionRulesClient(sections, songLanguage = '') {
+    if (!Array.isArray(sections) || !sections.length) return [];
+    const cjkRe = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]/;
+    const hasCjk = sections.some(
+        s => s.code !== 'es' && Array.isArray(s.lines) && s.lines.some(ln => cjkRe.test(ln))
+    );
+    const langLower = String(songLanguage || '').trim().toLowerCase();
+    const isExplicitNonPureEn = /(?:^|[\s_\-/+])(ko|kr|kpop|k-pop|korean|coreano|ja|jp|jpop|j-pop|japanese|japon[eé]s|es|esp|spanish|espa[nñ]ol)(?:$|[\s_\-/+])|en_ko|ko_en|en_ja|ja_en|jp-en|한국어|日本語/i.test(langLower);
+    const hasEnOrOrig = sections.some(s => s.code === 'original' || s.code === 'en');
+    const isPureEnglish = !hasCjk
+        && !isExplicitNonPureEn
+        && hasEnOrOrig
+        && (!langLower || /^(?:en|eng|english|ingl[eé]s|en[-_][a-z]{2})$/i.test(langLower));
+
+    if (!isPureEnglish) {
+        return sections;
+    }
+
+    const origSec = sections.find(s => s.code === 'original');
+    const enSec = sections.find(s => s.code === 'en');
+    const out = [];
+    for (const sec of sections) {
+        if (sec.code === 'en') {
+            if (!origSec && enSec && Array.isArray(enSec.lines) && enSec.lines.some(l => l.trim())) {
+                const count = enSec.lines.filter(l => l.trim()).length;
+                out.push({
+                    code: 'original',
+                    tabLabel: '🎵 Original',
+                    title: `🎵 Original — Letra Completa (${count} líneas)`,
+                    lines: [...enSec.lines]
+                });
+            }
+            continue;
+        }
+        out.push(sec);
+    }
+    return out;
+}
+
+function renderLyricsSectionsIntoContainer(host, rawLyrics = '', filterLang = 'all', { structuredTracks = null, onTabSelect = null, songLanguage = '' } = {}) {
     if (!host) return;
     host.replaceChildren();
 
@@ -8777,12 +8816,15 @@ function renderLyricsSectionsIntoContainer(host, rawLyrics = '', filterLang = 'a
         return;
     }
 
-    const sections = parseAndDivideLyricsByLanguage(clean, structuredTracks);
+    const rawSections = parseAndDivideLyricsByLanguage(clean, structuredTracks);
+    const sections = applySongLanguageSectionRulesClient(rawSections, songLanguage);
     let activeLang = filterLang || 'all';
     if (activeLang === 'en_ko') {
         activeLang = sections.some(s => s.code === 'original') ? 'original' : (sections.some(s => s.code === 'ko') ? 'ko' : (sections[0]?.code || 'ko'));
     } else if (activeLang === 'en_ja') {
         activeLang = sections.some(s => s.code === 'original') ? 'original' : (sections.some(s => s.code === 'ja') ? 'ja' : (sections[0]?.code || 'ja'));
+    } else if (activeLang === 'en' && !sections.some(s => s.code === 'en') && sections.some(s => s.code === 'original')) {
+        activeLang = 'original';
     } else if (activeLang === 'original' && !sections.some(s => s.code === 'original') && sections.length) {
         activeLang = sections.find(s => s.code !== 'es')?.code || sections[0].code;
     }
@@ -8809,7 +8851,7 @@ function renderLyricsSectionsIntoContainer(host, rawLyrics = '', filterLang = 'a
                 if (typeof onTabSelect === 'function') {
                     onTabSelect(tab.code);
                 } else {
-                    renderLyricsSectionsIntoContainer(host, rawLyrics, tab.code, { structuredTracks, onTabSelect });
+                    renderLyricsSectionsIntoContainer(host, rawLyrics, tab.code, { structuredTracks, onTabSelect, songLanguage });
                 }
             });
             tabBar.appendChild(btn);
@@ -9080,6 +9122,7 @@ function renderReadonlyLyricsByLanguage(rawLyrics = '', filterLang = 'all') {
     const langSelEl = document.getElementById('musicLyricsTrackLangFilter');
     renderLyricsSectionsIntoContainer(host, rawLyrics, normalizedFilter, {
         structuredTracks,
+        songLanguage: selSong?.idioma || '',
         onTabSelect: (nextLang) => {
             musicState.activeLyricsLangFilter = nextLang;
             if (langSelEl) {
@@ -21250,6 +21293,7 @@ function initStudyNotebookViewer() {
                     const rerenderCardLyrics = (nextLang) => {
                         activeCardLang = nextLang;
                         renderLyricsSectionsIntoContainer(lyricsBox, String(val), activeCardLang, {
+                            songLanguage: fields.language || entry.language || '',
                             onTabSelect: rerenderCardLyrics
                         });
                     };
