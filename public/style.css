@@ -6299,6 +6299,88 @@ body.modal-scroll-locked {
     color: #93c5fd;
 }
 
+.planner-semester-gpa-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    background: var(--brand-primary-soft, rgba(59, 130, 246, 0.16));
+    border: 1px solid var(--brand-primary-border, rgba(59, 130, 246, 0.42));
+    color: #93c5fd;
+}
+
+.planner-course-status-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.planner-course-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border: 1px solid transparent;
+}
+
+.planner-course-badge.is-paused {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(251, 191, 36, 0.42);
+    color: #fde68a;
+}
+
+.planner-course-badge.is-completed {
+    background: rgba(16, 185, 129, 0.18);
+    border-color: rgba(52, 211, 153, 0.42);
+    color: #6ee7b7;
+}
+
+.planner-course-badge.is-grade {
+    background: var(--brand-primary-soft, rgba(59, 130, 246, 0.16));
+    border-color: var(--brand-primary-border, rgba(59, 130, 246, 0.45));
+    color: #93c5fd;
+}
+
+.planner-course-status-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color, #334155);
+    background: rgba(15, 23, 42, 0.45);
+    margin-bottom: 12px;
+}
+
+.planner-commute-summary-box {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--brand-primary-border, rgba(59, 130, 246, 0.4));
+    background: var(--brand-primary-soft, rgba(59, 130, 246, 0.12));
+    margin: 10px 0;
+}
+
+.planner-commute-summary-text {
+    flex: 1 1 240px;
+    min-width: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-main, #e2e8f0);
+    line-height: 1.4;
+}
+
 /* ============================================================
    SIMULATED HTTPS TUNNEL PILL & DIAGNOSTICS
    ============================================================ */
@@ -7119,10 +7201,17 @@ body {
     .music-yt-finder-bar,
     .music-inline-input,
     .yt-platform-bar,
-    .planner-course-card {
+    .planner-course-card,
+    .planner-commute-summary-box {
         flex-wrap: wrap;
         flex-direction: column;
         align-items: stretch;
+    }
+
+    .planner-commute-summary-text {
+        flex: 0 0 auto;
+        height: auto;
+        width: 100%;
     }
 
     .yt-platform-info {

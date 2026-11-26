@@ -423,6 +423,7 @@ function inicializarTablasSeguridad() {
             estado ENUM('todo', 'in_progress', 'done', 'skipped') NOT NULL DEFAULT 'todo',
             completada TINYINT(1) NOT NULL DEFAULT 0,
             recordatorio_min SMALLINT NULL DEFAULT NULL,
+            en_progreso_desde DATETIME NULL DEFAULT NULL,
             fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_agenda_fecha (fecha),
             INDEX idx_agenda_categoria_estado (categoria, estado),
@@ -649,15 +650,19 @@ function inicializarTablasSeguridad() {
         {
             name: 'recordatorio_min',
             sql: 'ALTER TABLE RegistrosAgenda ADD COLUMN recordatorio_min SMALLINT NULL DEFAULT NULL AFTER completada'
+        },
+        {
+            name: 'en_progreso_desde',
+            sql: 'ALTER TABLE RegistrosAgenda ADD COLUMN en_progreso_desde DATETIME NULL DEFAULT NULL AFTER recordatorio_min'
         }
     ];
     agendaCols.forEach(col => {
         db.query('SHOW COLUMNS FROM RegistrosAgenda LIKE ?', [col.name], (errCol, cols) => {
             if (!errCol && Array.isArray(cols) && cols.length === 0) {
                 db.query(col.sql, (errAlt) => {
-                    if (errAlt) {
+                    if (errAlt && !/Duplicate column/i.test(errAlt.message || '')) {
                         console.error(`Error migrando columna ${col.name} en RegistrosAgenda:`, errAlt.message);
-                    } else if (col.afterMigrate) {
+                    } else if (!errAlt && col.afterMigrate) {
                         db.query(col.afterMigrate, () => {});
                     }
                 });
@@ -3669,6 +3674,34 @@ const AGENDA_CATEGORIAS_VALIDAS = new Set(['universidad', 'personal']);
 const AGENDA_ESTADOS_VALIDOS = new Set(['todo', 'in_progress', 'done', 'skipped']);
 const HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+function normalizeAgendaStatusInput(rawStatus) {
+    if (rawStatus === undefined || rawStatus === null || rawStatus === '') return '';
+    const clean = String(rawStatus).trim().toLowerCase();
+    if (clean === 'en_progreso') return 'in_progress';
+    if (clean === 'pendiente') return 'todo';
+    if (clean === 'completada' || clean === 'completado') return 'done';
+    if (clean === 'omitida' || clean === 'omitido') return 'skipped';
+    return clean;
+}
+
+function parseServerDateTimeMs(val) {
+    if (val === undefined || val === null || val === '') return NaN;
+    if (val instanceof Date) return val.getTime();
+    if (typeof val === 'number') return Number.isFinite(val) ? val : NaN;
+    const raw = String(val).trim();
+    if (!raw) return NaN;
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(raw)) {
+        return new Date(raw.replace(' ', 'T')).getTime();
+    }
+    return new Date(raw).getTime();
+}
+
+function serializeAgendaDateTime(val) {
+    if (val === undefined || val === null || val === '') return null;
+    if (val instanceof Date) return formatMySqlDateTime(val);
+    return String(val);
+}
+
 function inferAgendaBlockFromTimeServer(horaStr, categoria = 'personal') {
     const match = String(horaStr || '').match(/^([01]\d|2[0-3]):([0-5]\d)/);
     if (!match) return 'manana';
@@ -3810,6 +3843,7 @@ function enrichAgendaRow(row) {
     const isUni = (row.categoria || 'personal') === 'universidad';
     return {
         ...row,
+        en_progreso_desde: serializeAgendaDateTime(row.en_progreso_desde),
         materia_id: isUni && row.materia_id ? String(row.materia_id).trim() : null,
         materia_nombre: isUni && row.materia_nombre ? String(row.materia_nombre).trim() : null,
         titulo,
@@ -3824,9 +3858,8 @@ function normalizeAgendaItemFields(body = {}) {
     const categoria = body.categoria === undefined || body.categoria === null || body.categoria === ''
         ? 'personal'
         : String(body.categoria).trim().toLowerCase();
-    const estado = body.estado === undefined || body.estado === null || body.estado === ''
-        ? 'todo'
-        : String(body.estado).trim().toLowerCase();
+    const normalizedEstado = normalizeAgendaStatusInput(body.estado);
+    const estado = normalizedEstado || 'todo';
     let recordatorioMin = null;
     if (body.recordatorio_min !== undefined && body.recordatorio_min !== null && body.recordatorio_min !== '') {
         recordatorioMin = Number(body.recordatorio_min);
@@ -3978,7 +4011,8 @@ app.get('/api/get-agenda', apiReadLimiter.middleware, requireAdmin, (req, res) =
                materia_nombre,
                COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
                completada,
-               recordatorio_min
+               recordatorio_min,
+               en_progreso_desde
         FROM RegistrosAgenda
         WHERE fecha BETWEEN ? AND ?
         ORDER BY fecha ASC, hora ASC, id ASC
@@ -4047,6 +4081,7 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
         const { titulo, descripcion } = splitAgendaTitleAndDescription(actividad, req.body.titulo, req.body.descripcion);
         const horaNormalizada = hora.slice(0, 5);
         const completada = estado === 'done' ? 1 : 0;
+        const enProgresoDesde = estado === 'in_progress' ? formatMySqlDateTime(new Date()) : null;
 
         const repetirCadaDias = Math.max(0, Math.min(90, Number.parseInt(req.body.repetir_cada_dias, 10) || 0));
         const repetirVeces = repetirCadaDias > 0
@@ -4080,8 +4115,8 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
         }
 
         const sql = `
-            INSERT INTO RegistrosAgenda (fecha, bloque, hora, actividad, tipo, categoria, estado, completada, recordatorio_min, materia_id, materia_nombre)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO RegistrosAgenda (fecha, bloque, hora, actividad, tipo, categoria, estado, completada, recordatorio_min, en_progreso_desde, materia_id, materia_nombre)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         let firstInsertId = null;
@@ -4097,6 +4132,7 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
                 estado,
                 completada,
                 recordatorioMin,
+                enProgresoDesde,
                 courseLink.materia_id,
                 courseLink.materia_nombre
             ]);
@@ -4126,7 +4162,8 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
                 materia_nombre: courseLink.materia_nombre,
                 estado,
                 completada,
-                recordatorio_min: recordatorioMin
+                recordatorio_min: recordatorioMin,
+                en_progreso_desde: enProgresoDesde
             }
         });
     } catch (err) {
@@ -4152,7 +4189,9 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
 
         const existingRows = await dbQueryAsync(
             `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora,
-                    bloque, recordatorio_min, materia_id, materia_nombre
+                    bloque, recordatorio_min, materia_id, materia_nombre,
+                    COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
+                    completada, en_progreso_desde
              FROM RegistrosAgenda
              WHERE id = ?
              LIMIT 1`,
@@ -4207,10 +4246,17 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
         const { titulo, descripcion } = splitAgendaTitleAndDescription(actividad, req.body.titulo, req.body.descripcion);
         const horaNormalizada = hora.slice(0, 5);
         const completada = estado === 'done' ? 1 : 0;
+        const prevEstado = String(existingRow.estado || (Number(existingRow.completada) === 1 ? 'done' : 'todo')).toLowerCase();
+        const existingInProgressSince = serializeAgendaDateTime(existingRow.en_progreso_desde);
+        const nextEnProgresoDesde = estado === 'in_progress'
+            ? (prevEstado === 'in_progress' && existingInProgressSince
+                ? existingInProgressSince
+                : formatMySqlDateTime(new Date()))
+            : null;
 
         const sql = `
             UPDATE RegistrosAgenda
-            SET fecha = ?, bloque = ?, hora = ?, actividad = ?, tipo = ?, categoria = ?, estado = ?, completada = ?, recordatorio_min = ?, materia_id = ?, materia_nombre = ?
+            SET fecha = ?, bloque = ?, hora = ?, actividad = ?, tipo = ?, categoria = ?, estado = ?, completada = ?, recordatorio_min = ?, en_progreso_desde = ?, materia_id = ?, materia_nombre = ?
             WHERE id = ?
         `;
         const result = await dbQueryAsync(sql, [
@@ -4223,6 +4269,7 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
             estado,
             completada,
             recordatorioMin,
+            nextEnProgresoDesde,
             courseLink.materia_id,
             courseLink.materia_nombre,
             id
@@ -4233,6 +4280,11 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
         if (estado === 'done' || estado === 'skipped') {
             await dbQueryAsync("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id]);
         } else if (
+            estado === 'in_progress' && prevEstado !== 'in_progress'
+        ) {
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+        } else if (
+            prevEstado !== estado ||
             sourceFecha !== fecha ||
             existingHora !== horaNormalizada ||
             Number(existingRow.recordatorio_min ?? -999) !== Number(recordatorioMin ?? -999)
@@ -4256,7 +4308,8 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
                 materia_nombre: courseLink.materia_nombre,
                 estado,
                 completada,
-                recordatorio_min: recordatorioMin
+                recordatorio_min: recordatorioMin,
+                en_progreso_desde: nextEnProgresoDesde
             }
         });
     } catch (err) {
@@ -4265,60 +4318,76 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
     }
 });
 
-app.patch('/api/toggle-agenda/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
+app.patch('/api/toggle-agenda/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const id = parseAgendaId(req.params.id);
     if (!id) return res.status(400).send('Invalid activity ID.');
 
     const body = req.body || {};
-    let resolvedEstado = null;
-    let resolvedCompletada = null;
+    let requestedEstado = null;
+    let requestedCompletada = null;
 
     if (body.estado !== undefined && body.estado !== null && body.estado !== '') {
-        const candidate = String(body.estado).trim().toLowerCase();
+        const candidate = normalizeAgendaStatusInput(body.estado);
         if (!AGENDA_ESTADOS_VALIDOS.has(candidate)) {
             return res.status(400).send('Invalid status (allowed: todo, in_progress, done, skipped).');
         }
-        resolvedEstado = candidate;
-        resolvedCompletada = candidate === 'done' ? 1 : 0;
+        requestedEstado = candidate;
+        requestedCompletada = candidate === 'done' ? 1 : 0;
     } else if (body.completada !== undefined) {
-        resolvedCompletada = body.completada ? 1 : 0;
-        resolvedEstado = resolvedCompletada === 1 ? 'done' : 'todo';
+        requestedCompletada = body.completada ? 1 : 0;
+        requestedEstado = requestedCompletada === 1 ? 'done' : 'todo';
     }
 
-    const sql = resolvedEstado === null
-        ? "UPDATE RegistrosAgenda SET estado = CASE WHEN completada = 1 THEN 'todo' ELSE 'done' END, completada = NOT completada WHERE id = ?"
-        : 'UPDATE RegistrosAgenda SET estado = ?, completada = ? WHERE id = ?';
-    const params = resolvedEstado === null ? [id] : [resolvedEstado, resolvedCompletada, id];
-
-    db.query(sql, params, (err, result) => {
-        if (err) {
-            console.error(err);
-            return res.status(500).send('Error updating activity status.');
-        }
-        if (result.affectedRows === 0) {
+    try {
+        const prevRows = await dbQueryAsync(
+            `SELECT id, completada,
+                    COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
+                    en_progreso_desde
+             FROM RegistrosAgenda
+             WHERE id = ?
+             LIMIT 1`,
+            [id]
+        );
+        if (!Array.isArray(prevRows) || prevRows.length === 0) {
             return res.status(404).send('Activity not found.');
         }
-        if (resolvedEstado !== null) {
-            if (resolvedEstado === 'done' || resolvedEstado === 'skipped') {
-                db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
-            }
-            bumpSyncRevision('agenda');
-            return res.json({ message: 'Status updated.', id, completada: resolvedCompletada, estado: resolvedEstado });
+
+        const prevRow = prevRows[0];
+        const prevCompletada = prevRow.completada ? 1 : 0;
+        const prevEstado = String(prevRow.estado || (prevCompletada === 1 ? 'done' : 'todo')).toLowerCase();
+        const nextEstado = requestedEstado !== null ? requestedEstado : (prevCompletada === 1 ? 'todo' : 'done');
+        const nextCompletada = requestedCompletada !== null ? requestedCompletada : (nextEstado === 'done' ? 1 : 0);
+
+        const prevSince = serializeAgendaDateTime(prevRow.en_progreso_desde);
+        const nextEnProgresoDesde = nextEstado === 'in_progress'
+            ? (prevEstado === 'in_progress' && prevSince ? prevSince : formatMySqlDateTime(new Date()))
+            : null;
+
+        await dbQueryAsync(
+            'UPDATE RegistrosAgenda SET estado = ?, completada = ?, en_progreso_desde = ? WHERE id = ?',
+            [nextEstado, nextCompletada, nextEnProgresoDesde, id]
+        );
+
+        if (nextEstado === 'done' || nextEstado === 'skipped') {
+            await dbQueryAsync("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+        } else if (nextEstado === 'in_progress' && (prevEstado !== 'in_progress' || !prevSince)) {
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+        } else if (nextEstado === 'todo' && prevEstado !== 'todo') {
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
         }
-        db.query('SELECT completada, estado FROM RegistrosAgenda WHERE id = ? LIMIT 1', [id], (selErr, rows) => {
-            if (selErr || !Array.isArray(rows) || rows.length === 0) {
-                bumpSyncRevision('agenda');
-                return res.json({ message: 'Status updated.', id, completada: resolvedCompletada, estado: resolvedEstado });
-            }
-            const toggledCompletada = rows[0].completada ? 1 : 0;
-            const toggledEstado = rows[0].estado || (toggledCompletada === 1 ? 'done' : 'todo');
-            if (toggledEstado === 'done' || toggledEstado === 'skipped') {
-                db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
-            }
-            bumpSyncRevision('agenda');
-            res.json({ message: 'Status updated.', id, completada: toggledCompletada, estado: toggledEstado });
+
+        bumpSyncRevision('agenda');
+        return res.json({
+            message: 'Status updated.',
+            id,
+            completada: nextCompletada,
+            estado: nextEstado,
+            en_progreso_desde: nextEnProgresoDesde
         });
-    });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).send('Error updating activity status.');
+    }
 });
 
 app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
@@ -4361,7 +4430,7 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
                     COALESCE(categoria, 'personal') AS categoria,
                     materia_id, materia_nombre,
                     COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
-                    completada, recordatorio_min
+                    completada, recordatorio_min, en_progreso_desde
              FROM RegistrosAgenda
              WHERE id = ?
              LIMIT 1`,
@@ -4375,6 +4444,9 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
         const prevEstado = String(currentRow.estado || 'todo').toLowerCase();
         const nextEstado = (prevEstado === 'skipped' || prevEstado === 'done') ? 'todo' : prevEstado;
         const nextCompletada = 0;
+        const nextEnProgresoDesde = nextEstado === 'in_progress'
+            ? serializeAgendaDateTime(currentRow.en_progreso_desde)
+            : null;
 
         let newFecha = validTargetDate;
         let newHora = currentRow.hora;
@@ -4396,8 +4468,8 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
             newBloque = computed.bloque;
 
             await dbQueryAsync(
-                'UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, estado = ?, completada = ? WHERE id = ?',
-                [newFecha, newBloque, newHora, nextEstado, nextCompletada, id]
+                'UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, estado = ?, completada = ?, en_progreso_desde = ? WHERE id = ?',
+                [newFecha, newBloque, newHora, nextEstado, nextCompletada, nextEnProgresoDesde, id]
             );
             await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
 
@@ -4426,8 +4498,8 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
                 newFecha = movedObj.toISOString().slice(0, 10);
             }
             await dbQueryAsync(
-                'UPDATE RegistrosAgenda SET fecha = ?, estado = ?, completada = ? WHERE id = ?',
-                [newFecha, nextEstado, nextCompletada, id]
+                'UPDATE RegistrosAgenda SET fecha = ?, estado = ?, completada = ?, en_progreso_desde = ? WHERE id = ?',
+                [newFecha, nextEstado, nextCompletada, nextEnProgresoDesde, id]
             );
             await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
         }
@@ -4438,7 +4510,8 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
             hora: newHora,
             bloque: newBloque,
             estado: nextEstado,
-            completada: nextCompletada
+            completada: nextCompletada,
+            en_progreso_desde: nextEnProgresoDesde
         });
         bumpSyncRevision('agenda');
         res.json({
@@ -4993,7 +5066,7 @@ async function resolveLiveDrivingMinutes(originCoords, destCoords, fallbackDrive
                 const elem = data?.rows?.[0]?.elements?.[0];
                 const secs = Number(elem?.duration_in_traffic?.value ?? elem?.duration?.value);
                 if (elem?.status === 'OK' && Number.isFinite(secs) && secs > 0) {
-                    resolvedMinutes = Math.max(1, Math.round(secs / 60));
+                    resolvedMinutes = Math.max(1, Math.ceil(secs / 60));
                 }
             }
         } else {
@@ -5004,7 +5077,7 @@ async function resolveLiveDrivingMinutes(originCoords, destCoords, fallbackDrive
                 const secs = Number(data?.routes?.[0]?.duration);
                 if (Number.isFinite(secs) && secs > 0) {
                     const traffic = getSaltilloTrafficFactor(minutesOfDay, weekday);
-                    resolvedMinutes = Math.max(1, Math.round((secs / 60) * traffic.factor));
+                    resolvedMinutes = Math.max(1, Math.ceil((secs / 60) * traffic.factor));
                 }
             }
         }
@@ -5023,82 +5096,165 @@ async function resolveLiveDrivingMinutes(originCoords, destCoords, fallbackDrive
     return safeFallback;
 }
 
-function computeCommuteAlertMilestones({
-    originCoords,
+function normalizeNearAlertMinutes(rawInput, fallback = [20, 15, 10]) {
+    const cleanFallback = Array.isArray(fallback) && fallback.length
+        ? Array.from(new Set(fallback.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 180))).sort((a, b) => b - a)
+        : [20, 15, 10];
+
+    let tokens = null;
+    if (Array.isArray(rawInput)) {
+        tokens = rawInput;
+    } else if (typeof rawInput === 'string') {
+        const trimmed = rawInput.trim();
+        if (!trimmed) return { valid: false, values: cleanFallback };
+        tokens = trimmed.split(/[\s,;]+/).filter(Boolean);
+    } else if (rawInput === undefined || rawInput === null) {
+        return { valid: true, values: cleanFallback };
+    } else {
+        return { valid: false, values: cleanFallback };
+    }
+
+    if (!tokens || tokens.length === 0 || tokens.length > 12) {
+        return { valid: false, values: cleanFallback };
+    }
+    const parsed = [];
+    for (const tok of tokens) {
+        const num = typeof tok === 'boolean' || tok === null || String(tok).trim() === '' ? NaN : Number(tok);
+        if (!Number.isInteger(num) || num < 1 || num > 180) {
+            return { valid: false, values: cleanFallback };
+        }
+        parsed.push(num);
+    }
+    const uniqueSorted = Array.from(new Set(parsed)).sort((a, b) => b - a);
+    return { valid: uniqueSorted.length > 0, values: uniqueSorted.length > 0 ? uniqueSorted : cleanFallback };
+}
+
+function computeSmartCommuteAlertSchedule({
+    zone = null,
+    originCoords = null,
     homeCoords = null,
     destCoords = null,
-    driveMinutes = 20,
-    nearRadiusKm = 0.85,
+    routeMinutes = undefined,
+    driveMinutes = undefined,
+    extraBufferMinutes = 30,
+    buffer = undefined,
+    repeatEveryMinutes = 5,
+    step = undefined,
+    nearAlertMinutes = [20, 15, 10],
+    nearRadiusKm = 0.5,
     homeRadiusKm = null,
-    hasLiveGps = null
+    hasLiveGps = null,
+    acknowledged = false
 } = {}) {
-    const effNearRadius = Number.isFinite(Number(nearRadiusKm)) && Number(nearRadiusKm) > 0
+    const effNearRadius = Number.isFinite(Number(nearRadiusKm)) && Number(nearRadiusKm) >= 0.05 && Number(nearRadiusKm) <= 10
         ? Number(nearRadiusKm)
-        : 0.85;
+        : 0.5;
     const effHomeRadius = Number.isFinite(Number(homeRadiusKm)) && Number(homeRadiusKm) > 0
         ? Number(homeRadiusKm)
         : effNearRadius;
 
-    const validOrigin = Boolean(originCoords && isValidNonZeroCoords(Number(originCoords.lat), Number(originCoords.lng)));
-    const validDest = Boolean(destCoords && isValidNonZeroCoords(Number(destCoords.lat), Number(destCoords.lng)));
-    const validHome = Boolean(homeCoords && isValidNonZeroCoords(Number(homeCoords.lat), Number(homeCoords.lng)));
+    const rawBuffer = buffer !== undefined ? buffer : extraBufferMinutes;
+    const effBuffer = Number.isFinite(Number(rawBuffer))
+        ? Math.max(5, Math.min(120, Math.round(Number(rawBuffer))))
+        : 30;
+    const rawStep = step !== undefined ? step : repeatEveryMinutes;
+    const effStep = Number.isFinite(Number(rawStep))
+        ? Math.max(1, Math.min(30, Math.round(Number(rawStep))))
+        : 5;
+    const nearParsed = normalizeNearAlertMinutes(nearAlertMinutes, [20, 15, 10]);
+    const nearMilestones = nearParsed.valid ? nearParsed.values : [20, 15, 10];
 
-    const isNear = Boolean(
-        validOrigin && validDest &&
-        calculateHaversineKm(Number(originCoords.lat), Number(originCoords.lng), Number(destCoords.lat), Number(destCoords.lng)) <= effNearRadius
-    );
+    const rawRoute = routeMinutes !== undefined ? routeMinutes : driveMinutes;
+    const T = Math.max(1, Math.ceil(Number(rawRoute) || 20));
 
-    if (isNear) {
+    let resolvedZone = null;
+    if (typeof zone === 'string' && zone.trim()) {
+        const z = zone.trim().toLowerCase();
+        if (z === 'near' || z === 'near_destination') resolvedZone = 'near';
+        else if (z === 'home') resolvedZone = 'home';
+        else if (z === 'away' || z === 'away_far') resolvedZone = 'away';
+    }
+
+    if (!resolvedZone) {
+        const validOrigin = Boolean(originCoords && isValidNonZeroCoords(Number(originCoords.lat), Number(originCoords.lng)));
+        const validDest = Boolean(destCoords && isValidNonZeroCoords(Number(destCoords.lat), Number(destCoords.lng)));
+        const validHome = Boolean(homeCoords && isValidNonZeroCoords(Number(homeCoords.lat), Number(homeCoords.lng)));
+
+        const isNear = Boolean(
+            validOrigin && validDest &&
+            calculateHaversineKm(Number(originCoords.lat), Number(originCoords.lng), Number(destCoords.lat), Number(destCoords.lng)) <= effNearRadius
+        );
+        if (isNear) {
+            resolvedZone = 'near';
+        } else {
+            let isAtHome = false;
+            if (validOrigin && validHome) {
+                const distHomeKm = calculateHaversineKm(
+                    Number(originCoords.lat),
+                    Number(originCoords.lng),
+                    Number(homeCoords.lat),
+                    Number(homeCoords.lng)
+                );
+                isAtHome = distHomeKm <= effHomeRadius;
+            } else if (hasLiveGps === false) {
+                isAtHome = true;
+            } else if (!validOrigin && !validHome) {
+                isAtHome = true;
+            }
+            resolvedZone = isAtHome ? 'home' : 'away';
+        }
+    }
+
+    if (resolvedZone === 'near') {
+        const milestones = acknowledged ? [] : [...nearMilestones];
         return {
-            zone: 'near_destination',
+            zone: 'near',
+            legacyZone: 'near_destination',
             isNear: true,
             isAtHome: false,
-            milestones: [20, 15],
-            recommendedLeadMinutes: 20
+            routeMinutes: T,
+            extraBufferMinutes: effBuffer,
+            repeatEveryMinutes: effStep,
+            nearAlertMinutes: nearMilestones,
+            milestones,
+            schedule: milestones,
+            recommendedLeadMinutes: nearMilestones[0] || 20
         };
     }
 
-    let isAtHome = false;
-    if (validOrigin && validHome) {
-        const distHomeKm = calculateHaversineKm(
-            Number(originCoords.lat),
-            Number(originCoords.lng),
-            Number(homeCoords.lat),
-            Number(homeCoords.lng)
-        );
-        isAtHome = distHomeKm <= effHomeRadius;
-    } else if (hasLiveGps === false) {
-        isAtHome = true;
-    } else if (!validOrigin && !validHome) {
-        isAtHome = true;
+    const startLead = T + effBuffer;
+    const seq = [];
+    if (!acknowledged) {
+        for (let m = startLead; m > 0; m -= effStep) {
+            seq.push(m);
+        }
     }
 
-    const T = Math.max(1, Math.round(Number(driveMinutes) || 20));
-    if (isAtHome) {
-        const stages = Array.from(new Set([T + 20, T + 10, T, 10].filter((m) => Number.isFinite(m) && m > 0)))
-            .sort((a, b) => b - a);
-        return {
-            zone: 'home',
-            isNear: false,
-            isAtHome: true,
-            milestones: stages,
-            recommendedLeadMinutes: stages[0]
-        };
-    }
-
-    const awayLead = T + 10;
     return {
-        zone: 'away_far',
+        zone: resolvedZone,
+        legacyZone: resolvedZone === 'home' ? 'home' : 'away_far',
         isNear: false,
-        isAtHome: false,
-        milestones: [awayLead],
-        recommendedLeadMinutes: awayLead
+        isAtHome: resolvedZone === 'home',
+        routeMinutes: T,
+        extraBufferMinutes: effBuffer,
+        repeatEveryMinutes: effStep,
+        nearAlertMinutes: nearMilestones,
+        milestones: seq,
+        schedule: seq,
+        recommendedLeadMinutes: startLead
     };
 }
 
-function pickActiveCommuteMilestone(startMin, minutesOfDay, milestones = [], postStartGraceMin = 15) {
+function computeCommuteAlertMilestones(options = {}) {
+    return computeSmartCommuteAlertSchedule(options);
+}
+
+function pickActiveCommuteMilestone(startMin, minutesOfDay, milestones = [], postStartGraceMin = 0) {
     if (!Array.isArray(milestones) || milestones.length === 0) return null;
-    if (minutesOfDay > startMin + postStartGraceMin) return null;
+    const grace = Number.isFinite(Number(postStartGraceMin)) ? Number(postStartGraceMin) : 0;
+    if (grace <= 0 ? (minutesOfDay >= startMin) : (minutesOfDay > startMin + grace)) {
+        return null;
+    }
     const triggered = milestones
         .map((m) => Number(m))
         .filter((m) => Number.isFinite(m) && m > 0 && minutesOfDay >= Math.max(0, startMin - m))
@@ -5113,9 +5269,21 @@ function estimateCommuteDetails({
     targetMinutesOfDay = 9 * 60,
     weekday = 1,
     isFirstOfDay = true,
-    nearRadiusKm = 0.85,
+    nearRadiusKm = 0.5,
+    extraBufferMinutes = 30,
+    repeatEveryMinutes = 5,
+    nearAlertMinutes = [20, 15, 10],
     hasLiveGps = null
 }) {
+    const nearParsed = normalizeNearAlertMinutes(nearAlertMinutes, [20, 15, 10]);
+    const effNearList = nearParsed.valid ? nearParsed.values : [20, 15, 10];
+    const effBuffer = Number.isFinite(Number(extraBufferMinutes))
+        ? Math.max(5, Math.min(120, Math.round(Number(extraBufferMinutes))))
+        : 30;
+    const effStep = Number.isFinite(Number(repeatEveryMinutes))
+        ? Math.max(1, Math.min(30, Math.round(Number(repeatEveryMinutes))))
+        : 5;
+
     if (!destCoords || !isValidNonZeroCoords(Number(destCoords.lat), Number(destCoords.lng))) {
         const fallbackDrive = isFirstOfDay ? 20 : 0;
         if (!isFirstOfDay) {
@@ -5123,22 +5291,28 @@ function estimateCommuteDetails({
                 hasOrigin: false,
                 isNear: true,
                 isAtHome: false,
-                commuteZone: 'near_destination',
-                alertMilestones: [20, 15],
+                commuteZone: 'near',
+                alertMilestones: effNearList,
                 distanceKm: 0,
                 roadDistanceKm: 0,
                 driveMinutes: 0,
                 walkMinutes: 6,
+                extraBufferMinutes: effBuffer,
+                repeatEveryMinutes: effStep,
+                nearAlertMinutes: effNearList,
                 trafficLabel: 'Ruta estándar',
-                recommendedLeadMinutes: 20,
+                recommendedLeadMinutes: effNearList[0] || 20,
                 mapsUrl: ''
             };
         }
-        const zoneMeta = computeCommuteAlertMilestones({
+        const zoneMeta = computeSmartCommuteAlertSchedule({
             originCoords: null,
             homeCoords,
             destCoords: null,
-            driveMinutes: fallbackDrive,
+            routeMinutes: fallbackDrive,
+            extraBufferMinutes: effBuffer,
+            repeatEveryMinutes: effStep,
+            nearAlertMinutes: effNearList,
             nearRadiusKm,
             hasLiveGps: hasLiveGps ?? false
         });
@@ -5152,6 +5326,9 @@ function estimateCommuteDetails({
             roadDistanceKm: 0,
             driveMinutes: fallbackDrive,
             walkMinutes: 6,
+            extraBufferMinutes: zoneMeta.extraBufferMinutes,
+            repeatEveryMinutes: zoneMeta.repeatEveryMinutes,
+            nearAlertMinutes: zoneMeta.nearAlertMinutes,
             trafficLabel: 'Ruta estándar',
             recommendedLeadMinutes: zoneMeta.recommendedLeadMinutes,
             mapsUrl: ''
@@ -5164,23 +5341,29 @@ function estimateCommuteDetails({
                 hasOrigin: false,
                 isNear: true,
                 isAtHome: false,
-                commuteZone: 'near_destination',
-                alertMilestones: [20, 15],
+                commuteZone: 'near',
+                alertMilestones: effNearList,
                 distanceKm: 0,
                 roadDistanceKm: 0,
                 driveMinutes: 0,
                 walkMinutes: 5,
+                extraBufferMinutes: effBuffer,
+                repeatEveryMinutes: effStep,
+                nearAlertMinutes: effNearList,
                 trafficLabel: 'En campus / cerca',
-                recommendedLeadMinutes: 20,
+                recommendedLeadMinutes: effNearList[0] || 20,
                 mapsUrl: buildGoogleMapsDirectionsUrl(null, destCoords, 'walking')
             };
         }
         const fallbackDrive = 20;
-        const zoneMeta = computeCommuteAlertMilestones({
+        const zoneMeta = computeSmartCommuteAlertSchedule({
             originCoords: null,
             homeCoords,
             destCoords,
-            driveMinutes: fallbackDrive,
+            routeMinutes: fallbackDrive,
+            extraBufferMinutes: effBuffer,
+            repeatEveryMinutes: effStep,
+            nearAlertMinutes: effNearList,
             nearRadiusKm,
             hasLiveGps: false
         });
@@ -5194,6 +5377,9 @@ function estimateCommuteDetails({
             roadDistanceKm: 0,
             driveMinutes: fallbackDrive,
             walkMinutes: 5,
+            extraBufferMinutes: zoneMeta.extraBufferMinutes,
+            repeatEveryMinutes: zoneMeta.repeatEveryMinutes,
+            nearAlertMinutes: zoneMeta.nearAlertMinutes,
             trafficLabel: 'Estimado desde casa (sin GPS activo)',
             recommendedLeadMinutes: zoneMeta.recommendedLeadMinutes,
             mapsUrl: buildGoogleMapsDirectionsUrl(null, destCoords, 'driving')
@@ -5204,16 +5390,19 @@ function estimateCommuteDetails({
     const roadKm = Number((straightKm * 1.32).toFixed(2));
     const traffic = getSaltilloTrafficFactor(targetMinutesOfDay, weekday);
     // Velocidad base urbana en Saltillo ~30 km/h ajustada por factor de tráfico (o ruta real Maps cacheada)
-    const baseDriveMin = Math.max(3, Math.round((roadKm / 30) * 60 * traffic.factor));
+    const baseDriveMin = Math.max(3, Math.ceil((roadKm / 30) * 60 * traffic.factor));
     const cachedLiveMin = getCachedLiveDrivingMinutes(originCoords, destCoords);
-    const driveMinutes = cachedLiveMin !== null ? cachedLiveMin : baseDriveMin;
+    const driveMinutes = Math.max(1, Math.ceil(cachedLiveMin !== null ? cachedLiveMin : baseDriveMin));
     const walkMinutes = Math.max(2, Math.round((straightKm * 1.25 / 4.6) * 60));
 
-    const zoneMeta = computeCommuteAlertMilestones({
+    const zoneMeta = computeSmartCommuteAlertSchedule({
         originCoords,
         homeCoords,
         destCoords,
-        driveMinutes,
+        routeMinutes: driveMinutes,
+        extraBufferMinutes: effBuffer,
+        repeatEveryMinutes: effStep,
+        nearAlertMinutes: effNearList,
         nearRadiusKm,
         hasLiveGps
     });
@@ -5228,6 +5417,9 @@ function estimateCommuteDetails({
         roadDistanceKm: roadKm,
         driveMinutes,
         walkMinutes,
+        extraBufferMinutes: zoneMeta.extraBufferMinutes,
+        repeatEveryMinutes: zoneMeta.repeatEveryMinutes,
+        nearAlertMinutes: zoneMeta.nearAlertMinutes,
         trafficLevel: traffic.level,
         trafficLabel: traffic.label,
         recommendedLeadMinutes: zoneMeta.recommendedLeadMinutes,
@@ -5241,7 +5433,7 @@ async function warmLiveDrivingRoutesForPlanner(planner, localNow) {
     const originCoords = originInfo.coords;
     if (!originCoords || !isValidNonZeroCoords(Number(originCoords.lat), Number(originCoords.lng))) return;
 
-    const effNear = planner.nearRadiusKm || 0.85;
+    const effNear = planner.nearRadiusKm || planner.commuteNearRadiusKm || 0.5;
     const targets = [];
     const campusDir = getEffectiveCampusDirectory(planner);
     for (const campus of Object.values(campusDir)) {
@@ -5258,7 +5450,7 @@ async function warmLiveDrivingRoutesForPlanner(planner, localNow) {
         const km = calculateHaversineKm(originCoords.lat, originCoords.lng, dest.lat, dest.lng);
         if (km <= effNear) return;
         const traffic = getSaltilloTrafficFactor(localNow?.minutesOfDay ?? 540, localNow?.weekday ?? 1);
-        const fallbackMin = Math.max(3, Math.round(((km * 1.32) / 30) * 60 * traffic.factor));
+        const fallbackMin = Math.max(3, Math.ceil(((km * 1.32) / 30) * 60 * traffic.factor));
         await resolveLiveDrivingMinutes(originCoords, dest, fallbackMin, {
             minutesOfDay: localNow?.minutesOfDay ?? 540,
             weekday: localNow?.weekday ?? 1
@@ -5271,9 +5463,13 @@ function getDefaultAcademicPlanner() {
         universityName: 'Instituto Tecnológico de Saltillo (TecNM)',
         activeSemesterId: 'sem-9no-2026',
         classRemindersEnabled: true,
+        commuteExtraBufferMinutes: 30,
+        commuteRepeatEveryMinutes: 5,
+        commuteNearAlertMinutes: [20, 15, 10],
+        commuteNearRadiusKm: 0.5,
         farLeadMinutesMin: 30,
         nearLeadMinutes: 10,
-        nearRadiusKm: 0.85,
+        nearRadiusKm: 0.5,
         parkingBufferMinutes: 8,
         locations: {
             home: {
@@ -5443,10 +5639,43 @@ function sanitizeLocationObject(rawLoc = {}, fallback = {}) {
     return base;
 }
 
+function sanitizeCourseFinalGrade(rawVal) {
+    if (rawVal === undefined || rawVal === null || rawVal === '' || typeof rawVal === 'boolean') {
+        return null;
+    }
+    const num = Number(rawVal);
+    if (!Number.isFinite(num)) return null;
+    const clamped = Math.max(0, Math.min(100, num));
+    return Number(clamped.toFixed(2));
+}
+
 function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcademicPlanner()) {
     const def = getDefaultAcademicPlanner();
     const src = rawPlanner && typeof rawPlanner === 'object' ? rawPlanner : {};
     const prev = basePlanner && typeof basePlanner === 'object' ? basePlanner : def;
+
+    const rawExtraBuffer = src.commuteExtraBufferMinutes !== undefined
+        ? src.commuteExtraBufferMinutes
+        : (src.farLeadMinutesMin !== undefined ? src.farLeadMinutesMin : (prev.commuteExtraBufferMinutes ?? prev.farLeadMinutesMin ?? 30));
+    const sanitizedExtraBuffer = Number.isFinite(Number(rawExtraBuffer))
+        ? Math.max(5, Math.min(120, Math.round(Number(rawExtraBuffer))))
+        : 30;
+    const rawRepeatEvery = src.commuteRepeatEveryMinutes !== undefined
+        ? src.commuteRepeatEveryMinutes
+        : (prev.commuteRepeatEveryMinutes ?? 5);
+    const sanitizedRepeatEvery = Number.isFinite(Number(rawRepeatEvery))
+        ? Math.max(1, Math.min(30, Math.round(Number(rawRepeatEvery))))
+        : 5;
+    const nearAlertRes = normalizeNearAlertMinutes(
+        src.commuteNearAlertMinutes !== undefined ? src.commuteNearAlertMinutes : prev.commuteNearAlertMinutes,
+        [20, 15, 10]
+    );
+    const rawNearRadius = src.commuteNearRadiusKm !== undefined
+        ? src.commuteNearRadiusKm
+        : (src.nearRadiusKm !== undefined ? src.nearRadiusKm : (prev.commuteNearRadiusKm ?? prev.nearRadiusKm ?? 0.5));
+    const sanitizedNearRadius = Number.isFinite(Number(rawNearRadius))
+        ? Math.max(0.05, Math.min(10, Number(Number(rawNearRadius).toFixed(2))))
+        : 0.5;
 
     const out = {
         universityName: typeof src.universityName === 'string' && src.universityName.trim()
@@ -5457,16 +5686,18 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
             : (prev.activeSemesterId || def.activeSemesterId),
         classRemindersEnabled: typeof src.classRemindersEnabled === 'boolean'
             ? src.classRemindersEnabled
-            : (typeof prev.classRemindersEnabled === 'boolean' ? prev.classRemindersEnabled : true),
-        farLeadMinutesMin: Number.isFinite(Number(src.farLeadMinutesMin))
-            ? Math.max(30, Math.min(120, Math.round(Number(src.farLeadMinutesMin))))
-            : (prev.farLeadMinutesMin || 30),
+            : (typeof src.commuteRemindersEnabled === 'boolean'
+                ? src.commuteRemindersEnabled
+                : (typeof prev.classRemindersEnabled === 'boolean' ? prev.classRemindersEnabled : true)),
+        commuteExtraBufferMinutes: sanitizedExtraBuffer,
+        commuteRepeatEveryMinutes: sanitizedRepeatEvery,
+        commuteNearAlertMinutes: nearAlertRes.values,
+        commuteNearRadiusKm: sanitizedNearRadius,
+        farLeadMinutesMin: sanitizedExtraBuffer,
         nearLeadMinutes: Number.isFinite(Number(src.nearLeadMinutes))
             ? Math.max(5, Math.min(45, Math.round(Number(src.nearLeadMinutes))))
             : (prev.nearLeadMinutes || 10),
-        nearRadiusKm: Number.isFinite(Number(src.nearRadiusKm))
-            ? Math.max(0.2, Math.min(5, Number(Number(src.nearRadiusKm).toFixed(2))))
-            : (prev.nearRadiusKm || 0.85),
+        nearRadiusKm: sanitizedNearRadius,
         parkingBufferMinutes: Number.isFinite(Number(src.parkingBufferMinutes))
             ? Math.max(0, Math.min(30, Math.round(Number(src.parkingBufferMinutes))))
             : (prev.parkingBufferMinutes ?? 8),
@@ -5569,6 +5800,8 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
             const resolvedCourseCampusId = cleanReqCampusId && activeCampusIds.includes(cleanReqCampusId)
                 ? cleanReqCampusId
                 : (activeCampusIds.includes(roomInfo.campusId) ? roomInfo.campusId : (activeCampusIds[0] || roomInfo.campusId));
+            const isCompleted = Boolean(c?.completed);
+            const isPaused = isCompleted ? true : Boolean(c?.remindersPaused);
             return {
                 id: typeof c?.id === 'string' && c.id.trim() ? c.id.trim().slice(0, 60) : `course-${idx + 1}-${cIdx + 1}`,
                 code: String(c?.code || '').trim().slice(0, 30),
@@ -5579,7 +5812,10 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
                 campusId: resolvedCourseCampusId,
                 days: days.length ? days : [1, 2, 3, 4, 5],
                 startTime: HHMM_REGEX.test(String(c?.startTime || '').trim()) ? String(c.startTime).trim() : '09:00',
-                endTime: HHMM_REGEX.test(String(c?.endTime || '').trim()) ? String(c.endTime).trim() : '10:00'
+                endTime: HHMM_REGEX.test(String(c?.endTime || '').trim()) ? String(c.endTime).trim() : '10:00',
+                remindersPaused: isPaused,
+                completed: isCompleted,
+                finalGrade: sanitizeCourseFinalGrade(c?.finalGrade)
             };
         });
         return {
@@ -5671,6 +5907,11 @@ function getDefaultUserSettings() {
         agendaNotifyTasks: true,
         agendaNotifyPendingTasks: true,
         agendaLeadMinutes: 10,
+        commuteRemindersEnabled: true,
+        commuteExtraBufferMinutes: 30,
+        commuteRepeatEveryMinutes: 5,
+        commuteNearAlertMinutes: [20, 15, 10],
+        commuteNearRadiusKm: 0.5,
         wordEodReminderEnabled: true,
         wordEodReminderTime: '21:30',
         englishReminderEnabled: false,
@@ -5842,6 +6083,7 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
         'agendaNotifyEvents',
         'agendaNotifyTasks',
         'agendaNotifyPendingTasks',
+        'commuteRemindersEnabled',
         'wordEodReminderEnabled',
         'englishReminderEnabled'
     ];
@@ -5924,6 +6166,47 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
             return { error: 'Agenda lead minutes must be between 0 and 120.' };
         }
         next.agendaLeadMinutes = mins;
+    }
+
+    if (input.commuteExtraBufferMinutes !== undefined) {
+        const rawBuf = input.commuteExtraBufferMinutes;
+        const buf = typeof rawBuf === 'boolean' || rawBuf === null || String(rawBuf).trim() === ''
+            ? NaN
+            : Number(rawBuf);
+        if (!Number.isInteger(buf) || buf < 5 || buf > 120) {
+            return { error: 'Smart commute extra buffer minutes must be an integer between 5 and 120.' };
+        }
+        next.commuteExtraBufferMinutes = buf;
+    }
+
+    if (input.commuteRepeatEveryMinutes !== undefined) {
+        const rawStep = input.commuteRepeatEveryMinutes;
+        const stepVal = typeof rawStep === 'boolean' || rawStep === null || String(rawStep).trim() === ''
+            ? NaN
+            : Number(rawStep);
+        if (!Number.isInteger(stepVal) || stepVal < 1 || stepVal > 30) {
+            return { error: 'Smart commute repeat interval must be an integer between 1 and 30 minutes.' };
+        }
+        next.commuteRepeatEveryMinutes = stepVal;
+    }
+
+    if (input.commuteNearAlertMinutes !== undefined) {
+        const nearParsed = normalizeNearAlertMinutes(input.commuteNearAlertMinutes, [20, 15, 10]);
+        if (!nearParsed.valid) {
+            return { error: 'Near-campus alert minutes must be a list of positive integers between 1 and 180 (e.g. 20, 15, 10).' };
+        }
+        next.commuteNearAlertMinutes = nearParsed.values;
+    }
+
+    if (input.commuteNearRadiusKm !== undefined) {
+        const rawRad = input.commuteNearRadiusKm;
+        const rad = typeof rawRad === 'boolean' || rawRad === null || String(rawRad).trim() === ''
+            ? NaN
+            : Number(rawRad);
+        if (!Number.isFinite(rad) || rad < 0.05 || rad > 10) {
+            return { error: 'Proximity radius must be between 0.05 and 10 km.' };
+        }
+        next.commuteNearRadiusKm = Number(rad.toFixed(2));
     }
 
     if (input.englishReminderDays !== undefined) {
@@ -6014,8 +6297,53 @@ function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()
 
     if (input.academicPlanner !== undefined) {
         next.academicPlanner = sanitizeAcademicPlanner(input.academicPlanner, base.academicPlanner);
+        if (input.commuteRemindersEnabled === undefined) {
+            next.commuteRemindersEnabled = next.academicPlanner.classRemindersEnabled !== false;
+        }
+        if (input.commuteExtraBufferMinutes === undefined) {
+            next.commuteExtraBufferMinutes = next.academicPlanner.commuteExtraBufferMinutes;
+        }
+        if (input.commuteRepeatEveryMinutes === undefined) {
+            next.commuteRepeatEveryMinutes = next.academicPlanner.commuteRepeatEveryMinutes;
+        }
+        if (input.commuteNearAlertMinutes === undefined) {
+            next.commuteNearAlertMinutes = next.academicPlanner.commuteNearAlertMinutes;
+        }
+        if (input.commuteNearRadiusKm === undefined) {
+            next.commuteNearRadiusKm = next.academicPlanner.nearRadiusKm;
+        }
     } else {
         next.academicPlanner = sanitizeAcademicPlanner(base.academicPlanner);
+    }
+
+    if (input.commuteRemindersEnabled !== undefined) {
+        next.academicPlanner.classRemindersEnabled = next.commuteRemindersEnabled;
+    } else {
+        next.commuteRemindersEnabled = next.academicPlanner.classRemindersEnabled !== false;
+    }
+    if (input.commuteExtraBufferMinutes !== undefined) {
+        next.academicPlanner.commuteExtraBufferMinutes = next.commuteExtraBufferMinutes;
+        next.academicPlanner.farLeadMinutesMin = next.commuteExtraBufferMinutes;
+    } else {
+        next.commuteExtraBufferMinutes = next.academicPlanner.commuteExtraBufferMinutes ?? 30;
+    }
+    if (input.commuteRepeatEveryMinutes !== undefined) {
+        next.academicPlanner.commuteRepeatEveryMinutes = next.commuteRepeatEveryMinutes;
+    } else {
+        next.commuteRepeatEveryMinutes = next.academicPlanner.commuteRepeatEveryMinutes ?? 5;
+    }
+    if (input.commuteNearAlertMinutes !== undefined) {
+        next.academicPlanner.commuteNearAlertMinutes = [...next.commuteNearAlertMinutes];
+    } else {
+        next.commuteNearAlertMinutes = Array.isArray(next.academicPlanner.commuteNearAlertMinutes)
+            ? [...next.academicPlanner.commuteNearAlertMinutes]
+            : [20, 15, 10];
+    }
+    if (input.commuteNearRadiusKm !== undefined) {
+        next.academicPlanner.nearRadiusKm = next.commuteNearRadiusKm;
+        next.academicPlanner.commuteNearRadiusKm = next.commuteNearRadiusKm;
+    } else {
+        next.commuteNearRadiusKm = next.academicPlanner.nearRadiusKm ?? 0.5;
     }
 
     return { settings: next };
@@ -6079,7 +6407,8 @@ function getLocalNowParts(timeZone) {
         weekday: dayMap[map.weekday] !== undefined ? dayMap[map.weekday] : now.getDay(),
         hhmm: `${String(hourNum).padStart(2, '0')}:${String(minNum).padStart(2, '0')}`,
         minutesOfDay: hourNum * 60 + minNum,
-        timeZone: safeTz
+        timeZone: safeTz,
+        nowMs: now.getTime()
     };
 }
 
@@ -6129,6 +6458,7 @@ function computeCandidateReminders({
     sleepLogsToday = [],
     agendaItemsToday = [],
     pendingTasksWeek = [],
+    inProgressItems = [],
     queueCounts = { journal: 0, english: 0 }
 }) {
     const candidates = [];
@@ -6254,8 +6584,8 @@ function computeCandidateReminders({
         const notifiedTaskIds = new Set();
 
         agendaItemsToday.forEach(item => {
-            const estado = item.estado || (Number(item.completada) === 1 ? 'done' : 'todo');
-            if (estado === 'done' || estado === 'skipped' || Number(item.completada) === 1) return;
+            const estado = normalizeAgendaStatusInput(item.estado) || (Number(item.completada) === 1 ? 'done' : 'todo');
+            if (estado === 'done' || estado === 'skipped' || estado === 'in_progress' || Number(item.completada) === 1) return;
 
             const tipo = item.tipo === 'tarea' ? 'tarea' : 'evento';
             if (tipo === 'evento' && !settings.agendaNotifyEvents) return;
@@ -6276,13 +6606,12 @@ function computeCandidateReminders({
                     : 'Personal';
                 const isOverdueToday = tipo === 'tarea' && minutesOfDay > itemMin + 30;
                 const typeLabel = tipo === 'tarea' ? (isOverdueToday ? 'Pending Task' : 'Task') : 'Event';
-                const statusBadge = estado === 'in_progress' ? ' [In Progress]' : '';
                 if (tipo === 'tarea') notifiedTaskIds.add(Number(item.id));
                 candidates.push({
                     key: `agenda:${item.id}:${dateStr}`,
                     type: 'agenda',
                     refId: item.id,
-                    title: `[${catLabel} ${typeLabel}] ${item.hora}${statusBadge}`,
+                    title: `[${catLabel} ${typeLabel}] ${item.hora}`,
                     message: `${item.actividad}${itemLead > 0 && minutesOfDay < itemMin ? ` (starts at ${item.hora})` : (isOverdueToday ? ' — Pending completion' : '')}`,
                     targetView: 'agenda',
                     targetDate: item.fecha || dateStr,
@@ -6296,8 +6625,8 @@ function computeCandidateReminders({
 
         if (settings.agendaNotifyTasks && settings.agendaNotifyPendingTasks !== false && Array.isArray(pendingTasksWeek)) {
             pendingTasksWeek.forEach(task => {
-                const estado = task.estado || (Number(task.completada) === 1 ? 'done' : 'todo');
-                if (estado === 'done' || estado === 'skipped' || Number(task.completada) === 1) return;
+                const estado = normalizeAgendaStatusInput(task.estado) || (Number(task.completada) === 1 ? 'done' : 'todo');
+                if (estado === 'done' || estado === 'skipped' || estado === 'in_progress' || Number(task.completada) === 1) return;
                 if ((task.tipo || 'evento') !== 'tarea') return;
                 if (notifiedTaskIds.has(Number(task.id))) return;
                 if (task.recordatorio_min !== null && task.recordatorio_min !== undefined && Number(task.recordatorio_min) < 0) return;
@@ -6314,7 +6643,7 @@ function computeCandidateReminders({
                     type: 'agenda',
                     refId: task.id,
                     title: `[Pending ${catLabel} Task] ${task.fecha === dateStr ? task.hora : task.fecha}`,
-                    message: `${task.actividad} (${estado === 'in_progress' ? 'In Progress' : 'To Do'} — tap Mark Done when finished)`,
+                    message: `${task.actividad} (To Do — tap Mark Done when finished)`,
                     targetView: 'agenda',
                     targetDate: task.fecha || dateStr,
                     targetTime: task.hora || '',
@@ -6322,6 +6651,46 @@ function computeCandidateReminders({
                     canSnooze: true,
                     canComplete: true
                 });
+            });
+        }
+
+        // 3b. In-progress (En progreso) follow-up: silent for first 60 min, single follow-up at >= 1 hour
+        const inProgressMap = new Map();
+        [...(Array.isArray(inProgressItems) ? inProgressItems : []), ...agendaItemsToday, ...(Array.isArray(pendingTasksWeek) ? pendingTasksWeek : [])].forEach(it => {
+            if (!it || !it.id) return;
+            const st = normalizeAgendaStatusInput(it.estado) || (Number(it.completada) === 1 ? 'done' : 'todo');
+            if (st !== 'in_progress' || Number(it.completada) === 1) return;
+            if (!inProgressMap.has(Number(it.id))) {
+                inProgressMap.set(Number(it.id), it);
+            }
+        });
+        const evalNowMs = Number.isFinite(localNow?.nowMs) ? localNow.nowMs : Date.now();
+        for (const item of inProgressMap.values()) {
+            const tipo = item.tipo === 'tarea' ? 'tarea' : 'evento';
+            if (tipo === 'evento' && !settings.agendaNotifyEvents) continue;
+            if (tipo === 'tarea' && !settings.agendaNotifyTasks) continue;
+            if (item.recordatorio_min !== null && item.recordatorio_min !== undefined && Number(item.recordatorio_min) < 0) continue;
+
+            const enProgresoDesdeMs = parseServerDateTimeMs(item.en_progreso_desde);
+            if (!Number.isFinite(enProgresoDesdeMs)) continue;
+            if ((evalNowMs - enProgresoDesdeMs) < 60 * 60 * 1000) continue;
+
+            const cycleSec = Math.floor(enProgresoDesdeMs / 1000);
+            const followUpKey = `task-inprog:${item.id}:${cycleSec}`;
+            const actText = String(item.actividad || 'Tarea').trim();
+            candidates.push({
+                key: followUpKey,
+                type: 'agenda',
+                isInProgressFollowUp: true,
+                refId: item.id,
+                title: `⏳ Llevas 1 hora en progreso: ${actText.slice(0, 95)}`,
+                message: `⏳ Llevas 1 hora en progreso: ${actText}. ¿Ya la terminaste o necesitas posponerla?`,
+                targetView: 'agenda',
+                targetDate: item.fecha || dateStr,
+                targetTime: item.hora || '',
+                targetBlock: item.bloque || '',
+                canSnooze: true,
+                canComplete: true
             });
         }
     }
@@ -6333,15 +6702,22 @@ function computeCandidateReminders({
     const savedHomeCoords = parseCoordinatesFromInput(planner.locations?.home || {});
     const liveCurrCoords = parseCoordinatesFromInput(planner.locations?.current || {});
     const hasLiveGps = Boolean(liveCurrCoords);
+    const commuteEnabled = settings.commuteRemindersEnabled !== undefined
+        ? Boolean(settings.commuteRemindersEnabled)
+        : (planner.classRemindersEnabled !== false);
+    const effExtraBufferMin = settings.commuteExtraBufferMinutes ?? planner.commuteExtraBufferMinutes ?? 30;
+    const effRepeatEveryMin = settings.commuteRepeatEveryMinutes ?? planner.commuteRepeatEveryMinutes ?? 5;
+    const effNearAlertMins = settings.commuteNearAlertMinutes ?? planner.commuteNearAlertMinutes ?? [20, 15, 10];
+    const effNearRadiusKm = settings.commuteNearRadiusKm ?? planner.nearRadiusKm ?? 0.5;
 
-    if (planner.classRemindersEnabled && !activeVacation) {
+    if (commuteEnabled && !activeVacation) {
         const activeSem = planner.semesters.find(s => s.id === planner.activeSemesterId) ||
                           planner.semesters.find(s => s.active) ||
                           planner.semesters[0];
 
         if (activeSem && dateStr >= activeSem.startDate && dateStr <= activeSem.endDate) {
             const todaysCourses = (activeSem.courses || [])
-                .filter(c => Array.isArray(c.days) && c.days.includes(weekday))
+                .filter(c => c && !c.remindersPaused && !c.completed && Array.isArray(c.days) && c.days.includes(weekday))
                 .sort((a, b) => hhmmToMinutes(a.startTime) - hhmmToMinutes(b.startTime));
 
             todaysCourses.forEach((course, idx) => {
@@ -6370,12 +6746,15 @@ function computeCandidateReminders({
                     targetMinutesOfDay: startMin,
                     weekday,
                     isFirstOfDay: isFirstOrAfterLongBreak,
-                    nearRadiusKm: planner.nearRadiusKm || 0.85,
+                    nearRadiusKm: effNearRadiusKm,
+                    extraBufferMinutes: effExtraBufferMin,
+                    repeatEveryMinutes: effRepeatEveryMin,
+                    nearAlertMinutes: effNearAlertMins,
                     hasLiveGps
                 });
 
                 const milestones = commute.alertMilestones || [commute.recommendedLeadMinutes];
-                const activeStageMin = pickActiveCommuteMilestone(startMin, minutesOfDay, milestones, 15);
+                const activeStageMin = pickActiveCommuteMilestone(startMin, minutesOfDay, milestones, 0);
 
                 if (activeStageMin !== null) {
                     const seriesKey = `class:${activeSem.id}:${course.id}:${dateStr}`;
@@ -6420,12 +6799,15 @@ function computeCandidateReminders({
             targetMinutesOfDay: resStartMin,
             weekday,
             isFirstOfDay: true,
-            nearRadiusKm: planner.nearRadiusKm || 0.85,
+            nearRadiusKm: effNearRadiusKm,
+            extraBufferMinutes: effExtraBufferMin,
+            repeatEveryMinutes: effRepeatEveryMin,
+            nearAlertMinutes: effNearAlertMins,
             hasLiveGps
         });
         const isRemoteRes = planner.residencias.modality === 'remoto';
         const milestones = isRemoteRes ? [10] : (commute.alertMilestones || [commute.recommendedLeadMinutes]);
-        const activeStageMin = pickActiveCommuteMilestone(resStartMin, minutesOfDay, milestones, 15);
+        const activeStageMin = pickActiveCommuteMilestone(resStartMin, minutesOfDay, milestones, 0);
 
         if (activeStageMin !== null) {
             const seriesKey = `residencias:${dateStr}:${planner.residencias.startTime}`;
@@ -6467,12 +6849,15 @@ function computeCandidateReminders({
             targetMinutesOfDay: workStartMin,
             weekday,
             isFirstOfDay: true,
-            nearRadiusKm: planner.nearRadiusKm || 0.85,
+            nearRadiusKm: effNearRadiusKm,
+            extraBufferMinutes: effExtraBufferMin,
+            repeatEveryMinutes: effRepeatEveryMin,
+            nearAlertMinutes: effNearAlertMins,
             hasLiveGps
         });
         const isRemoteWork = planner.work.modality === 'remoto';
         const milestones = isRemoteWork ? [10] : (commute.alertMilestones || [commute.recommendedLeadMinutes]);
-        const activeStageMin = pickActiveCommuteMilestone(workStartMin, minutesOfDay, milestones, 15);
+        const activeStageMin = pickActiveCommuteMilestone(workStartMin, minutesOfDay, milestones, 0);
 
         if (activeStageMin !== null) {
             const seriesKey = `work:${dateStr}:${planner.work.startTime}`;
@@ -6694,6 +7079,7 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
         );
 
         if (isCommuteAckReminder && userId) {
+            jsonPayload.sequence_id = commuteAckKey;
             const ackToken = signReminderActionToken(userId, commuteAckKey);
             const ackPayload = {
                 userId,
@@ -6787,12 +7173,30 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
                     url: reminder.mapsUrl
                 });
             } else if (reminder.canComplete && reminder.refId) {
-                actions.push(snoozeAction, skipAction, buildNtfyHttpAction({
-                    label: 'Mark Done',
-                    actionName: 'complete_agenda',
-                    minutes: 0,
-                    clear: true
-                }));
+                if (String(reminder.key || '').startsWith('task-inprog:')) {
+                    actions.push(
+                        buildNtfyHttpAction({
+                            label: 'Mark Done',
+                            actionName: 'complete_agenda',
+                            minutes: 0,
+                            clear: true
+                        }),
+                        snoozeAction,
+                        buildNtfyHttpAction({
+                            label: 'OK',
+                            actionName: 'dismiss',
+                            minutes: 0,
+                            clear: true
+                        })
+                    );
+                } else {
+                    actions.push(snoozeAction, skipAction, buildNtfyHttpAction({
+                        label: 'Mark Done',
+                        actionName: 'complete_agenda',
+                        minutes: 0,
+                        clear: true
+                    }));
+                }
             } else {
                 actions.push(openAppAction, snoozeAction, skipAction);
             }
@@ -6840,7 +7244,7 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
     const sevenDaysAgoStr = getDateStrDaysAgo(localNow.dateStr, 7);
     const yesterdayStr = getDateStrDaysAgo(localNow.dateStr, 1);
 
-    const [moodRows, sleepRows, agendaRows, weekAgendaRows, stateRows] = await Promise.all([
+    const [moodRows, sleepRows, agendaRows, weekAgendaRows, inProgressRows, stateRows] = await Promise.all([
         dbQueryAsync('SELECT momento_dia FROM RegistrosMood WHERE fecha = ?', [localNow.dateStr]),
         dbQueryAsync(
             `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, horas, hora_dormir, hora_despertar, es_desvelo, tipo_registro
@@ -6854,7 +7258,7 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
                     COALESCE(categoria, 'personal') AS categoria,
                     materia_id, materia_nombre,
                     COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
-                    completada, recordatorio_min
+                    completada, recordatorio_min, en_progreso_desde
              FROM RegistrosAgenda
              WHERE fecha = ?
              ORDER BY hora ASC`,
@@ -6867,11 +7271,23 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
                     COALESCE(categoria, 'personal') AS categoria,
                     materia_id, materia_nombre,
                     COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
-                    completada, recordatorio_min
+                    completada, recordatorio_min, en_progreso_desde
              FROM RegistrosAgenda
              WHERE fecha BETWEEN ? AND ?
              ORDER BY fecha ASC, hora ASC`,
             [sevenDaysAgoStr, localNow.dateStr]
+        ),
+        dbQueryAsync(
+            `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, bloque,
+                    TIME_FORMAT(hora, '%H:%i') AS hora, actividad,
+                    COALESCE(tipo, 'evento') AS tipo,
+                    COALESCE(categoria, 'personal') AS categoria,
+                    materia_id, materia_nombre,
+                    COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
+                    completada, recordatorio_min, en_progreso_desde
+             FROM RegistrosAgenda
+             WHERE estado = 'in_progress' AND completada = 0
+             ORDER BY fecha ASC, hora ASC`
         ),
         dbQueryAsync(
             'SELECT clave_unica, tipo, titulo, mensaje, estado, snooze_hasta, enviado_push_en FROM RecordatoriosEstado WHERE usuario_id = ?',
@@ -6888,6 +7304,7 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
         sleepLogsToday: Array.isArray(sleepRows) ? sleepRows : [],
         agendaItemsToday: Array.isArray(agendaRows) ? agendaRows : [],
         pendingTasksWeek: Array.isArray(weekAgendaRows) ? weekAgendaRows : [],
+        inProgressItems: Array.isArray(inProgressRows) ? inProgressRows : [],
         queueCounts: { journal: journalQueue.size(), english: englishQueue.size() }
     });
 
@@ -7084,6 +7501,16 @@ app.put('/api/settings', apiWriteLimiter.middleware, requireAdmin, requireNonEmp
         }
         await saveUserSettings(req.user.id, result.settings);
         bumpSyncRevision('settings');
+        if (
+            req.body.commuteRemindersEnabled !== undefined ||
+            req.body.commuteExtraBufferMinutes !== undefined ||
+            req.body.commuteRepeatEveryMinutes !== undefined ||
+            req.body.commuteNearAlertMinutes !== undefined ||
+            req.body.commuteNearRadiusKm !== undefined ||
+            req.body.academicPlanner !== undefined
+        ) {
+            bumpSyncRevision('planner');
+        }
         res.json({
             message: 'Settings saved successfully.',
             settings: sanitizeSettingsForClient(result.settings)
@@ -7149,6 +7576,10 @@ function buildLiveCommutePreview(planner, localNow) {
     const homeCoords = parseCoordinatesFromInput(planner?.locations?.home || {});
     const hasLiveGps = Boolean(currCoords);
     const originKind = currCoords ? 'current' : (homeCoords ? 'home' : 'none');
+    const effNearRadiusKm = planner.commuteNearRadiusKm ?? planner.nearRadiusKm ?? 0.5;
+    const effExtraBuffer = planner.commuteExtraBufferMinutes ?? 30;
+    const effRepeatEvery = planner.commuteRepeatEveryMinutes ?? 5;
+    const effNearAlerts = planner.commuteNearAlertMinutes ?? [20, 15, 10];
     const campusDirectory = getEffectiveCampusDirectory(planner);
     const campuses = {};
     const commutes = [];
@@ -7160,7 +7591,10 @@ function buildLiveCommutePreview(planner, localNow) {
             targetMinutesOfDay: localNow.minutesOfDay,
             weekday: localNow.weekday,
             isFirstOfDay: true,
-            nearRadiusKm: planner.nearRadiusKm || 0.85,
+            nearRadiusKm: effNearRadiusKm,
+            extraBufferMinutes: effExtraBuffer,
+            repeatEveryMinutes: effRepeatEvery,
+            nearAlertMinutes: effNearAlerts,
             hasLiveGps
         });
         campuses[key] = {
@@ -7176,6 +7610,9 @@ function buildLiveCommutePreview(planner, localNow) {
             alertMilestones: comm.alertMilestones,
             distanceKm: comm.distanceKm,
             driveMinutesWithTraffic: comm.driveMinutes,
+            extraBufferMinutes: comm.extraBufferMinutes,
+            repeatEveryMinutes: comm.repeatEveryMinutes,
+            nearAlertMinutes: comm.nearAlertMinutes,
             trafficLabel: comm.trafficLabel,
             recommendedLeadMinutes: comm.recommendedLeadMinutes,
             mapsDirectionsUrl: comm.mapsUrl
@@ -7202,7 +7639,10 @@ function buildLiveCommutePreview(planner, localNow) {
                 targetMinutesOfDay: hhmmToMinutes(planner.residencias?.startTime || '08:00'),
                 weekday: localNow.weekday,
                 isFirstOfDay: true,
-                nearRadiusKm: planner.nearRadiusKm || 0.85,
+                nearRadiusKm: effNearRadiusKm,
+                extraBufferMinutes: effExtraBuffer,
+                repeatEveryMinutes: effRepeatEvery,
+                nearAlertMinutes: effNearAlerts,
                 hasLiveGps
             })
             : null,
@@ -7214,7 +7654,10 @@ function buildLiveCommutePreview(planner, localNow) {
                 targetMinutesOfDay: hhmmToMinutes(planner.work?.startTime || '08:00'),
                 weekday: localNow.weekday,
                 isFirstOfDay: true,
-                nearRadiusKm: planner.nearRadiusKm || 0.85,
+                nearRadiusKm: effNearRadiusKm,
+                extraBufferMinutes: effExtraBuffer,
+                repeatEveryMinutes: effRepeatEvery,
+                nearAlertMinutes: effNearAlerts,
                 hasLiveGps
             })
             : null
@@ -7275,10 +7718,16 @@ app.put('/api/planner', apiWriteLimiter.middleware, requireAdmin, requireNonEmpt
 
         const nextSettings = {
             ...current,
+            commuteRemindersEnabled: nextPlanner.classRemindersEnabled !== false,
+            commuteExtraBufferMinutes: nextPlanner.commuteExtraBufferMinutes,
+            commuteRepeatEveryMinutes: nextPlanner.commuteRepeatEveryMinutes,
+            commuteNearAlertMinutes: nextPlanner.commuteNearAlertMinutes,
+            commuteNearRadiusKm: nextPlanner.nearRadiusKm,
             academicPlanner: nextPlanner
         };
         await saveUserSettings(req.user.id, nextSettings);
         bumpSyncRevision('planner');
+        bumpSyncRevision('settings');
         const localNow = getLocalNowParts(nextSettings.timezone);
         await warmLiveDrivingRoutesForPlanner(nextPlanner, localNow);
         res.json({
@@ -8385,7 +8834,7 @@ app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, p
                     COALESCE(tipo, 'evento') AS tipo,
                     COALESCE(categoria, 'personal') AS categoria,
                     COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
-                    completada, recordatorio_min
+                    completada, recordatorio_min, en_progreso_desde
              FROM RegistrosAgenda
              WHERE fecha BETWEEN ? AND ?
              ORDER BY fecha ASC, hora ASC`,
@@ -8428,10 +8877,10 @@ app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, p
                         targetMinutesOfDay: hhmmToMinutes(c.startTime),
                         weekday: dayOfWeek,
                         isFirstOfDay: isFirst,
-                        nearRadiusKm: planner.nearRadiusKm || 0.85,
-                        minFarLeadMinutes: planner.farLeadMinutesMin || 30,
-                        nearLeadMinutes: planner.nearLeadMinutes || 10,
-                        parkingBufferMinutes: planner.parkingBufferMinutes ?? 8
+                        nearRadiusKm: planner.nearRadiusKm || 0.5,
+                        extraBufferMinutes: planner.commuteExtraBufferMinutes ?? 30,
+                        repeatEveryMinutes: planner.commuteRepeatEveryMinutes ?? 5,
+                        nearAlertMinutes: planner.commuteNearAlertMinutes ?? [20, 15, 10]
                     });
 
                     const titulo = `${c.code ? `${c.code} ` : ''}${c.name} (${roomMeta.room})`;
@@ -8519,6 +8968,9 @@ app.get('/api/reminders/active', apiReadLimiter.middleware, requireAdmin, async 
 });
 
 async function rescheduleAgendaItemOnSnooze({ userId, key, type, refId, safeMins, snoozeSql, title, message }) {
+    if (String(key || '').trim().startsWith('task-inprog:')) {
+        return null;
+    }
     const keyMatch = /^(?:agenda|task-pending):(\d+):/.exec(String(key || '').trim());
     const resolvedAgendaId = (type === 'agenda' && refId)
         ? parseAgendaId(refId)
@@ -8660,7 +9112,7 @@ app.post('/api/reminders/snooze', apiWriteLimiter.middleware, requireAdmin, requ
 
     try {
         if (action === 'skip' && refId) {
-            await dbQueryAsync("UPDATE RegistrosAgenda SET estado = 'skipped', completada = 0 WHERE id = ?", [refId]);
+            await dbQueryAsync("UPDATE RegistrosAgenda SET estado = 'skipped', completada = 0, en_progreso_desde = NULL WHERE id = ?", [refId]);
         }
         const result = await applyReminderSnoozeOrDismiss({
             userId: req.user.id,
@@ -8765,7 +9217,7 @@ const handleReminderExternalAction = async (req, res) => {
         }
 
         if ((action === 'complete_agenda' || action === 'complete') && refId) {
-            await dbQueryAsync("UPDATE RegistrosAgenda SET estado = 'done', completada = 1 WHERE id = ?", [refId]);
+            await dbQueryAsync("UPDATE RegistrosAgenda SET estado = 'done', completada = 1, en_progreso_desde = NULL WHERE id = ?", [refId]);
             await applyReminderSnoozeOrDismiss({
                 userId: effectiveUserId,
                 key,
@@ -8797,7 +9249,7 @@ const handleReminderExternalAction = async (req, res) => {
         }
 
         if (action === 'skip' && refId) {
-            await dbQueryAsync("UPDATE RegistrosAgenda SET estado = 'skipped', completada = 0 WHERE id = ?", [refId]);
+            await dbQueryAsync("UPDATE RegistrosAgenda SET estado = 'skipped', completada = 0, en_progreso_desde = NULL WHERE id = ?", [refId]);
         }
 
         const isDismissAction = action === 'dismiss' || action === 'skip';
@@ -13441,3 +13893,14 @@ process.on('unhandledRejection', (reason) => {
     });
     process.exit(1);
 });
+
+module.exports = {
+    app,
+    httpServer,
+    computeSmartCommuteAlertSchedule,
+    computeCommuteAlertMilestones,
+    normalizeNearAlertMinutes,
+    computeCandidateReminders,
+    sanitizeAcademicPlanner,
+    validateUserSettingsPayload
+};

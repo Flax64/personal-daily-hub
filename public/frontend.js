@@ -15826,7 +15826,9 @@ function renderReminderTray(data) {
         const dismissBtn = document.createElement('button');
         dismissBtn.type = 'button';
         dismissBtn.className = 'reminder-btn';
-        dismissBtn.textContent = tUi('Dismiss', 'Ocultar');
+        dismissBtn.textContent = String(reminder.key || '').startsWith('task-inprog:')
+            ? tUi('OK / Dismiss', 'OK / Ocultar')
+            : tUi('Dismiss', 'Ocultar');
         dismissBtn.addEventListener('click', () => snoozeOrDismissReminder(reminder, 'dismiss', 0, dismissBtn));
         actions.appendChild(dismissBtn);
 
@@ -15992,6 +15994,75 @@ function cargarRecordatoriosActivos() {
         });
 }
 
+function openSmartCommuteSettingsSection() {
+    if (typeof showView === 'function') {
+        showView('settings', true);
+    }
+    const commuteCard = document.getElementById('settingsSmartCommuteCard')
+        || document.getElementById('setCommuteExtraBufferMin')?.closest('.settings-card');
+    if (commuteCard && typeof commuteCard.scrollIntoView === 'function') {
+        commuteCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setTimeout(() => {
+        document.getElementById('setCommuteExtraBufferMin')?.focus();
+    }, 250);
+}
+
+function parseNearAlertMinutesClient(rawInput, fallback = [20, 15, 10]) {
+    const cleanFallback = Array.isArray(fallback) && fallback.length ? [...fallback] : [20, 15, 10];
+    const tokens = Array.isArray(rawInput)
+        ? rawInput
+        : String(rawInput ?? '').trim().split(/[\s,;]+/).filter(Boolean);
+    if (!tokens.length || tokens.length > 12) return { valid: false, values: cleanFallback };
+    const nums = [];
+    for (const tok of tokens) {
+        const n = Number(tok);
+        if (!Number.isInteger(n) || n < 1 || n > 180) {
+            return { valid: false, values: cleanFallback };
+        }
+        nums.push(n);
+    }
+    return { valid: true, values: Array.from(new Set(nums)).sort((a, b) => b - a) };
+}
+
+function computeSmartCommuteAlertScheduleClient({
+    zone = 'home',
+    routeMinutes = 20,
+    extraBufferMinutes = 30,
+    repeatEveryMinutes = 5,
+    nearAlertMinutes = [20, 15, 10],
+    acknowledged = false
+} = {}) {
+    const cleanZone = String(zone || 'home').toLowerCase();
+    const nearParsed = parseNearAlertMinutesClient(nearAlertMinutes, [20, 15, 10]);
+    const effNear = nearParsed.valid ? nearParsed.values : [20, 15, 10];
+    if (cleanZone === 'near' || cleanZone === 'near_destination') {
+        return {
+            zone: 'near',
+            milestones: acknowledged ? [] : effNear,
+            recommendedLeadMinutes: effNear[0] || 20
+        };
+    }
+    const T = Math.max(1, Math.ceil(Number(routeMinutes) || 20));
+    const buf = Math.max(5, Math.min(120, Math.round(Number(extraBufferMinutes) || 30)));
+    const step = Math.max(1, Math.min(30, Math.round(Number(repeatEveryMinutes) || 5)));
+    const startLead = T + buf;
+    const milestones = [];
+    if (!acknowledged) {
+        for (let m = startLead; m > 0; m -= step) {
+            milestones.push(m);
+        }
+    }
+    return {
+        zone: cleanZone === 'away' || cleanZone === 'away_far' ? 'away' : 'home',
+        milestones,
+        recommendedLeadMinutes: startLead
+    };
+}
+if (typeof window !== 'undefined') {
+    window.computeSmartCommuteAlertSchedule = computeSmartCommuteAlertScheduleClient;
+}
+
 function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false } = {}) {
     if (!settings) return;
     currentSettings = settings;
@@ -16002,6 +16073,26 @@ function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false } = {}) 
         academicPlannerState = settings.academicPlanner;
         if (typeof renderAgendaCourseFilterOptions === 'function') {
             renderAgendaCourseFilterOptions();
+        }
+    } else if (academicPlannerState) {
+        if (typeof settings.commuteRemindersEnabled === 'boolean') {
+            academicPlannerState.classRemindersEnabled = settings.commuteRemindersEnabled;
+        }
+        if (settings.commuteExtraBufferMinutes !== undefined) {
+            academicPlannerState.commuteExtraBufferMinutes = Number(settings.commuteExtraBufferMinutes);
+        }
+        if (settings.commuteRepeatEveryMinutes !== undefined) {
+            academicPlannerState.commuteRepeatEveryMinutes = Number(settings.commuteRepeatEveryMinutes);
+        }
+        if (Array.isArray(settings.commuteNearAlertMinutes)) {
+            academicPlannerState.commuteNearAlertMinutes = [...settings.commuteNearAlertMinutes];
+        }
+        if (settings.commuteNearRadiusKm !== undefined) {
+            academicPlannerState.nearRadiusKm = Number(settings.commuteNearRadiusKm);
+            academicPlannerState.commuteNearRadiusKm = Number(settings.commuteNearRadiusKm);
+        }
+        if (typeof renderPlannerCommuteRulesSummary === 'function') {
+            renderPlannerCommuteRulesSummary();
         }
     }
 
@@ -16122,6 +16213,22 @@ function populateSettingsForm(settings = {}) {
     setCheck('setAgendaNotifyPendingTasks', settings.agendaNotifyPendingTasks !== false);
     setVal('setAgendaLeadMin', settings.agendaLeadMinutes ?? 10);
 
+    const plannerCfg = settings.academicPlanner || {};
+    const commuteEnabled = settings.commuteRemindersEnabled !== undefined
+        ? settings.commuteRemindersEnabled !== false
+        : plannerCfg.classRemindersEnabled !== false;
+    const commuteExtraBuf = settings.commuteExtraBufferMinutes ?? plannerCfg.commuteExtraBufferMinutes ?? 30;
+    const commuteRepeatMin = settings.commuteRepeatEveryMinutes ?? plannerCfg.commuteRepeatEveryMinutes ?? 5;
+    const commuteNearList = Array.isArray(settings.commuteNearAlertMinutes)
+        ? settings.commuteNearAlertMinutes
+        : (Array.isArray(plannerCfg.commuteNearAlertMinutes) ? plannerCfg.commuteNearAlertMinutes : [20, 15, 10]);
+    const commuteNearRad = settings.commuteNearRadiusKm ?? plannerCfg.commuteNearRadiusKm ?? plannerCfg.nearRadiusKm ?? 0.5;
+    setCheck('setCommuteRemindersEnabled', commuteEnabled);
+    setVal('setCommuteExtraBufferMin', commuteExtraBuf);
+    setVal('setCommuteRepeatEveryMin', commuteRepeatMin);
+    setVal('setCommuteNearMilestones', commuteNearList.join(', '));
+    setVal('setCommuteNearRadiusKm', commuteNearRad);
+
     setCheck('setWordEodEnabled', settings.wordEodReminderEnabled !== false);
     setVal('setWordEodTime', settings.wordEodReminderTime || '21:30');
 
@@ -16234,6 +16341,15 @@ function collectSettingsFormPayload() {
         agendaNotifyTasks: Boolean(document.getElementById('setAgendaTasks')?.checked),
         agendaNotifyPendingTasks: Boolean(document.getElementById('setAgendaNotifyPendingTasks')?.checked),
         agendaLeadMinutes: Number(document.getElementById('setAgendaLeadMin')?.value ?? 10),
+
+        commuteRemindersEnabled: Boolean(document.getElementById('setCommuteRemindersEnabled')?.checked),
+        commuteExtraBufferMinutes: Number(document.getElementById('setCommuteExtraBufferMin')?.value ?? 30),
+        commuteRepeatEveryMinutes: Number(document.getElementById('setCommuteRepeatEveryMin')?.value ?? 5),
+        commuteNearAlertMinutes: parseNearAlertMinutesClient(
+            document.getElementById('setCommuteNearMilestones')?.value ?? '20, 15, 10',
+            [20, 15, 10]
+        ).values,
+        commuteNearRadiusKm: Number(document.getElementById('setCommuteNearRadiusKm')?.value ?? 0.5),
 
         wordEodReminderEnabled: Boolean(document.getElementById('setWordEodEnabled')?.checked),
         wordEodReminderTime: String(document.getElementById('setWordEodTime')?.value || '21:30').slice(0, 5),
@@ -16727,6 +16843,18 @@ function initSettingsHandlers() {
     settingsForm.addEventListener('submit', (e) => {
         e.preventDefault();
         if (!btnSaveSettings) return;
+        const nearRaw = String(document.getElementById('setCommuteNearMilestones')?.value ?? '20, 15, 10').trim();
+        const nearCheck = parseNearAlertMinutesClient(nearRaw, [20, 15, 10]);
+        if (!nearCheck.valid) {
+            const msg = tUi(
+                'Near-campus alert minutes must be positive integers separated by commas (e.g. 20, 15, 10).',
+                'Los avisos cuando estás cerca deben ser enteros positivos separados por coma (ej. 20, 15, 10).'
+            );
+            setSettingsBanner('err', msg);
+            showToast('err', msg);
+            document.getElementById('setCommuteNearMilestones')?.focus();
+            return;
+        }
         const payload = collectSettingsFormPayload();
         setYouTubePlatformMode(payload.youtubePlatformMode || 'auto', { persistLocal: true });
 
@@ -17685,6 +17813,12 @@ function resetPlannerCourseForm() {
     document.querySelectorAll('#courseDaysGroup input[type="checkbox"]').forEach(cb => {
         cb.checked = [1, 2, 3, 4].includes(Number(cb.value));
     });
+    const pausedEl = document.getElementById('courseRemindersPaused');
+    if (pausedEl) pausedEl.checked = false;
+    const completedEl = document.getElementById('courseCompleted');
+    if (completedEl) completedEl.checked = false;
+    const gradeEl = document.getElementById('courseFinalGrade');
+    if (gradeEl) gradeEl.value = '';
 }
 
 function loadCourseIntoEditForm(course) {
@@ -17700,6 +17834,11 @@ function loadCourseIntoEditForm(course) {
     setVal('courseCampus', course.campusId || Object.keys(academicPlannerDirectory || {})[0] || 'principal');
     setVal('courseStartTime', course.startTime || '09:00');
     setVal('courseEndTime', course.endTime || '10:00');
+    const pausedEl = document.getElementById('courseRemindersPaused');
+    if (pausedEl) pausedEl.checked = Boolean(course.completed || course.remindersPaused);
+    const completedEl = document.getElementById('courseCompleted');
+    if (completedEl) completedEl.checked = Boolean(course.completed);
+    setVal('courseFinalGrade', course.finalGrade !== null && course.finalGrade !== undefined ? course.finalGrade : '');
     const daySet = new Set(Array.isArray(course.days) ? course.days.map(Number) : [1, 2, 3, 4]);
     document.querySelectorAll('#courseDaysGroup input[type="checkbox"]').forEach(cb => {
         cb.checked = daySet.has(Number(cb.value));
@@ -17752,6 +17891,24 @@ function renderPlannerSemesterUI() {
 
     const courses = Array.isArray(activeSem.courses) ? activeSem.courses : [];
     if (countBadge) countBadge.textContent = `${courses.length} ${tUi(courses.length === 1 ? 'class' : 'classes', courses.length === 1 ? 'materia' : 'materias')}`;
+    const gpaBadge = document.getElementById('plannerSemesterAverageBadge');
+    if (gpaBadge) {
+        const graded = courses
+            .map(c => (c && c.finalGrade !== null && c.finalGrade !== undefined && c.finalGrade !== '' ? Number(c.finalGrade) : NaN))
+            .filter(g => Number.isFinite(g) && g >= 0 && g <= 100);
+        if (graded.length > 0) {
+            const avg = graded.reduce((acc, g) => acc + g, 0) / graded.length;
+            const avgText = Number.isInteger(avg) ? String(avg) : avg.toFixed(1).replace(/\.0$/, '');
+            gpaBadge.textContent = tUi(
+                `🎓 Recorded average: ${avgText} (${graded.length}/${courses.length} classes)`,
+                `🎓 Promedio capturado: ${avgText} (${graded.length}/${courses.length} materias)`
+            );
+            gpaBadge.hidden = false;
+        } else {
+            gpaBadge.textContent = '';
+            gpaBadge.hidden = true;
+        }
+    }
     if (!coursesList) return;
 
     coursesList.replaceChildren();
@@ -17803,10 +17960,68 @@ function renderPlannerSemesterUI() {
 
         meta.append(h4, sub, timeP);
 
+        const isCompleted = Boolean(course.completed);
+        const isPaused = isCompleted || Boolean(course.remindersPaused);
+        const rawGrade = course.finalGrade !== null && course.finalGrade !== undefined && course.finalGrade !== ''
+            ? Number(course.finalGrade)
+            : NaN;
+        const hasGrade = Number.isFinite(rawGrade) && rawGrade >= 0 && rawGrade <= 100;
+
+        if (isPaused || isCompleted || hasGrade) {
+            const badgesRow = document.createElement('div');
+            badgesRow.className = 'planner-course-status-badges';
+            if (isPaused) {
+                const bPaused = document.createElement('span');
+                bPaused.className = 'planner-course-badge is-paused';
+                bPaused.textContent = tUi('🔕 Reminders paused', '🔕 Avisos pausados');
+                badgesRow.appendChild(bPaused);
+            }
+            if (isCompleted) {
+                const bDone = document.createElement('span');
+                bDone.className = 'planner-course-badge is-completed';
+                bDone.textContent = tUi('✅ Completed / Passed', '✅ Completada / Aprobada');
+                badgesRow.appendChild(bDone);
+            }
+            if (hasGrade) {
+                const gradeStr = Number.isInteger(rawGrade) ? String(rawGrade) : String(Number(rawGrade.toFixed(2)));
+                const bGrade = document.createElement('span');
+                bGrade.className = 'planner-course-badge is-grade';
+                bGrade.textContent = tUi(`🎓 Average: ${gradeStr}`, `🎓 Promedio: ${gradeStr}`);
+                badgesRow.appendChild(bGrade);
+            }
+            meta.appendChild(badgesRow);
+        }
+
         const actions = document.createElement('div');
         actions.style.display = 'flex';
         actions.style.gap = '6px';
         actions.style.flexWrap = 'wrap';
+
+        const togglePauseBtn = document.createElement('button');
+        togglePauseBtn.type = 'button';
+        togglePauseBtn.className = 'btn-secondary btn-small';
+        togglePauseBtn.textContent = isPaused
+            ? tUi('🔔 Resume alerts', '🔔 Reanudar avisos')
+            : tUi('🔕 Pause alerts', '🔕 Pausar avisos');
+        togglePauseBtn.addEventListener('click', () => {
+            const sem = getActiveSemesterObj();
+            if (!sem || !Array.isArray(sem.courses) || !sem.courses[idx]) return;
+            const targetCourse = sem.courses[idx];
+            const nextPaused = !(Boolean(targetCourse.completed) || Boolean(targetCourse.remindersPaused));
+            targetCourse.remindersPaused = nextPaused;
+            if (!nextPaused && targetCourse.completed) {
+                targetCourse.completed = false;
+            }
+            renderPlannerSemesterUI();
+            if (typeof persistAcademicPlannerState === 'function') {
+                persistAcademicPlannerState({
+                    triggerBtn: togglePauseBtn,
+                    successMsg: nextPaused
+                        ? tUi(`Paused reminders for "${targetCourse.name}".`, `Avisos pausados para "${targetCourse.name}".`)
+                        : tUi(`Resumed reminders for "${targetCourse.name}".`, `Avisos reanudados para "${targetCourse.name}".`)
+                });
+            }
+        });
 
         const editBtn = document.createElement('button');
         editBtn.type = 'button';
@@ -17825,7 +18040,7 @@ function renderPlannerSemesterUI() {
             renderPlannerSemesterUI();
         });
 
-        actions.append(editBtn, delBtn);
+        actions.append(togglePauseBtn, editBtn, delBtn);
         card.append(meta, actions);
         coursesList.appendChild(card);
     });
@@ -18070,6 +18285,66 @@ async function triggerPingPhoneForGps(btnEl, bannerEl = null) {
     return run();
 }
 
+function renderPlannerCommuteRulesSummary() {
+    const summaryEl = document.getElementById('plannerCommuteRulesSummaryText');
+    if (!summaryEl) return;
+    const p = academicPlannerState || {};
+    const s = currentSettings || {};
+    const enabled = s.commuteRemindersEnabled !== undefined
+        ? s.commuteRemindersEnabled !== false
+        : (p.classRemindersEnabled !== false);
+    const extraMin = s.commuteExtraBufferMinutes ?? p.commuteExtraBufferMinutes ?? 30;
+    const repeatMin = s.commuteRepeatEveryMinutes ?? p.commuteRepeatEveryMinutes ?? 5;
+    const nearArr = Array.isArray(s.commuteNearAlertMinutes)
+        ? s.commuteNearAlertMinutes
+        : (Array.isArray(p.commuteNearAlertMinutes) ? p.commuteNearAlertMinutes : [20, 15, 10]);
+    const radiusKm = s.commuteNearRadiusKm ?? p.commuteNearRadiusKm ?? p.nearRadiusKm ?? 0.5;
+    const nearText = nearArr.join(', ');
+    summaryEl.textContent = enabled
+        ? tUi(
+            `Smart commute alerts active · +${extraMin} min buffer · repeat every ${repeatMin} min · Near: ${nearText} min · Radius: ${radiusKm} km`,
+            `Alertas inteligentes activas · +${extraMin} min extra · repetir cada ${repeatMin} min · Cerca: ${nearText} min · Radio: ${radiusKm} km`
+        )
+        : tUi(
+            `Smart commute alerts paused · Configured: +${extraMin} min buffer · every ${repeatMin} min · Near: ${nearText} min · Radius: ${radiusKm} km`,
+            `Alertas inteligentes pausadas · Configurado: +${extraMin} min extra · cada ${repeatMin} min · Cerca: ${nearText} min · Radio: ${radiusKm} km`
+        );
+}
+
+async function persistAcademicPlannerState({ triggerBtn = null, successMsg = '' } = {}) {
+    if (!academicPlannerState) return null;
+    const run = async () => {
+        try {
+            const payload = collectPlannerStateFromDOM() || academicPlannerState;
+            const resData = await submitMutationRequest({
+                url: '/api/planner',
+                method: 'PUT',
+                scopeKey: 'planner-save-inline',
+                signature: JSON.stringify(payload),
+                buildBody: () => payload,
+                parseJson: true
+            });
+            if (resData?.planner) {
+                academicPlannerState = resData.planner;
+                renderPlannerSemesterUI();
+                renderPlannerVacationsUI();
+                renderPlannerResidenciasAndWorkUI();
+            }
+            if (resData?.commutePreview) renderLiveCommuteCards(resData.commutePreview);
+            if (successMsg) showToast('ok', successMsg);
+            cargarRecordatoriosActivos();
+            return resData;
+        } catch (err) {
+            showToast('err', tServer(err.message || 'Failed to save planner.'));
+            return null;
+        }
+    };
+    if (triggerBtn) {
+        return runWithButtonLock(triggerBtn, run, { loadingText: tUi('Saving...', 'Guardando...') });
+    }
+    return run();
+}
+
 function renderPlannerResidenciasAndWorkUI() {
     if (!academicPlannerState) return;
     const setCheck = (id, v) => { const el = document.getElementById(id); if (el) el.checked = Boolean(v); };
@@ -18114,10 +18389,7 @@ function renderPlannerResidenciasAndWorkUI() {
         cb.checked = workDays.has(Number(cb.value));
     });
 
-    setCheck('plannerClassRemindersEnabled', academicPlannerState.classRemindersEnabled !== false);
-    setVal('plannerFarLeadMin', academicPlannerState.farLeadMinutesMin ?? 30);
-    setVal('plannerNearLeadMin', academicPlannerState.nearLeadMinutes ?? 10);
-    setVal('plannerNearRadiusKm', academicPlannerState.nearRadiusKm ?? 0.85);
+    renderPlannerCommuteRulesSummary();
 
     const locs = academicPlannerState.locations || {};
     const homeLat = Number(locs.home?.lat);
@@ -18204,10 +18476,24 @@ function collectPlannerStateFromDOM() {
         }
     };
 
-    academicPlannerState.classRemindersEnabled = Boolean(document.getElementById('plannerClassRemindersEnabled')?.checked);
-    academicPlannerState.farLeadMinutesMin = Number(document.getElementById('plannerFarLeadMin')?.value || 30);
-    academicPlannerState.nearLeadMinutes = Number(document.getElementById('plannerNearLeadMin')?.value || 10);
-    academicPlannerState.nearRadiusKm = Number(document.getElementById('plannerNearRadiusKm')?.value || 0.85);
+    if (currentSettings) {
+        if (typeof currentSettings.commuteRemindersEnabled === 'boolean') {
+            academicPlannerState.classRemindersEnabled = currentSettings.commuteRemindersEnabled;
+        }
+        if (currentSettings.commuteExtraBufferMinutes !== undefined) {
+            academicPlannerState.commuteExtraBufferMinutes = Number(currentSettings.commuteExtraBufferMinutes);
+        }
+        if (currentSettings.commuteRepeatEveryMinutes !== undefined) {
+            academicPlannerState.commuteRepeatEveryMinutes = Number(currentSettings.commuteRepeatEveryMinutes);
+        }
+        if (Array.isArray(currentSettings.commuteNearAlertMinutes)) {
+            academicPlannerState.commuteNearAlertMinutes = [...currentSettings.commuteNearAlertMinutes];
+        }
+        if (currentSettings.commuteNearRadiusKm !== undefined) {
+            academicPlannerState.nearRadiusKm = Number(currentSettings.commuteNearRadiusKm);
+            academicPlannerState.commuteNearRadiusKm = Number(currentSettings.commuteNearRadiusKm);
+        }
+    }
 
     const homeCoords = cleanCoordPair('homeLocationLat', 'homeLocationLng');
     const uniCoords = cleanCoordPair('uniLocationLat', 'uniLocationLng');
@@ -18355,19 +18641,25 @@ function renderLiveCommuteCards(previewOrList = []) {
         protectUserNode(h4);
         h4.textContent = `🎯 ${c.target}`;
 
-        const stagesText = Array.isArray(c.alertMilestones) && c.alertMilestones.length > 0
-            ? `${c.alertMilestones.join(', ')} min`
-            : `${c.recommendedLeadMinutes} min`;
+        const stagesArr = Array.isArray(c.alertMilestones) && c.alertMilestones.length > 0
+            ? c.alertMilestones
+            : [c.recommendedLeadMinutes || 20];
+        const stagesText = `${stagesArr.join(', ')} min`;
+        const driveT = Math.max(1, Math.ceil(Number(c.driveMinutesWithTraffic) || 1));
+        const extraBuf = Number(c.extraBufferMinutes ?? currentSettings?.commuteExtraBufferMinutes ?? academicPlannerState?.commuteExtraBufferMinutes ?? 30);
+        const stepMin = Number(c.repeatEveryMinutes ?? currentSettings?.commuteRepeatEveryMinutes ?? academicPlannerState?.commuteRepeatEveryMinutes ?? 5);
+        const startLead = stagesArr[0] || (driveT + extraBuf);
+        const previewStages = stagesArr.slice(0, 3).join(', ') + (stagesArr.length > 3 ? '...' : '');
         const badge = document.createElement('span');
         badge.className = `proofing-issue-chip ${c.isNearCampus ? 'is-grammar' : 'is-spelling'}`;
         badge.textContent = c.isNearCampus
             ? tUi(
-                `📍 On / Near (${c.distanceKm} km) → Alerts ${stagesText} before`,
-                `📍 En sitio / Cerca (${c.distanceKm} km) → Avisos ${stagesText} antes`
+                `On site / Near (${c.distanceKm} km) → Alerts ${stagesText} before`,
+                `En sitio / Cerca (${c.distanceKm} km) → Avisos ${stagesText} antes`
             )
             : tUi(
-                `🚗 Driving (${c.distanceKm} km · ${c.trafficLabel}) → ~${c.driveMinutesWithTraffic} min drive · Alerts ${stagesText} before`,
-                `🚗 En auto (${c.distanceKm} km · ${c.trafficLabel}) → ~${c.driveMinutesWithTraffic} min traslado · Avisos ${stagesText} antes`
+                `Estimated drive: ${driveT} min (${c.distanceKm} km · ${c.trafficLabel}) → Alerts from ${startLead} min before every ${stepMin} min (${previewStages}) until tapping OK`,
+                `Trayecto estimado: ${driveT} min (${c.distanceKm} km · ${c.trafficLabel}) → Avisos desde ${startLead} min antes cada ${stepMin} min (${previewStages}) hasta presionar OK`
             );
 
         meta.append(h4, badge);
@@ -19699,6 +19991,20 @@ function initAcademicPlannerHandlers() {
         }
     });
 
+    document.getElementById('btnOpenSmartCommuteSettings')?.addEventListener('click', () => {
+        openSmartCommuteSettingsSection();
+    });
+
+    const courseCompletedCheck = document.getElementById('courseCompleted');
+    const coursePausedCheck = document.getElementById('courseRemindersPaused');
+    if (courseCompletedCheck && coursePausedCheck) {
+        courseCompletedCheck.addEventListener('change', () => {
+            if (courseCompletedCheck.checked) {
+                coursePausedCheck.checked = true;
+            }
+        });
+    }
+
     const courseForm = document.getElementById('plannerCourseForm');
     if (courseForm) {
         courseForm.addEventListener('submit', (e) => {
@@ -19716,6 +20022,19 @@ function initAcademicPlannerHandlers() {
             const startTime = String(document.getElementById('courseStartTime')?.value || '09:00').slice(0, 5);
             const endTime = String(document.getElementById('courseEndTime')?.value || '10:00').slice(0, 5);
             const days = Array.from(document.querySelectorAll('#courseDaysGroup input[type="checkbox"]:checked')).map(cb => Number(cb.value));
+            const completed = Boolean(document.getElementById('courseCompleted')?.checked);
+            const remindersPaused = completed ? true : Boolean(document.getElementById('courseRemindersPaused')?.checked);
+            const rawGrade = String(document.getElementById('courseFinalGrade')?.value ?? '').trim();
+            let finalGrade = null;
+            if (rawGrade !== '') {
+                const parsedGrade = Number(rawGrade);
+                if (!Number.isFinite(parsedGrade) || parsedGrade < 0 || parsedGrade > 100) {
+                    showToast('err', tUi('Final grade must be a number between 0 and 100.', 'El promedio final debe ser un número entre 0 y 100.'));
+                    document.getElementById('courseFinalGrade')?.focus();
+                    return;
+                }
+                finalGrade = Number(parsedGrade.toFixed(2));
+            }
 
             if (!name || !room || days.length === 0) {
                 showToast('err', 'Enter subject name, ITS classroom, and at least one class day.');
@@ -19733,26 +20052,29 @@ function initAcademicPlannerHandlers() {
                 campusId,
                 days,
                 startTime,
-                endTime
+                endTime,
+                remindersPaused,
+                completed,
+                finalGrade
             };
 
             const existingIdx = editId ? activeSem.courses.findIndex(c => c.id === editId) : -1;
+            const saveMsg = existingIdx >= 0
+                ? tUi(`Updated "${name}" (${room}).`, `Actualizado "${name}" (${room}).`)
+                : tUi(`Added "${name}" (${room}) to semester.`, `Agregado "${name}" (${room}) al semestre.`);
             if (existingIdx >= 0) {
                 activeSem.courses[existingIdx] = nextCourse;
-                showToast('ok', tUi(
-                    `Updated "${name}" (${room}). Remember to click "Save All" below.`,
-                    `Actualizado "${name}" (${room}). Recuerda presionar "Guardar Todo" abajo.`
-                ));
             } else {
                 activeSem.courses.push(nextCourse);
-                showToast('ok', tUi(
-                    `Added "${name}" (${room}) to semester.`,
-                    `Agregado "${name}" (${room}) al semestre.`
-                ));
             }
             resetPlannerCourseForm();
             renderPlannerSemesterUI();
             closePlannerCourseModal();
+            if (typeof persistAcademicPlannerState === 'function') {
+                persistAcademicPlannerState({ successMsg: saveMsg });
+            } else {
+                showToast('ok', saveMsg);
+            }
         });
     }
 

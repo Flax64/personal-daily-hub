@@ -1930,6 +1930,7 @@
                                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                                         <h3 style="margin:0;">Registered Classes &amp; ITS Croquis Guide</h3>
                                         <span class="muted-text" id="plannerCoursesCountBadge">0 classes</span>
+                                        <span class="planner-semester-gpa-badge" id="plannerSemesterAverageBadge" hidden></span>
                                     </div>
                                     <button type="button" class="btn-primary btn-small" id="btnOpenCourseModal" style="width:auto;margin:0;" title="Add a new ITS class to this semester">+ Add Class</button>
                                 </div>
@@ -2167,32 +2168,14 @@
                                 <div class="music-panel-card">
                                     <h3>📍 Saved Locations &amp; Commute Notification Rules</h3>
                                     <p class="muted-text" data-i18n-html="commute_rules_hint">
-                                        Smart Maps-based alerts by zone: <strong>At Home</strong> (progressive alerts, e.g. 20 min drive → <strong>40, 30, 20 &amp; 10 min before</strong>), <strong>Away from Home &amp; campus</strong> (1 alert <strong>10 min before Maps drive time</strong>), and <strong>Near destination</strong> (only at <strong>20 &amp; 15 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to confirm and stop remaining alerts for that class/shift.
+                                        Smart Maps-based alerts by zone: <strong>At Home or Away</strong> (starts at <strong>Google Maps drive time + extra buffer</strong> and repeats every few minutes, e.g. 11 min drive + 30 min → <strong>41, 36, 31, ... 1 min before</strong>), and <strong>Near class/campus</strong> (at <strong>20, 15, 10 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to stop remaining alerts for that class/shift.
                                     </p>
 
-                                    <label class="switch-row" style="margin: 10px 0;">
-                                        <input type="checkbox" id="plannerClassRemindersEnabled" checked>
-                                        <span><strong>Enable smart class commute notifications on my phone</strong></span>
-                                    </label>
-
-                                    <div class="form-row-2">
-                                        <div class="form-group">
-                                            <label for="plannerFarLeadMin">Minimum alert when far / at Home (min):</label>
-                                            <input type="number" id="plannerFarLeadMin" min="30" max="120" value="30">
-                                            <small class="form-hint">Minimum 30 min; increases automatically if driving + traffic takes longer.</small>
+                                    <div class="planner-commute-summary-box" id="plannerCommuteRulesSummaryBox">
+                                        <div class="planner-commute-summary-text" id="plannerCommuteRulesSummaryText">
+                                            Smart commute alerts active · +30 min buffer · repeat every 5 min · Near: 20, 15, 10 min · Radius: 0.5 km
                                         </div>
-                                        <div class="form-group">
-                                            <label for="plannerNearLeadMin">Alert when inside / near ITS campus (min):</label>
-                                            <input type="number" id="plannerNearLeadMin" min="5" max="45" value="10">
-                                            <small class="form-hint">Default 20 &amp; 15 min before class when already on or near campus.</small>
-                                        </div>
-                                    </div>
-
-                                    <div class="form-row-2">
-                                        <div class="form-group">
-                                            <label for="plannerNearRadiusKm">Home &amp; Campus/Destination proximity radius (km):</label>
-                                            <input type="number" id="plannerNearRadiusKm" min="0.2" max="5" step="0.05" value="0.85">
-                                        </div>
+                                        <button type="button" class="btn-secondary btn-small" id="btnOpenSmartCommuteSettings" title="Open Smart Commute Notification rules in Settings">⚙️ Configure smart alerts in Settings</button>
                                     </div>
 
                                     <hr class="section-divider">
@@ -2681,6 +2664,45 @@
                                 <div class="form-group" style="margin-top: 8px; margin-bottom: 0;">
                                     <input type="text" id="setEnglishTopic" maxlength="200"
                                         placeholder="e.g. Review 5 phrasal verbs and practice speaking">
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Card B2: Smart Commute Notifications (Google Maps / GPS) -->
+                        <section class="card settings-card settings-card-wide" id="settingsSmartCommuteCard">
+                            <h3>📍 Smart Commute Notifications (Google Maps / GPS)</h3>
+                            <p class="settings-desc" data-i18n-html="commute_rules_hint">
+                                Smart Maps-based alerts by zone: <strong>At Home or Away</strong> (starts at <strong>Google Maps drive time + extra buffer</strong> and repeats every few minutes, e.g. 11 min drive + 30 min → <strong>41, 36, 31, ... 1 min before</strong>), and <strong>Near class/campus</strong> (at <strong>20, 15, 10 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to stop remaining alerts for that class/shift.
+                            </p>
+
+                            <label class="switch-row">
+                                <input type="checkbox" id="setCommuteRemindersEnabled" checked>
+                                <span><strong>Enable smart class commute notifications on my phone</strong></span>
+                            </label>
+
+                            <div class="form-row-2">
+                                <div class="form-group">
+                                    <label for="setCommuteExtraBufferMin">Extra minutes added to Google Maps drive time (At Home or Away):</label>
+                                    <input type="number" id="setCommuteExtraBufferMin" min="5" max="120" step="1" value="30">
+                                    <small class="form-hint">Default 30 min. First alert fires at (Maps drive time + extra minutes) before class.</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="setCommuteRepeatEveryMin">Repeat alert every (min) when At Home or Away:</label>
+                                    <input type="number" id="setCommuteRepeatEveryMin" min="1" max="30" step="1" value="5">
+                                    <small class="form-hint">Default 5 min (e.g. 41, 36, 31, 26, 21, 16, 11, 6, 1) until you tap OK.</small>
+                                </div>
+                            </div>
+
+                            <div class="form-row-2">
+                                <div class="form-group">
+                                    <label for="setCommuteNearMilestones">Alerts when near / inside class radius (min before):</label>
+                                    <input type="text" id="setCommuteNearMilestones" maxlength="60" value="20, 15, 10" placeholder="20, 15, 10">
+                                    <small class="form-hint">Comma-separated minutes before class (default: 20, 15, 10) until you tap OK.</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="setCommuteNearRadiusKm">Home &amp; Campus/Destination proximity radius (km):</label>
+                                    <input type="number" id="setCommuteNearRadiusKm" min="0.05" max="10" step="0.05" value="0.5">
+                                    <small class="form-hint">Default 0.5 km around your Home or Campus/Workplace pin.</small>
                                 </div>
                             </div>
                         </section>
@@ -3545,6 +3567,21 @@
                         <label class="day-check-pill"><input type="checkbox" value="4" checked>Thu</label>
                         <label class="day-check-pill"><input type="checkbox" value="5">Fri</label>
                         <label class="day-check-pill"><input type="checkbox" value="6">Sat</label>
+                    </div>
+                </div>
+
+                <div class="planner-course-status-fields">
+                    <label class="switch-row">
+                        <input type="checkbox" id="courseRemindersPaused">
+                        <span>Pause reminders for this class</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="courseCompleted">
+                        <span>Course completed / passed</span>
+                    </label>
+                    <div class="form-group" style="margin-top: 8px; margin-bottom: 0;">
+                        <label for="courseFinalGrade">Final Average / Grade (0–100):</label>
+                        <input type="number" id="courseFinalGrade" min="0" max="100" step="0.1" placeholder="Optional, e.g. 95 or 98.5">
                     </div>
                 </div>
 

@@ -2400,3 +2400,54 @@ describe('Arquitectura Blue-Green Caddy + Rollback y Modal de Canción (#musicSo
         }, /MAC_MISMATCH|Incorrect password/i);
     });
 });
+
+describe('Mejoras de Materias (Pausa/Promedio), En Progreso 1h y Smart Commute en Ajustes', () => {
+    it('mantiene cero IDs duplicados en public/index.html, mueve reglas de traslado a #view-settings y agrega controles por materia', () => {
+        const indexHtml = readText('public/index.html');
+        const frontendJs = readText('public/frontend.js');
+        const styleCss = readText('public/style.css');
+        const initSql = readText('init.sql');
+        const serverJs = readText('server.js');
+
+        // 1. Cero IDs duplicados en public/index.html
+        const idCounts = new Map();
+        for (const m of indexHtml.matchAll(/\bid="([^"]+)"/g)) {
+            idCounts.set(m[1], (idCounts.get(m[1]) || 0) + 1);
+        }
+        const duplicateIds = [...idCounts.entries()].filter(([, cnt]) => cnt > 1).map(([id]) => id);
+        assert.deepEqual(duplicateIds, [], `IDs duplicados encontrados en public/index.html: ${duplicateIds.join(', ')}`);
+
+        // 2. Controles antiguos retirados de #view-horario y trasladados a #view-settings
+        for (const oldId of [
+            'id="plannerClassRemindersEnabled"',
+            'id="plannerFarLeadMin"',
+            'id="plannerNearLeadMin"',
+            'id="plannerNearRadiusKm"'
+        ]) {
+            assert.equal(indexHtml.includes(oldId), false, `public/index.html ya no debe incluir ${oldId} en #view-horario`);
+        }
+
+        for (const newId of [
+            'id="plannerSemesterAverageBadge"',
+            'id="courseRemindersPaused"',
+            'id="courseCompleted"',
+            'id="courseFinalGrade"',
+            'id="plannerCommuteRulesSummaryBox"',
+            'id="btnOpenSmartCommuteSettings"',
+            'id="settingsSmartCommuteCard"',
+            'id="setCommuteRemindersEnabled"',
+            'id="setCommuteExtraBufferMin"',
+            'id="setCommuteRepeatEveryMin"',
+            'id="setCommuteNearMilestones"',
+            'id="setCommuteNearRadiusKm"'
+        ]) {
+            assert.ok(indexHtml.includes(newId), `public/index.html debe incluir ${newId}`);
+        }
+
+        // 3. Presencia de columna en_progreso_desde, helper computeSmartCommuteAlertSchedule y estilos responsivos
+        assert.match(initSql, /en_progreso_desde\s+DATETIME\s+NULL/i);
+        assert.ok(serverJs.includes('function computeSmartCommuteAlertSchedule('));
+        assert.ok(frontendJs.includes('function openSmartCommuteSettingsSection('));
+        assert.ok(styleCss.includes('.planner-course-status-badges') && styleCss.includes('.planner-commute-summary-box'));
+    });
+});
