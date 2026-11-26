@@ -3677,6 +3677,92 @@ function inferAgendaBlockFromTimeServer(horaStr, categoria = 'personal') {
     return 'tarde';
 }
 
+function computePostponedAgendaBlock(horaStr, categoria = 'personal') {
+    if (String(categoria || '').trim().toLowerCase() === 'universidad') {
+        return 'escuela';
+    }
+    const match = /^([01]\d|2[0-3]):([0-5]\d)/.exec(String(horaStr || '').trim());
+    const hour = match ? Number(match[1]) : 9;
+    if (hour < 12) return 'manana';
+    if (hour < 19) return 'tarde';
+    return 'noche';
+}
+
+function computePostponedAgendaDateTime({
+    currentFecha = '',
+    currentHora = '09:00',
+    offsetMinutes = 15,
+    nowDate = new Date(),
+    timeZone = '',
+    categoria = 'personal',
+    fromNow = false
+} = {}) {
+    const nowDt = nowDate instanceof Date ? nowDate : new Date(nowDate ?? Date.now());
+    let todayIso = '';
+    let nowMinutesOfDay = 0;
+
+    const cleanTz = typeof timeZone === 'string' ? timeZone.trim() : '';
+    if (cleanTz) {
+        try {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: cleanTz,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            }).formatToParts(nowDt);
+            const map = {};
+            parts.forEach((p) => { map[p.type] = p.value; });
+            const h = Number(map.hour) % 24;
+            const m = Number(map.minute) || 0;
+            todayIso = `${map.year}-${map.month}-${map.day}`;
+            nowMinutesOfDay = h * 60 + m;
+        } catch (_) {
+            todayIso = '';
+        }
+    }
+    if (!todayIso) {
+        const y = nowDt.getFullYear();
+        const mo = String(nowDt.getMonth() + 1).padStart(2, '0');
+        const d = String(nowDt.getDate()).padStart(2, '0');
+        todayIso = `${y}-${mo}-${d}`;
+        nowMinutesOfDay = nowDt.getHours() * 60 + nowDt.getMinutes();
+    }
+
+    const cleanFecha = /^\d{4}-\d{2}-\d{2}$/.test(String(currentFecha || '').trim())
+        ? String(currentFecha).trim()
+        : todayIso;
+    const hMatch = /^([01]\d|2[0-3]):([0-5]\d)/.exec(String(currentHora || '').trim());
+    const scheduledMinutes = hMatch ? (Number(hMatch[1]) * 60 + Number(hMatch[2])) : (9 * 60);
+
+    const usedNowBase = Boolean(fromNow) || cleanFecha <= todayIso;
+    const baseFecha = usedNowBase ? todayIso : cleanFecha;
+    const baseMinutes = usedNowBase ? nowMinutesOfDay : scheduledMinutes;
+
+    const deltaMin = Math.round(Number(offsetMinutes) || 0);
+    const totalMinutes = baseMinutes + deltaMin;
+    const dayCarry = Math.floor(totalMinutes / 1440);
+    const remMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+    const newHour = Math.floor(remMinutes / 60);
+    const newMin = remMinutes % 60;
+    const hora = `${String(newHour).padStart(2, '0')}:${String(newMin).padStart(2, '0')}`;
+
+    const [by, bm, bd] = baseFecha.split('-').map(Number);
+    const fecha = new Date(Date.UTC(by, bm - 1, bd + dayCarry)).toISOString().slice(0, 10);
+    const bloque = computePostponedAgendaBlock(hora, categoria);
+
+    return {
+        fecha,
+        hora,
+        bloque,
+        crossedMidnight: fecha !== cleanFecha,
+        dayCarry,
+        usedNowBase
+    };
+}
+
 function splitAgendaTitleAndDescription(rawActividad = '', rawTitulo = '', rawDescripcion = '') {
     const explicitTitle = typeof rawTitulo === 'string' ? rawTitulo.replace(/\s+/g, ' ').trim() : '';
     const explicitDesc = typeof rawDescripcion === 'string' ? rawDescripcion.replace(/\s+/g, ' ').trim() : '';
@@ -4230,6 +4316,8 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
     if (!id) return res.status(400).send('Invalid activity ID.');
 
     const body = req.body || {};
+    const hasOffsetMinutes = body.offsetMinutes !== undefined && body.offsetMinutes !== null && body.offsetMinutes !== '';
+    const offsetMinutesNum = hasOffsetMinutes ? Number.parseInt(body.offsetMinutes, 10) : null;
     const hasDays = body.days !== undefined && body.days !== null && body.days !== '';
     const daysNum = hasDays ? Number.parseInt(body.days, 10) : null;
     const rawTargetDate = body.targetDate !== undefined && body.targetDate !== null
@@ -4237,7 +4325,11 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
         : '';
 
     let validTargetDate = '';
-    if (rawTargetDate) {
+    if (hasOffsetMinutes) {
+        if (!Number.isInteger(offsetMinutesNum) || offsetMinutesNum < 1 || offsetMinutesNum > 4320) {
+            return res.status(400).send('offsetMinutes must be an integer between 1 and 4320.');
+        }
+    } else if (rawTargetDate) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(rawTargetDate)) {
             return res.status(400).send('targetDate must use YYYY-MM-DD format.');
         }
@@ -4248,7 +4340,7 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
         }
         validTargetDate = rawTargetDate;
     } else if (!Number.isInteger(daysNum) || daysNum === 0 || Math.abs(daysNum) > 365) {
-        return res.status(400).send('Specify postponement days (non-zero integer -365..365) or targetDate (YYYY-MM-DD).');
+        return res.status(400).send('Specify postponement days (non-zero integer -365..365), offsetMinutes (1..4320), or targetDate (YYYY-MM-DD).');
     }
 
     try {
@@ -4270,26 +4362,71 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
         }
 
         const currentRow = rows[0];
-        let newFecha = validTargetDate;
-        if (!newFecha) {
-            const [cy, cm, cd] = String(currentRow.fecha || '').split('-').map(Number);
-            const movedObj = new Date(Date.UTC(cy, cm - 1, cd + daysNum));
-            newFecha = movedObj.toISOString().slice(0, 10);
-        }
-
         const prevEstado = String(currentRow.estado || 'todo').toLowerCase();
         const nextEstado = (prevEstado === 'skipped' || prevEstado === 'done') ? 'todo' : prevEstado;
         const nextCompletada = 0;
 
-        await dbQueryAsync(
-            'UPDATE RegistrosAgenda SET fecha = ?, estado = ?, completada = ? WHERE id = ?',
-            [newFecha, nextEstado, nextCompletada, id]
-        );
-        db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
+        let newFecha = validTargetDate;
+        let newHora = currentRow.hora;
+        let newBloque = currentRow.bloque;
+
+        if (hasOffsetMinutes) {
+            const settings = await loadUserSettings(req.user.id);
+            const computed = computePostponedAgendaDateTime({
+                currentFecha: currentRow.fecha,
+                currentHora: currentRow.hora,
+                offsetMinutes: offsetMinutesNum,
+                nowDate: new Date(),
+                timeZone: settings.timezone,
+                categoria: currentRow.categoria,
+                fromNow: Boolean(body.fromNow)
+            });
+            newFecha = computed.fecha;
+            newHora = computed.hora;
+            newBloque = computed.bloque;
+
+            await dbQueryAsync(
+                'UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, estado = ?, completada = ? WHERE id = ?',
+                [newFecha, newBloque, newHora, nextEstado, nextCompletada, id]
+            );
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+
+            if (computed.usedNowBase) {
+                const snoozeUntil = new Date(Date.now() + offsetMinutesNum * 60 * 1000);
+                const snoozeSql = formatMySqlDateTime(snoozeUntil);
+                const nextAgendaKey = `agenda:${id}:${newFecha}`;
+                await dbQueryAsync(
+                    `INSERT INTO RecordatoriosEstado (usuario_id, clave_unica, tipo, ref_id, titulo, mensaje, estado, snooze_hasta, enviado_push_en)
+                     VALUES (?, ?, 'agenda', ?, ?, ?, 'snoozed', ?, NULL)
+                     ON DUPLICATE KEY UPDATE estado = 'snoozed', snooze_hasta = VALUES(snooze_hasta), enviado_push_en = NULL`,
+                    [
+                        req.user.id,
+                        nextAgendaKey,
+                        id,
+                        String(currentRow.actividad || 'Agenda').slice(0, 140),
+                        '',
+                        snoozeSql
+                    ]
+                );
+            }
+        } else {
+            if (!newFecha) {
+                const [cy, cm, cd] = String(currentRow.fecha || '').split('-').map(Number);
+                const movedObj = new Date(Date.UTC(cy, cm - 1, cd + daysNum));
+                newFecha = movedObj.toISOString().slice(0, 10);
+            }
+            await dbQueryAsync(
+                'UPDATE RegistrosAgenda SET fecha = ?, estado = ?, completada = ? WHERE id = ?',
+                [newFecha, nextEstado, nextCompletada, id]
+            );
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+        }
 
         const updatedItem = enrichAgendaRow({
             ...currentRow,
             fecha: newFecha,
+            hora: newHora,
+            bloque: newBloque,
             estado: nextEstado,
             completada: nextCompletada
         });
@@ -4298,7 +4435,10 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
             message: 'Activity postponed successfully.',
             id,
             previousFecha: currentRow.fecha,
+            previousHora: currentRow.hora,
             fecha: newFecha,
+            hora: newHora,
+            bloque: newBloque,
             estado: nextEstado,
             completada: nextCompletada,
             item: updatedItem
@@ -8368,6 +8508,69 @@ app.get('/api/reminders/active', apiReadLimiter.middleware, requireAdmin, async 
     }
 });
 
+async function rescheduleAgendaItemOnSnooze({ userId, key, type, refId, safeMins, snoozeSql, title, message }) {
+    const keyMatch = /^(?:agenda|task-pending):(\d+):/.exec(String(key || '').trim());
+    const resolvedAgendaId = (type === 'agenda' && refId)
+        ? parseAgendaId(refId)
+        : (keyMatch ? parseAgendaId(keyMatch[1]) : null);
+    if (!(type === 'agenda' || Boolean(keyMatch)) || !resolvedAgendaId) {
+        return null;
+    }
+
+    const rows = await dbQueryAsync(
+        `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, bloque,
+                TIME_FORMAT(hora, '%H:%i') AS hora, actividad,
+                COALESCE(tipo, 'evento') AS tipo,
+                COALESCE(categoria, 'personal') AS categoria,
+                materia_id, materia_nombre,
+                COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
+                completada, recordatorio_min
+         FROM RegistrosAgenda
+         WHERE id = ?
+         LIMIT 1`,
+        [resolvedAgendaId]
+    );
+    if (!Array.isArray(rows) || rows.length === 0) {
+        return null;
+    }
+
+    const currentRow = rows[0];
+    const settings = await loadUserSettings(userId);
+    const computed = computePostponedAgendaDateTime({
+        currentFecha: currentRow.fecha,
+        currentHora: currentRow.hora,
+        offsetMinutes: safeMins,
+        nowDate: new Date(),
+        timeZone: settings.timezone,
+        categoria: currentRow.categoria,
+        fromNow: true
+    });
+    const newBloque = computed.bloque;
+
+    await dbQueryAsync(
+        'UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ? WHERE id = ?',
+        [computed.fecha, newBloque, computed.hora, resolvedAgendaId]
+    );
+
+    const nextAgendaKey = `agenda:${resolvedAgendaId}:${computed.fecha}`;
+    if (nextAgendaKey !== key) {
+        await dbQueryAsync(
+            `INSERT INTO RecordatoriosEstado (usuario_id, clave_unica, tipo, ref_id, titulo, mensaje, estado, snooze_hasta, enviado_push_en)
+             VALUES (?, ?, 'agenda', ?, ?, ?, 'snoozed', ?, NULL)
+             ON DUPLICATE KEY UPDATE estado = 'snoozed', snooze_hasta = VALUES(snooze_hasta), enviado_push_en = NULL`,
+            [userId, nextAgendaKey, resolvedAgendaId, title.slice(0, 140), message.slice(0, 320), snoozeSql]
+        );
+    }
+
+    bumpSyncRevision('agenda');
+    return {
+        rescheduled: true,
+        newFecha: computed.fecha,
+        newHora: computed.hora,
+        newBloque
+    };
+}
+
 async function applyReminderSnoozeOrDismiss({ userId, key, type = 'general', refId = null, action = 'snooze', minutes = 15, title = 'Reminder', message = '' }) {
     if (action === 'ack') {
         const baseSeriesKey = String(key || '').trim().replace(/:m\d+$/, '');
@@ -8406,7 +8609,22 @@ async function applyReminderSnoozeOrDismiss({ userId, key, type = 'general', ref
          ON DUPLICATE KEY UPDATE estado = 'snoozed', snooze_hasta = VALUES(snooze_hasta), enviado_push_en = NULL`,
         [userId, key, type, refId, title.slice(0, 140), message.slice(0, 320), snoozeSql]
     );
-    return { action: 'snoozed', snoozeUntil: snoozeUntil.toISOString(), minutes: safeMins };
+    const rescheduledInfo = await rescheduleAgendaItemOnSnooze({
+        userId,
+        key,
+        type,
+        refId,
+        safeMins,
+        snoozeSql,
+        title,
+        message
+    });
+    return {
+        action: 'snoozed',
+        snoozeUntil: snoozeUntil.toISOString(),
+        minutes: safeMins,
+        ...(rescheduledInfo || {})
+    };
 }
 
 app.post('/api/reminders/snooze', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
