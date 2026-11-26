@@ -1993,7 +1993,32 @@
         ['Drop this activity inside its matching section or on the calendar.', 'Suelta esta actividad dentro de su sección correspondiente o en el calendario.'],
         ['Choose a valid time (HH:MM).', 'Elige una hora válida (HH:MM).'],
         ['Activity rescheduled!', '¡Actividad reagendada!'],
-        ['Failed to reschedule activity', 'No se pudo reagendar la actividad']
+        ['Failed to reschedule activity', 'No se pudo reagendar la actividad'],
+
+        // --- Course Pause/Average, 1h In-Progress & Smart Commute Settings ---
+        ['Pause reminders for this class', 'Pausar recordatorios de esta clase'],
+        ['Course completed / passed', 'Materia completada / aprobada'],
+        ['Final Average / Grade (0–100):', 'Promedio / Calificación final (0–100):'],
+        ['Optional, e.g. 95 or 98.5', 'Opcional, ej. 95 o 98.5'],
+        ['🔕 Reminders paused', '🔕 Avisos pausados'],
+        ['✅ Completed / Passed', '✅ Completada / Aprobada'],
+        ['🔔 Resume alerts', '🔔 Reanudar avisos'],
+        ['🔕 Pause alerts', '🔕 Pausar avisos'],
+        ['OK / Dismiss', 'OK / Ocultar'],
+        ['⚙️ Configure smart alerts in Settings', '⚙️ Configurar alertas inteligentes en Ajustes'],
+        ['Open Smart Commute Notification rules in Settings', 'Abrir reglas de Notificaciones Inteligentes de Traslado en Ajustes'],
+        ['📍 Smart Commute Notifications (Google Maps / GPS)', '📍 Notificaciones Inteligentes de Traslado (Google Maps / GPS)'],
+        ['Extra minutes added to Google Maps drive time (At Home or Away):', 'Minutos extra sumados al trayecto de Google Maps (En Casa o Lejos):'],
+        ['Default 30 min. First alert fires at (Maps drive time + extra minutes) before class.', 'Predeterminado 30 min. El primer aviso se envía a (tiempo de Maps + minutos extra) antes de clase.'],
+        ['Repeat alert every (min) when At Home or Away:', 'Repetir aviso cada (min) cuando estás en Casa o Lejos:'],
+        ['Default 5 min (e.g. 41, 36, 31, 26, 21, 16, 11, 6, 1) until you tap OK.', 'Predeterminado 5 min (ej. 41, 36, 31, 26, 21, 16, 11, 6, 1) hasta que presiones OK.'],
+        ['Alerts when near / inside class radius (min before):', 'Avisos cuando estás cerca / dentro del radio de la clase (min antes):'],
+        ['Comma-separated minutes before class (default: 20, 15, 10) until you tap OK.', 'Minutos antes de clase separados por coma (predeterminado: 20, 15, 10) hasta presionar OK.'],
+        ['Default 0.5 km around your Home or Campus/Workplace pin.', 'Predeterminado 0.5 km alrededor de tu pin de Casa o Campus/Trabajo.'],
+        ['Smart commute extra buffer minutes must be an integer between 5 and 120.', 'Los minutos extra de traslado deben ser un entero entre 5 y 120.'],
+        ['Smart commute repeat interval must be an integer between 1 and 30 minutes.', 'El intervalo de repetición de traslado debe ser un entero entre 1 y 30 minutos.'],
+        ['Near-campus alert minutes must be a list of positive integers between 1 and 180 (e.g. 20, 15, 10).', 'Los avisos cerca del campus deben ser una lista de enteros positivos entre 1 y 180 (ej. 20, 15, 10).'],
+        ['Proximity radius must be between 0.05 and 10 km.', 'El radio de cercanía debe estar entre 0.05 y 10 km.']
     ];
 
     var EN_FROM_KEY = new Map();
@@ -2044,8 +2069,8 @@
             es: 'El modo Auto usa <strong>YouTube estándar</strong> en PC y <strong>YouTube Music</strong> en celular, abriendo pistas individuales sin alterar jamás tus playlists personales.'
         },
         commute_rules_hint: {
-            en: 'Smart Maps-based alerts by zone: <strong>At Home</strong> (progressive alerts, e.g. 20 min drive → <strong>40, 30, 20 &amp; 10 min before</strong>), <strong>Away from Home &amp; campus</strong> (1 alert <strong>10 min before Maps drive time</strong>), and <strong>Near destination</strong> (only at <strong>20 &amp; 15 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to confirm and stop remaining alerts for that class/shift.',
-            es: 'Avisos inteligentes basados en Maps por zona: <strong>En Casa</strong> (avisos progresivos, ej. 20 min de trayecto → <strong>40, 30, 20 y 10 min antes</strong>), <strong>Lejos de Casa y del destino</strong> (1 aviso <strong>10 min antes del tiempo de Google Maps</strong>) y <strong>Cerca del lugar</strong> (únicamente <strong>20 y 15 min antes</strong>). Pulsa <strong>OK</strong> en ntfy o en la app para confirmar enterado y detener los siguientes avisos.'
+            en: 'Smart Maps-based alerts by zone: <strong>At Home or Away</strong> (starts at <strong>Google Maps drive time + extra buffer</strong> and repeats every few minutes, e.g. 11 min drive + 30 min → <strong>41, 36, 31, ... 1 min before</strong>), and <strong>Near class/campus</strong> (at <strong>20, 15, 10 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to stop remaining alerts for that class/shift.',
+            es: 'Avisos inteligentes basados en Maps por zona: <strong>En Casa o Lejos</strong> (inicia en <strong>tiempo de Google Maps + minutos extra</strong> y se repite cada cierto tiempo, ej. 11 min + 30 min → <strong>41, 36, 31, ... 1 min antes</strong>) y <strong>Cerca del lugar</strong> (a los <strong>20, 15, 10 min antes</strong>). Pulsa <strong>OK</strong> en ntfy o en la app para detener los avisos restantes de esa clase/turno.'
         },
         home_loc_hint: {
             en: 'Pick your Home on the interactive map or enter your Saltillo street address, then click <strong>Save &amp; Find Home Location</strong>.',
@@ -2539,6 +2564,18 @@
         }
         if ((m = trim.match(/^(?:Failed to reschedule activity|No se pudo reagendar la actividad):\s*(.+)$/i))) {
             return pick('Failed to reschedule activity: ', 'No se pudo reagendar la actividad: ') + translateText(m[1]);
+        }
+        if ((m = trim.match(/^🎓\s*(?:Recorded average|Promedio capturado):\s*([0-9.]+)\s*\((\d+)\/(\d+)\s*(?:classes|materias)\)$/i))) {
+            return pick(
+                '🎓 Recorded average: ' + m[1] + ' (' + m[2] + '/' + m[3] + ' classes)',
+                '🎓 Promedio capturado: ' + m[1] + ' (' + m[2] + '/' + m[3] + ' materias)'
+            );
+        }
+        if ((m = trim.match(/^🎓\s*(?:Average|Promedio):\s*([0-9.]+)$/i))) {
+            return pick('🎓 Average: ', '🎓 Promedio: ') + m[1];
+        }
+        if ((m = trim.match(/^⏳\s*(?:1 hour in progress|Llevas 1 hora en progreso):\s*(.+)$/i))) {
+            return pick('⏳ 1 hour in progress: ', '⏳ Llevas 1 hora en progreso: ') + m[1];
         }
         return null;
     }

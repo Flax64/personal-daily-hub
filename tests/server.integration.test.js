@@ -162,7 +162,8 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                         { Field: 'materia_id' },
                         { Field: 'materia_nombre' },
                         { Field: 'estado' },
-                        { Field: 'recordatorio_min' }
+                        { Field: 'recordatorio_min' },
+                        { Field: 'en_progreso_desde' }
                     ]);
                 }
 
@@ -324,8 +325,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                         estado: params[6] || 'todo',
                         completada: params[7] ?? 0,
                         recordatorio_min: params[8] ?? null,
-                        materia_id: params[9] ?? null,
-                        materia_nombre: params[10] ?? null
+                        en_progreso_desde: params[9] ?? null,
+                        materia_id: params[10] ?? null,
+                        materia_nombre: params[11] ?? null
                     };
                     agendaInserts.push(newItem);
                     return finish(null, { insertId: newItem.id });
@@ -340,8 +342,12 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     return finish(null, agendaInserts.filter((a) => a.fecha === params[0]));
                 }
 
+                if (normalized.includes('FROM RegistrosAgenda') && normalized.includes("WHERE estado = 'in_progress'")) {
+                    return finish(null, agendaInserts.filter((a) => a.estado === 'in_progress' && Number(a.completada) === 0));
+                }
+
                 if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, actividad = ?')) {
-                    const id = Number(params[11]);
+                    const id = Number(params[12]);
                     const item = agendaInserts.find((a) => a.id === id);
                     if (!item) return finish(null, { affectedRows: 0 });
                     item.fecha = params[0];
@@ -353,13 +359,14 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     item.estado = params[6];
                     item.completada = params[7];
                     item.recordatorio_min = params[8];
-                    item.materia_id = params[9] ?? null;
-                    item.materia_nombre = params[10] ?? null;
+                    item.en_progreso_desde = params[9] ?? null;
+                    item.materia_id = params[10] ?? null;
+                    item.materia_nombre = params[11] ?? null;
                     return finish(null, { affectedRows: 1 });
                 }
 
-                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, estado = ?, completada = ? WHERE id = ?')) {
-                    const id = Number(params[5]);
+                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, estado = ?, completada = ?, en_progreso_desde = ? WHERE id = ?')) {
+                    const id = Number(params[6]);
                     const item = agendaInserts.find((a) => a.id === id);
                     if (!item) return finish(null, { affectedRows: 0 });
                     item.fecha = params[0];
@@ -367,6 +374,7 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     item.hora = params[2];
                     item.estado = params[3];
                     item.completada = params[4];
+                    item.en_progreso_desde = params[5] ?? null;
                     return finish(null, { affectedRows: 1 });
                 }
 
@@ -380,31 +388,44 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     return finish(null, { affectedRows: 1 });
                 }
 
-                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, estado = ?, completada = ? WHERE id = ?')) {
-                    const id = Number(params[3]);
+                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, estado = ?, completada = ?, en_progreso_desde = ? WHERE id = ?')) {
+                    const id = Number(params[4]);
                     const item = agendaInserts.find((a) => a.id === id);
                     if (!item) return finish(null, { affectedRows: 0 });
                     item.fecha = params[0];
                     item.estado = params[1];
                     item.completada = params[2];
+                    item.en_progreso_desde = params[3] ?? null;
                     return finish(null, { affectedRows: 1 });
                 }
 
-                if (normalized.startsWith('UPDATE RegistrosAgenda SET estado = ?, completada = ? WHERE id = ?')) {
-                    const id = Number(params[2]);
+                if (normalized.startsWith('UPDATE RegistrosAgenda SET estado = ?, completada = ?, en_progreso_desde = ? WHERE id = ?')) {
+                    const id = Number(params[3]);
                     const item = agendaInserts.find((a) => a.id === id);
                     if (!item) return finish(null, { affectedRows: 0 });
                     item.estado = params[0];
                     item.completada = params[1];
+                    item.en_progreso_desde = params[2] ?? null;
                     return finish(null, { affectedRows: 1 });
                 }
 
-                if (normalized.startsWith('UPDATE RegistrosAgenda SET estado = CASE WHEN completada = 1')) {
+                if (normalized.startsWith("UPDATE RegistrosAgenda SET estado = 'done', completada = 1, en_progreso_desde = NULL WHERE id = ?")) {
                     const id = Number(params[0]);
                     const item = agendaInserts.find((a) => a.id === id);
                     if (!item) return finish(null, { affectedRows: 0 });
-                    item.estado = item.completada ? 'todo' : 'done';
-                    item.completada = item.completada ? 0 : 1;
+                    item.estado = 'done';
+                    item.completada = 1;
+                    item.en_progreso_desde = null;
+                    return finish(null, { affectedRows: 1 });
+                }
+
+                if (normalized.startsWith("UPDATE RegistrosAgenda SET estado = 'skipped', completada = 0, en_progreso_desde = NULL WHERE id = ?")) {
+                    const id = Number(params[0]);
+                    const item = agendaInserts.find((a) => a.id === id);
+                    if (!item) return finish(null, { affectedRows: 0 });
+                    item.estado = 'skipped';
+                    item.completada = 0;
+                    item.en_progreso_desde = null;
                     return finish(null, { affectedRows: 1 });
                 }
 
@@ -2565,8 +2586,8 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(n21.campusKey, 'miravalle');
         assert.strictEqual(n21.croquisCode, 'CTO-003');
 
-        // 4. Calcular tiempo de traslado en carro y escalonamiento inteligente por 3 zonas (Casa, Lejos de Casa/Campus, Cerca del Campus)
-        // 4a. Lejos de Casa y lejos del campus (away_far -> 1 solo aviso [T + 10])
+        // 4. Calcular tiempo de traslado en carro y escalonamiento inteligente (En Casa / Lejos vs Cerca)
+        // 4a. Lejos de Casa y lejos del campus (away -> [T + 30, T + 25, ..., >0])
         const farLocRes = await request({
             port,
             method: 'POST',
@@ -2579,12 +2600,14 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.ok(Array.isArray(farData.commutes) && farData.commutes.length >= 3);
         const farPrincipal = farData.commutes.find((c) => c.campusKey === 'principal');
         assert.strictEqual(farPrincipal.isNearCampus, false);
-        assert.strictEqual(farPrincipal.commuteZone, 'away_far');
-        assert.deepStrictEqual(farPrincipal.alertMilestones, [farPrincipal.driveMinutesWithTraffic + 10]);
-        assert.strictEqual(farPrincipal.recommendedLeadMinutes, farPrincipal.driveMinutesWithTraffic + 10);
+        assert.strictEqual(farPrincipal.commuteZone, 'away');
+        const expectedFarSeq = [];
+        for (let m = farPrincipal.driveMinutesWithTraffic + 30; m > 0; m -= 5) expectedFarSeq.push(m);
+        assert.deepStrictEqual(farPrincipal.alertMilestones, expectedFarSeq);
+        assert.strictEqual(farPrincipal.recommendedLeadMinutes, farPrincipal.driveMinutesWithTraffic + 30);
         assert.ok(farPrincipal.mapsDirectionsUrl.includes('google.com/maps/dir/'));
 
-        // 4b. En Casa (home -> avisos progresivos [T + 20, T + 10, T, 10])
+        // 4b. En Casa (home -> [T + 30, T + 25, ..., >0])
         const homeLocRes = await request({
             port,
             method: 'POST',
@@ -2598,10 +2621,12 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         const homeDriveT = homePrincipal.driveMinutesWithTraffic;
         assert.strictEqual(homePrincipal.commuteZone, 'home');
         assert.strictEqual(homePrincipal.isAtHome, true);
-        assert.deepStrictEqual(homePrincipal.alertMilestones, [homeDriveT + 20, homeDriveT + 10, homeDriveT, 10]);
-        assert.strictEqual(homePrincipal.recommendedLeadMinutes, homeDriveT + 20);
+        const expectedHomeSeq = [];
+        for (let m = homeDriveT + 30; m > 0; m -= 5) expectedHomeSeq.push(m);
+        assert.deepStrictEqual(homePrincipal.alertMilestones, expectedHomeSeq);
+        assert.strictEqual(homePrincipal.recommendedLeadMinutes, homeDriveT + 30);
 
-        // 4c. Cerca del campus (near_destination -> únicamente [20, 15], recommendedLeadMinutes = 20)
+        // 4c. Cerca del campus (near -> únicamente [20, 15, 10], recommendedLeadMinutes = 20)
         const nearLocRes = await request({
             port,
             method: 'POST',
@@ -2614,9 +2639,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(nearData.planner.locations.current.label, 'En el Tec de Saltillo');
         const nearPrincipal = nearData.commutes.find((c) => c.campusKey === 'principal');
         assert.strictEqual(nearPrincipal.isNearCampus, true);
-        assert.strictEqual(nearPrincipal.commuteZone, 'near_destination');
-        assert.deepStrictEqual(nearPrincipal.alertMilestones, [20, 15]);
-        assert.strictEqual(nearPrincipal.recommendedLeadMinutes, 20, 'Si ya está en o cerca del ITS debe notificar a los 20 y 15 minutos antes');
+        assert.strictEqual(nearPrincipal.commuteZone, 'near');
+        assert.deepStrictEqual(nearPrincipal.alertMilestones, [20, 15, 10]);
+        assert.strictEqual(nearPrincipal.recommendedLeadMinutes, 20, 'Si ya está en o cerca del ITS debe notificar a los 20, 15 y 10 minutos antes');
 
         const embedMapsRes = await request({
             port,
@@ -2910,8 +2935,8 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         const localNowInfo = JSON.parse(nowProbeRes.body).localNow;
         const toHHMM = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
 
-        // Etapa 1: faltan (driveT + 5) min -> activa el hito (driveT + 10)
-        const stage1StartMin = localNowInfo.minutesOfDay + driveT + 5;
+        // Etapa 1: faltan (driveT + 28) min -> activa el hito (driveT + 30)
+        const stage1StartMin = localNowInfo.minutesOfDay + driveT + 28;
         const plannerStage1 = JSON.parse(resetHomeRes.body).planner;
         plannerStage1.classRemindersEnabled = true;
         plannerStage1.vacations = [];
@@ -2950,8 +2975,8 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             assert.strictEqual(remStage1Res.status, 200);
             const remStage1 = JSON.parse(remStage1Res.body).active.find((r) => r.type === 'class' && r.ackKey?.includes('ack-course-1'));
             assert.ok(remStage1, 'Debe emitir recordatorio de traslado en el primer hito');
-            assert.strictEqual(remStage1.stageMin, driveT + 10);
-            assert.ok(remStage1.key.endsWith(`:m${driveT + 10}`));
+            assert.strictEqual(remStage1.stageMin, driveT + 30);
+            assert.ok(remStage1.key.endsWith(`:m${driveT + 30}`));
 
             const classPush1 = pushedPayloads.find((p) => p.body.title && p.body.title.includes('Arquitectura Cloud'));
             assert.ok(classPush1, 'Debe enviar push ntfy para la clase');
@@ -2961,9 +2986,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             assert.strictEqual(classPush1.body.actions[1].label, 'Google Maps Route');
             assert.strictEqual(classPush1.body.actions[2].label, 'Open App');
 
-            // Etapa 2 (sin pulsar OK): faltan Math.max(12, driveT - 2) min -> avanza al siguiente hito y borra el anterior
-            const stage2LeadOffset = driveT > 12 ? (driveT - 2) : 8;
-            const expectedStage2 = driveT > 12 ? driveT : 10;
+            // Etapa 2 (sin pulsar OK): faltan (driveT + 22) min -> avanza al siguiente hito (driveT + 25) y borra el anterior
+            const stage2LeadOffset = driveT + 22;
+            const expectedStage2 = driveT + 25;
             plannerStage1.semesters[0].courses[0].startTime = toHHMM(localNowInfo.minutesOfDay + stage2LeadOffset);
             plannerStage1.semesters[0].courses[0].endTime = toHHMM(localNowInfo.minutesOfDay + stage2LeadOffset + 60);
             await request({
@@ -7442,6 +7467,289 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             if (prevJrnPath === undefined) delete process.env.JOURNAL_LOCAL_PATH; else process.env.JOURNAL_LOCAL_PATH = prevJrnPath;
             if (prevRclone === undefined) delete process.env.RCLONE_CONFIG; else process.env.RCLONE_CONFIG = prevRclone;
             fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it('pausa recordatorios por materia y guarda promedio, silencia tareas en_progreso hasta 1h y aplica nuevas reglas Smart Commute en Ajustes', async () => {
+        const serverExports = require('../server');
+        assert.strictEqual(typeof serverExports.computeSmartCommuteAlertSchedule, 'function');
+
+        // 1. Prueba unitaria pura de computeSmartCommuteAlertSchedule
+        const homeSeq = serverExports.computeSmartCommuteAlertSchedule({
+            zone: 'home',
+            routeMinutes: 11,
+            extraBufferMinutes: 30,
+            repeatEveryMinutes: 5
+        });
+        assert.deepStrictEqual(homeSeq.milestones, [41, 36, 31, 26, 21, 16, 11, 6, 1]);
+        assert.strictEqual(homeSeq.recommendedLeadMinutes, 41);
+
+        const awaySeq = serverExports.computeSmartCommuteAlertSchedule({
+            zone: 'away',
+            routeMinutes: 11,
+            extraBufferMinutes: 30,
+            repeatEveryMinutes: 5
+        });
+        assert.deepStrictEqual(awaySeq.milestones, [41, 36, 31, 26, 21, 16, 11, 6, 1]);
+
+        const nearSeq = serverExports.computeSmartCommuteAlertSchedule({
+            zone: 'near',
+            routeMinutes: 11,
+            extraBufferMinutes: 30,
+            repeatEveryMinutes: 5,
+            nearAlertMinutes: [20, 15, 10]
+        });
+        assert.deepStrictEqual(nearSeq.milestones, [20, 15, 10]);
+
+        const ackedHome = serverExports.computeSmartCommuteAlertSchedule({
+            zone: 'home',
+            routeMinutes: 11,
+            extraBufferMinutes: 30,
+            repeatEveryMinutes: 5,
+            acknowledged: true
+        });
+        assert.deepStrictEqual(ackedHome.milestones, []);
+
+        // 2. Guardar y recuperar configuración Smart Commute en /api/settings y verificar sincronización con /api/planner
+        const origSettings = JSON.parse((await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } })).body).settings;
+        const origPlanner = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+
+        try {
+            const badCommuteRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: { commuteExtraBufferMinutes: 2 }
+            });
+            assert.strictEqual(badCommuteRes.status, 400);
+
+            const saveCommuteRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    timezone: 'UTC',
+                    agendaRemindersEnabled: true,
+                    agendaNotifyTasks: true,
+                    agendaNotifyEvents: true,
+                    agendaNotifyPendingTasks: true,
+                    agendaLeadMinutes: 10,
+                    commuteRemindersEnabled: true,
+                    commuteExtraBufferMinutes: 30,
+                    commuteRepeatEveryMinutes: 5,
+                    commuteNearAlertMinutes: [20, 15, 10],
+                    commuteNearRadiusKm: 0.5
+                }
+            });
+            assert.strictEqual(saveCommuteRes.status, 200);
+            const savedCommuteSettings = JSON.parse(saveCommuteRes.body).settings;
+            assert.strictEqual(savedCommuteSettings.commuteRemindersEnabled, true);
+            assert.strictEqual(savedCommuteSettings.commuteExtraBufferMinutes, 30);
+            assert.strictEqual(savedCommuteSettings.commuteRepeatEveryMinutes, 5);
+            assert.deepStrictEqual(savedCommuteSettings.commuteNearAlertMinutes, [20, 15, 10]);
+            assert.strictEqual(savedCommuteSettings.commuteNearRadiusKm, 0.5);
+
+            const getCommutePlanner = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+            assert.strictEqual(getCommutePlanner.commuteExtraBufferMinutes, 30);
+            assert.strictEqual(getCommutePlanner.commuteRepeatEveryMinutes, 5);
+            assert.deepStrictEqual(getCommutePlanner.commuteNearAlertMinutes, [20, 15, 10]);
+            assert.strictEqual(getCommutePlanner.nearRadiusKm, 0.5);
+
+            // 3. Guardar materia pausada/completada con promedio 95.5 y otra activa; verificar scheduler
+            await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/planner/location',
+                headers: { Cookie: adminCookie },
+                body: { lat: 25.4414, lng: -100.9922, label: 'En Campus Principal' }
+            });
+
+            const nowPartsRes = await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } });
+            const localNow = JSON.parse(nowPartsRes.body).localNow;
+            const toHHMM = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+            const safeBaseMin = Math.min(localNow.minutesOfDay + 12, 23 * 60 + 40);
+
+            const plannerTestPayload = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+            plannerTestPayload.vacations = [];
+            plannerTestPayload.semesters[0].startDate = '2020-01-01';
+            plannerTestPayload.semesters[0].endDate = '2030-12-31';
+            plannerTestPayload.semesters[0].courses = [
+                {
+                    id: 'paused-course-1',
+                    code: 'DED2504',
+                    name: 'Integración y Despliegue Continuos',
+                    room: 'R11',
+                    campusId: 'principal',
+                    days: [0, 1, 2, 3, 4, 5, 6],
+                    startTime: toHHMM(safeBaseMin),
+                    endTime: toHHMM(safeBaseMin + 50),
+                    remindersPaused: true,
+                    completed: true,
+                    finalGrade: 95.5
+                },
+                {
+                    id: 'active-course-1',
+                    code: 'DSG1001',
+                    name: 'Desarrollo Seguro',
+                    room: 'R02',
+                    campusId: 'principal',
+                    days: [0, 1, 2, 3, 4, 5, 6],
+                    startTime: toHHMM(safeBaseMin),
+                    endTime: toHHMM(safeBaseMin + 50),
+                    remindersPaused: false,
+                    completed: false,
+                    finalGrade: null
+                }
+            ];
+
+            const putPlannerRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/planner',
+                headers: { Cookie: adminCookie },
+                body: { planner: plannerTestPayload }
+            });
+            assert.strictEqual(putPlannerRes.status, 200);
+
+            const reloadedPlanner = JSON.parse((await request({ port, reqPath: '/api/planner', headers: { Cookie: adminCookie } })).body).planner;
+            const reloadedPaused = reloadedPlanner.semesters[0].courses.find((c) => c.id === 'paused-course-1');
+            assert.ok(reloadedPaused);
+            assert.strictEqual(reloadedPaused.remindersPaused, true);
+            assert.strictEqual(reloadedPaused.completed, true);
+            assert.strictEqual(reloadedPaused.finalGrade, 95.5);
+
+            const activeAfterCourses = JSON.parse((await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } })).body).active;
+            assert.strictEqual(
+                activeAfterCourses.some((r) => r.type === 'class' && r.ackKey?.includes('paused-course-1')),
+                false,
+                'Una materia pausada/completada no debe generar alertas de clase/traslado'
+            );
+            assert.strictEqual(
+                activeAfterCourses.some((r) => r.type === 'class' && r.ackKey?.includes('active-course-1')),
+                true,
+                'Otra materia activa sí debe generar su alerta de clase/traslado'
+            );
+
+            // 4. Tareas en estado 'in_progress' (en_progreso): silenciosas < 60 min y 1 seguimiento >= 60 min
+            const createTaskRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/insert-agenda',
+                headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-inprog-1h-test' },
+                body: {
+                    fecha: localNow.dateStr,
+                    bloque: 'cole',
+                    hora: toHHMM(Math.max(0, localNow.minutesOfDay - 5)),
+                    titulo: 'Configurar Pipeline CI/CD',
+                    tipo: 'tarea',
+                    categoria: 'universidad',
+                    estado: 'todo',
+                    recordatorio_min: 15
+                }
+            });
+            assert.strictEqual(createTaskRes.status, 201);
+            const inProgTaskId = JSON.parse(createTaskRes.body).item.id;
+
+            const activeWhileTodo = JSON.parse((await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } })).body).active;
+            assert.strictEqual(
+                activeWhileTodo.some((r) => Number(r.refId) === inProgTaskId && r.key.startsWith('agenda:')),
+                true,
+                'Mientras está en todo debe generar recordatorio normal'
+            );
+
+            const moveInProgRes = await request({
+                port,
+                method: 'PATCH',
+                reqPath: `/api/toggle-agenda/${inProgTaskId}`,
+                headers: { Cookie: adminCookie },
+                body: { estado: 'en_progreso' }
+            });
+            assert.strictEqual(moveInProgRes.status, 200);
+            const moveInProgJson = JSON.parse(moveInProgRes.body);
+            assert.strictEqual(moveInProgJson.estado, 'in_progress');
+            assert.ok(moveInProgJson.en_progreso_desde, 'Debe registrar en_progreso_desde al pasar a in_progress');
+
+            const storedRow = agendaInserts.find((a) => a.id === inProgTaskId);
+            assert.ok(storedRow && storedRow.en_progreso_desde);
+
+            // Recién puesta en progreso (< 60 min): NO debe haber aviso normal ni de seguimiento
+            const activeJustStarted = JSON.parse((await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } })).body).active;
+            assert.strictEqual(
+                activeJustStarted.some((r) => Number(r.refId) === inProgTaskId),
+                false,
+                'En progreso < 60 min debe silenciar avisos normales y no disparar seguimiento aún'
+            );
+
+            // Simular que transcurrieron 65 minutos en progreso
+            const sixtyFiveMinAgo = new Date(Date.now() - 65 * 60 * 1000);
+            storedRow.en_progreso_desde = sixtyFiveMinAgo.toISOString();
+
+            const activeAfter1h = JSON.parse((await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } })).body).active;
+            const followUpRem = activeAfter1h.find((r) => Number(r.refId) === inProgTaskId && r.key.startsWith('task-inprog:'));
+            assert.ok(followUpRem, 'Después de >= 60 min en progreso debe disparar seguimiento');
+            assert.ok(followUpRem.title.includes('Llevas 1 hora en progreso'));
+
+            // Posponer 30m respeta snooze_hasta sin mover fecha/hora ni reaparecer inmediatamente
+            const snoozeInProgRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/reminders/snooze',
+                headers: { Cookie: adminCookie },
+                body: {
+                    key: followUpRem.key,
+                    action: 'snooze',
+                    minutes: 30,
+                    type: 'agenda',
+                    refId: inProgTaskId,
+                    title: followUpRem.title,
+                    message: followUpRem.message
+                }
+            });
+            assert.strictEqual(snoozeInProgRes.status, 200);
+            const afterSnoozeInProg = JSON.parse((await request({ port, reqPath: '/api/reminders/active', headers: { Cookie: adminCookie } })).body);
+            assert.strictEqual(afterSnoozeInProg.active.some((r) => r.key === followUpRem.key), false);
+            assert.strictEqual(afterSnoozeInProg.snoozed.some((r) => r.key === followUpRem.key), true);
+
+            // Al volver a 'todo', limpia en_progreso_desde y reanuda recordatorio normal
+            const backToTodoRes = await request({
+                port,
+                method: 'PATCH',
+                reqPath: `/api/toggle-agenda/${inProgTaskId}`,
+                headers: { Cookie: adminCookie },
+                body: { estado: 'todo' }
+            });
+            assert.strictEqual(backToTodoRes.status, 200);
+            assert.strictEqual(JSON.parse(backToTodoRes.body).en_progreso_desde, null);
+            assert.strictEqual(storedRow.en_progreso_desde, null);
+        } finally {
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/planner',
+                headers: { Cookie: adminCookie },
+                body: { planner: origPlanner }
+            });
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    timezone: origSettings.timezone || 'America/Monterrey',
+                    agendaRemindersEnabled: origSettings.agendaRemindersEnabled !== false,
+                    agendaNotifyTasks: origSettings.agendaNotifyTasks !== false,
+                    agendaNotifyEvents: origSettings.agendaNotifyEvents !== false,
+                    agendaNotifyPendingTasks: origSettings.agendaNotifyPendingTasks !== false,
+                    agendaLeadMinutes: origSettings.agendaLeadMinutes ?? 10,
+                    commuteRemindersEnabled: origSettings.commuteRemindersEnabled !== false,
+                    commuteExtraBufferMinutes: origSettings.commuteExtraBufferMinutes ?? 30,
+                    commuteRepeatEveryMinutes: origSettings.commuteRepeatEveryMinutes ?? 5,
+                    commuteNearAlertMinutes: origSettings.commuteNearAlertMinutes ?? [20, 15, 10],
+                    commuteNearRadiusKm: origSettings.commuteNearRadiusKm ?? 0.5
+                }
+            });
         }
     });
 
