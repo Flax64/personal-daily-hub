@@ -1664,6 +1664,14 @@ def _serializar_documento(doc_root: ET.Element, orig_xml_bytes: bytes) -> bytes:
 # English Notebook formatting, deduplication, and music merging
 # ---------------------------------------------------------------------------
 
+class LyricsReplaceError(ValueError):
+    """Error específico al validar o reemplazar la letra de una canción existente."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 def _limpiar_ruido_letra(texto) -> str:
     raw = str(texto or "").replace("\r", "").strip()
     if not raw:
@@ -2132,6 +2140,7 @@ def parsear_entrada_ingles(entry_or_text) -> dict:
             "practice_quiz": str(parsed.get("practice_quiz") or "").strip(),
             "notes": str(parsed.get("notes") or "").strip(),
             "append_study_fields": bool(parsed.get("append_study_fields")),
+            "replace_lyrics": bool(parsed.get("replace_lyrics") or parsed.get("replaceLyrics")),
         }
     else:
         item = {
@@ -2594,7 +2603,12 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
     had_structural_repairs = repaired_headings or merged_dups or repaired_entries or repaired_music
 
     deduplicated = False
+    replace_mode = bool(entry.get("replace_lyrics")) and entry.get("category") == "music"
+    counts_before = None
+    matched_tracks_count = 0
     if entry.get("category") == "music":
+        if replace_mode:
+            counts_before, _ = _contar_entradas_y_secciones_english(body, style_levels)
         toc_range = _encontrar_rango_toc(list(body))
         sec_start, sec_end, items = _buscar_rango_seccion(body, style_levels, "music", toc_range)
         if sec_start is None:
@@ -2613,6 +2627,7 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
                 existing_fields = _extraer_campos_bloque_word(body_lines, tr["heading"])
                 if _coincide_cancion_en_bloque(existing_fields, tr["heading"], target_title, target_artist):
                     matched_in_grp += 1
+                    matched_tracks_count += 1
                     combined_existing = (
                         existing_fields
                         if combined_existing is None
@@ -2625,11 +2640,30 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
                 if not has_other:
                     elems_to_remove.extend(body_children[grp["h2_idx"]:first_tr_idx])
 
+        if replace_mode:
+            if combined_existing is None or matched_tracks_count == 0:
+                raise LyricsReplaceError("SONG_NOT_FOUND", f"No se encontró la canción en el cuaderno Word: {target_title}")
+            new_lyrics_clean = _limpiar_ruido_letra(entry.get("lyrics_study"))
+            if not new_lyrics_clean:
+                raise LyricsReplaceError("EMPTY_LYRICS", "La letra de reemplazo no puede estar vacía.")
+
         for rm_el in elems_to_remove:
             if rm_el in body:
                 body.remove(rm_el)
 
-        merged_entry = _combinar_metadata_cancion_word(combined_existing, entry) if combined_existing is not None else dict(entry)
+        if replace_mode:
+            merged_entry = {
+                **combined_existing,
+                "category": "music",
+                "language": _limpiar_linea(combined_existing.get("language")) or _limpiar_linea(entry.get("language")),
+                "song_title": _limpiar_linea(combined_existing.get("song_title")) or target_title or "Untitled Song",
+                "artists_display": _limpiar_linea(combined_existing.get("artists_display")) or target_artist or "Unknown Artist",
+                "yt_music_url": _limpiar_linea(combined_existing.get("yt_music_url")) or _limpiar_linea(entry.get("yt_music_url")),
+                "lyrics_study": new_lyrics_clean,
+                "append_study_fields": False,
+            }
+        else:
+            merged_entry = _combinar_metadata_cancion_word(combined_existing, entry) if combined_existing is not None else dict(entry)
         toc_range = _encontrar_rango_toc(list(body))
         sec_start, sec_end, items = _buscar_rango_seccion(body, style_levels, "music", toc_range)
         if sec_start is None:
@@ -2708,6 +2742,14 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
             zout.writestr("word/styles.xml", new_styles_bytes)
     out_bytes = out_buf.getvalue()
     _validar_docx_bytes(out_bytes)
+    extra_meta = {}
+    if replace_mode and counts_before is not None:
+        counts_after = _validar_reemplazo_letra_docx(out_bytes, counts_before, matched_tracks_count)
+        extra_meta = {
+            "replacedLyrics": True,
+            "songsBefore": counts_before.get("music", 0),
+            "songsAfter": counts_after.get("music", 0),
+        }
     return out_bytes, {
         "category": spec["category"],
         "heading": spec["heading"],
@@ -2716,7 +2758,43 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
         "deduplicated": deduplicated,
         "removedTocParagraphs": toc_stats["corrupted_removed"],
         "tocEntriesCount": toc_stats["toc_entries_count"],
+        **extra_meta,
     }
+
+
+def _validar_reemplazo_letra_docx(docx_bytes: bytes, counts_before: dict, matched_tracks_count: int) -> dict:
+    if not docx_bytes or len(docx_bytes) < 64 or docx_bytes[:4] != b"PK\x03\x04":
+        raise LyricsReplaceError("REPLACE_VALIDATION_FAILED", "Archivo .docx generado sin firma ZIP PK\\x03\\x04.")
+    with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zf:
+        bad_member = zf.testzip()
+        if bad_member is not None:
+            raise LyricsReplaceError("REPLACE_VALIDATION_FAILED", f"Integridad ZIP fallida en: {bad_member}")
+        names = set(zf.namelist())
+        if "word/document.xml" not in names:
+            raise LyricsReplaceError("REPLACE_VALIDATION_FAILED", "Archivo .docx generado sin word/document.xml.")
+        doc_root = ET.fromstring(zf.read("word/document.xml"))
+        new_body = doc_root.find(_w_tag("body"))
+        if new_body is None:
+            raise LyricsReplaceError("REPLACE_VALIDATION_FAILED", "word/document.xml generado sin w:body.")
+        if "word/styles.xml" in names:
+            ET.fromstring(zf.read("word/styles.xml"))
+        estilos_after = _ooxml_cargar_estilos_mapa(zf)
+    counts_after, _ = _contar_entradas_y_secciones_english(new_body, estilos_after["levels"])
+    expected_music = counts_before.get("music", 0) - matched_tracks_count + 1
+    if counts_after.get("music", 0) != expected_music:
+        raise LyricsReplaceError(
+            "REPLACE_VALIDATION_FAILED",
+            f"Conteo de canciones alterado tras reemplazo (esperado {expected_music}, obtenido {counts_after.get('music', 0)}).",
+        )
+    for cat in SECCIONES_INGLES:
+        if cat == "music":
+            continue
+        if counts_after.get(cat, 0) != counts_before.get(cat, 0):
+            raise LyricsReplaceError(
+                "REPLACE_VALIDATION_FAILED",
+                f"Conteo de sección '{cat}' alterado tras reemplazo (esperado {counts_before.get(cat, 0)}, obtenido {counts_after.get(cat, 0)}).",
+            )
+    return counts_after
 
 
 def _validar_docx_bytes(docx_bytes: bytes) -> None:
@@ -3921,17 +3999,42 @@ def main() -> int:
             docx_path = os.path.abspath(str(payload.get("docxPath") or ""))
             if not docx_path:
                 raise ValueError("Missing docxPath")
+            entry_payload = payload.get("entry")
+            if isinstance(entry_payload, str):
+                try:
+                    entry_payload = json.loads(entry_payload)
+                except (ValueError, TypeError):
+                    pass
+            payload_replace = bool(payload.get("replaceLyrics") or payload.get("replace_lyrics"))
+            entry_replace = isinstance(entry_payload, dict) and bool(entry_payload.get("replaceLyrics") or entry_payload.get("replace_lyrics"))
+            replace_mode = payload_replace or entry_replace
+            if replace_mode and isinstance(entry_payload, dict):
+                entry_payload["replace_lyrics"] = True
+
             orig = None
             if os.path.exists(docx_path) and os.path.getsize(docx_path) > 0:
                 with open(docx_path, "rb") as fh:
                     orig = fh.read()
+            if replace_mode and not orig:
+                print(json.dumps({"ok": False, "reason": "SONG_NOT_FOUND", "error": f"Missing target docxPath: {docx_path}"}, ensure_ascii=True))
+                return 1
             try:
-                new_bytes, meta = update_english_docx_bytes(orig, payload.get("entry"))
+                new_bytes, meta = update_english_docx_bytes(orig, entry_payload)
+            except LyricsReplaceError as rep_exc:
+                print(json.dumps({"ok": False, "reason": rep_exc.code, "error": str(rep_exc)}, ensure_ascii=True))
+                return 1
             except (zipfile.BadZipFile, ET.ParseError) as corrupt_exc:
                 print(json.dumps({"ok": False, "reason": "CORRUPT_DOCX", "error": str(corrupt_exc)}, ensure_ascii=True))
                 return 1
+            bak_path = ""
+            if replace_mode and orig and payload.get("backup", True):
+                bak_path = f"{docx_path}.bak"
+                _reemplazo_atomico_archivo(bak_path, orig)
             _reemplazo_atomico_archivo(docx_path, new_bytes)
-            print(json.dumps({"ok": True, "bytes": len(new_bytes), **meta}, ensure_ascii=True))
+            out_json = {"ok": True, "bytes": len(new_bytes), **meta}
+            if bak_path:
+                out_json["backupPath"] = bak_path
+            print(json.dumps(out_json, ensure_ascii=True))
             return 0
 
         if mode in ("repair-english", "english-repair"):

@@ -173,4 +173,70 @@ test('ytmusic InnerTube', async (t) => {
         assert.equal(vidSearchRes.ok, true);
         assert.deepEqual(vidSearchRes.videoIds, ['mvOfficial1']);
     });
+
+    await t.test('rejects mismatched song fallback candidate (Addicted when Sun Showers requested)', async () => {
+        const { fetchYouTubeMusicLyrics } = require('../lib/ytmusic-lyrics');
+        const nextDirectNoTab = {
+            contents: {
+                playlistPanelVideoRenderer: {
+                    videoId: 'REUpBcmDbTE',
+                    title: { runs: [{ text: 'Sun Showers (From "The Angry Birds Movie 3")' }] },
+                    longBylineText: { runs: [{ text: 'JISOO' }] }
+                }
+            }
+        };
+        const searchWrongSong = {
+            items: [
+                {
+                    musicResponsiveListItemRenderer: {
+                        playlistItemData: { videoId: 'wrongAddict' },
+                        flexColumns: [
+                            { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Addicted' }] } } },
+                            { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'JISOO' }] } } }
+                        ]
+                    }
+                }
+            ]
+        };
+        const nextWrongSong = {
+            tabs: [{ tabRenderer: { endpoint: { browseEndpoint: { browseId: 'MPLYt_wrong' } } } }],
+            contents: {
+                playlistPanelVideoRenderer: {
+                    videoId: 'wrongAddict',
+                    title: { runs: [{ text: 'Addicted' }] },
+                    longBylineText: { runs: [{ text: 'JISOO' }] }
+                }
+            }
+        };
+        const browseWrong = {
+            contents: {
+                musicDescriptionShelfRenderer: {
+                    description: { runs: [{ text: 'Now you got me so addicted\nSpinning slowly in the midnight glow' }] }
+                }
+            }
+        };
+
+        const res = await fetchYouTubeMusicLyrics({
+            videoId: 'REUpBcmDbTE',
+            title: 'Sun Showers (From "The Angry Birds Movie 3")',
+            artist: 'JISOO',
+            isAllowedUrl: isAllowedInnerTubeUrl,
+            fetchImpl: async (url, opts) => {
+                const body = JSON.parse(opts.body);
+                if (url.includes('/v1/next')) {
+                    const data = body.videoId === 'wrongAddict' ? nextWrongSong : nextDirectNoTab;
+                    return { ok: true, status: 200, json: async () => data };
+                }
+                if (url.includes('/v1/search')) {
+                    return { ok: true, status: 200, json: async () => searchWrongSong };
+                }
+                if (url.includes('/v1/browse')) {
+                    return { ok: true, status: 200, json: async () => browseWrong };
+                }
+                return { ok: false, status: 404, json: async () => ({}) };
+            }
+        });
+        assert.equal(res.ok, false);
+        assert.equal(res.reason, 'lyrics_not_available');
+    });
 });

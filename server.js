@@ -57,7 +57,14 @@ const {
     parseStudyNotebookDocxBuffer,
     filterStudyNotebookData,
     findNotebookTranslationMatch,
-    findNotebookSongEntry
+    findNotebookSongEntry,
+    computeLyricsFingerprint,
+    computeLyricsOverlap,
+    validateLyricsUniquenessAgainstNotebook,
+    checkLyricsSectionConsistency,
+    resolveLyricsSectionMismatch,
+    compareExistingVsFreshLyrics,
+    guardMusicEntryLyricsBeforeSave
 } = require('./lib/language-studio');
 const {
     extractYouTubeWatchPageMetadata,
@@ -2887,6 +2894,103 @@ async function runWithDocxLock(lockName, taskFn) {
     );
 }
 
+function createEnglishLyricsGuard({
+    mode = 'save',
+    freshLyrics = '',
+    songTitle = '',
+    artistName = '',
+    language = '',
+    onComparison = null
+} = {}) {
+    return async ({ entry, docxBuffer }) => {
+        const parsedNotebook = Buffer.isBuffer(docxBuffer) && docxBuffer.length >= 64
+            ? parseStudyNotebookDocxBuffer(docxBuffer, { includeAllEntries: true, includeAll: true })
+            : null;
+
+        if (mode === 'save') {
+            if (!parsedNotebook || !parsedNotebook.ok) {
+                return { ok: true, entry };
+            }
+            const guardRes = guardMusicEntryLyricsBeforeSave(parsedNotebook, entry);
+            if (guardRes.sectionFixed) {
+                serverLogger.warn('DRIVE_NOTES', 'Sección de letra inconsistente descartada antes de guardar', {
+                    songTitle: entry?.song_title || '',
+                    droppedSection: guardRes.droppedSection || ''
+                });
+            }
+            return guardRes;
+        }
+
+        if (!parsedNotebook || !parsedNotebook.ok) {
+            return {
+                ok: false,
+                reason: 'SONG_NOT_FOUND',
+                error: 'No se pudo leer English_Learning_Notebook.docx.'
+            };
+        }
+
+        const existing = findNotebookSongEntry(parsedNotebook, {
+            songTitle: songTitle || entry?.song_title || '',
+            artistName: artistName || entry?.artists_display || ''
+        });
+        if (!existing) {
+            return {
+                ok: false,
+                reason: 'SONG_NOT_FOUND',
+                error: 'La canción no se encontró en English_Learning_Notebook.docx.'
+            };
+        }
+
+        const resolvedTitle = existing.songTitle || songTitle || entry?.song_title || '';
+        const resolvedArtist = existing.artist || artistName || entry?.artists_display || '';
+        const resolvedLanguage = existing.fields?.language || language || entry?.language || '';
+        const cmp = compareExistingVsFreshLyrics(existing, freshLyrics, {
+            notebookData: parsedNotebook,
+            songTitle: resolvedTitle,
+            artistName: resolvedArtist,
+            language: resolvedLanguage
+        });
+        if (typeof onComparison === 'function') {
+            onComparison(cmp);
+        }
+
+        if (cmp.status === 'match') {
+            return {
+                ok: false,
+                reason: 'UNCHANGED',
+                similarity: cmp.similarity,
+                error: 'La letra guardada ya coincide y está verificada.'
+            };
+        }
+
+        if (!cmp.freshValid) {
+            let errMsg = 'No se obtuvo una letra fiable para reemplazar; el archivo Word no fue modificado.';
+            if (cmp.freshReason === 'DUPLICATE_OTHER_SONG') {
+                errMsg = `La letra extraída coincide con otra canción existente ("${cmp.matchedSong || 'otra pista'}"). El archivo Word no fue modificado.`;
+            } else if (cmp.freshReason === 'SECTION_MISMATCH') {
+                errMsg = 'La letra extraída contiene secciones contradictorias de canciones distintas; el archivo Word no fue modificado.';
+            }
+            return {
+                ok: false,
+                reason: cmp.freshReason || 'NO_RELIABLE_LYRICS',
+                matchedSong: cmp.matchedSong || '',
+                similarity: cmp.similarity,
+                error: errMsg
+            };
+        }
+
+        return {
+            ok: true,
+            entry: {
+                ...entry,
+                song_title: resolvedTitle,
+                artists_display: resolvedArtist,
+                replace_lyrics: true
+            }
+        };
+    };
+}
+
 let _englishDriveRetryTimer = null;
 let _englishDriveRetryCount = 0;
 
@@ -3499,6 +3603,7 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
                     resolveRcloneFn: resolveRcloneConfigPath,
                     resolveStudyTargetFn: resolveStudyDriveRemoteTarget,
                     updateCacheFn: updateStudyNotebookCacheFromBuffer,
+                    lyricsGuardFn: createEnglishLyricsGuard({ mode: 'save' }),
                     rootDir: __dirname
                 })
             );
@@ -3524,6 +3629,15 @@ app.post('/api/send-english', pcQueueWriteLimiter.middleware, requireAdmin, requ
                     saveRes.mode === 'cloud_drive'
                         ? 'Saved directly to English Notebook on Google Drive.'
                         : 'Saved directly to local English Notebook volume.'
+                );
+            }
+            if (saveRes && saveRes.reason === 'DUPLICATE_OTHER_SONG') {
+                serverLogger.warn('DRIVE_NOTES', 'Letra rechazada por duplicar otra canción en Word', {
+                    matchedSong: saveRes.matchedSong,
+                    similarity: saveRes.similarity
+                });
+                return res.status(409).send(
+                    `Lyrics rejected: they match another song already saved ("${saveRes.matchedSong || 'other track'}"). The Word notebook was not modified.`
                 );
             }
             console.error('[ENGLISH_SERVER_SAVE_ERROR]', saveRes?.error || saveRes);
@@ -10902,6 +11016,229 @@ app.post('/api/english/music/songs/:id/lyrics/extract', apiWriteLimiter.middlewa
     } catch (err) {
         console.error(err);
         res.status(500).send('Error extracting song lyrics.');
+    }
+});
+
+app.post('/api/english/music/verify-replace-lyrics', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
+    if (!serverNotesService.isServerAutonomousNotesEnabled()) {
+        return res.status(409).json({
+            ok: false,
+            action: 'rejected',
+            reason: 'SERVER_NOTES_DISABLED',
+            message: 'El modo autónomo de cuaderno Word en servidor no está habilitado.'
+        });
+    }
+
+    const uid = req.user.id;
+    try {
+        const songId = parsePositiveInt(req.body?.songId);
+        let resolvedTitle = String(req.body?.songTitle || '').trim().slice(0, 300);
+        let resolvedArtist = String(req.body?.artistName || '').trim().slice(0, 300);
+        let resolvedAlbum = String(req.body?.albumTitle || '').trim().slice(0, 300);
+        let resolvedUrl = String(req.body?.ytMusicUrl || '').trim().slice(0, 500);
+        let resolvedLanguage = String(req.body?.language || '').trim().slice(0, 80);
+        let videoId = ytdlpService.extractValidYouTubeVideoId(resolvedUrl);
+
+        if (songId) {
+            const song = await fetchOwnedMusicSongForMediaOrLyrics(songId, uid);
+            if (!song) {
+                return res.status(404).json({
+                    ok: false,
+                    action: 'not_found',
+                    reason: 'SONG_NOT_FOUND',
+                    message: 'Song not found.'
+                });
+            }
+            const meta = await resolveSongArtistAndAlbumForLyrics(song, uid);
+            resolvedTitle = String(song.titulo || resolvedTitle).trim().slice(0, 300);
+            resolvedArtist = String(meta.artistName || resolvedArtist).trim().slice(0, 300);
+            resolvedAlbum = String(meta.albumTitle || resolvedAlbum).trim().slice(0, 300);
+            resolvedUrl = String(song.yt_music_url || resolvedUrl).trim().slice(0, 500);
+            resolvedLanguage = String(song.idioma || resolvedLanguage).trim().slice(0, 80);
+            videoId = ytdlpService.extractValidYouTubeVideoId(song.yt_video_id)
+                || ytdlpService.extractValidYouTubeVideoId(resolvedUrl)
+                || videoId;
+        }
+
+        if (!resolvedTitle) {
+            return res.status(400).json({
+                ok: false,
+                action: 'rejected',
+                reason: 'MISSING_SONG_TITLE',
+                message: 'Falta el título de la canción.'
+            });
+        }
+
+        const notebookSnapshot = await getStudyNotebookDataForUser({ forceRefresh: true });
+        const existingSong = notebookSnapshot && notebookSnapshot.ok
+            ? findNotebookSongEntry(notebookSnapshot, {
+                songTitle: resolvedTitle,
+                artistName: resolvedArtist,
+                albumTitle: resolvedAlbum
+            })
+            : null;
+        if (!existingSong) {
+            return res.status(404).json({
+                ok: false,
+                action: 'not_found',
+                reason: 'SONG_NOT_FOUND',
+                message: 'La canción aún no existe en English_Learning_Notebook.docx.'
+            });
+        }
+
+        if (!resolvedUrl) {
+            resolvedUrl = String(existingSong.fields?.yt_music_url || '').trim().slice(0, 500);
+        }
+        if (!resolvedLanguage) {
+            resolvedLanguage = String(existingSong.fields?.language || '').trim().slice(0, 80);
+        }
+        if (!videoId) {
+            videoId = ytdlpService.extractValidYouTubeVideoId(resolvedUrl);
+        }
+        if (!videoId) {
+            return res.status(400).json({
+                ok: false,
+                action: 'rejected',
+                reason: 'INVALID_VIDEO_ID',
+                message: 'La canción no tiene un enlace válido de YouTube / YouTube Music.'
+            });
+        }
+
+        const extracted = await ytdlpService.extractSongLyrics({
+            videoId,
+            url: resolvedUrl,
+            idioma: resolvedLanguage,
+            useInnerTube: true,
+            useExternalFallbacks: true,
+            enrichCaptions: true,
+            budgetMs: 30000,
+            trackTitle: existingSong.songTitle || resolvedTitle,
+            trackArtist: existingSong.artist || resolvedArtist,
+            trackAlbum: existingSong.album || resolvedAlbum
+        });
+
+        if (!extracted || !extracted.ok || !String(extracted.lyrics || '').trim()) {
+            return res.status(409).json({
+                ok: false,
+                action: 'rejected',
+                reason: extracted?.reason || 'NO_RELIABLE_LYRICS',
+                message: 'No se pudo obtener una letra verificada para esta canción; el archivo Word no fue modificado.'
+            });
+        }
+
+        const cleanedFresh = ytdlpService.stripNonLyricAudioTags(extracted.lyrics).trim().slice(0, 50000);
+        const sectionFixedFresh = resolveLyricsSectionMismatch(notebookSnapshot, {
+            songTitle: existingSong.songTitle || resolvedTitle,
+            artistName: existingSong.artist || resolvedArtist,
+            language: existingSong.fields?.language || resolvedLanguage,
+            lyrics: cleanedFresh
+        });
+        const sanitizedFresh = String(sectionFixedFresh.lyrics || cleanedFresh).trim().slice(0, 50000);
+
+        let comparisonResult = null;
+        const saveRes = await runWithDocxLock('pdh_docx_english', () =>
+            serverNotesService.saveEnglishEntryToCloudAndLocal({
+                entry: {
+                    category: 'music',
+                    song_title: existingSong.songTitle || resolvedTitle,
+                    artists_display: existingSong.artist || resolvedArtist,
+                    language: existingSong.fields?.language || resolvedLanguage || 'English',
+                    yt_music_url: resolvedUrl,
+                    lyrics_study: sanitizedFresh,
+                    replace_lyrics: true
+                },
+                resolveRcloneFn: resolveRcloneConfigPath,
+                resolveStudyTargetFn: resolveStudyDriveRemoteTarget,
+                updateCacheFn: updateStudyNotebookCacheFromBuffer,
+                lyricsGuardFn: createEnglishLyricsGuard({
+                    mode: 'replace',
+                    freshLyrics: sanitizedFresh,
+                    songTitle: existingSong.songTitle || resolvedTitle,
+                    artistName: existingSong.artist || resolvedArtist,
+                    language: existingSong.fields?.language || resolvedLanguage,
+                    onComparison: (cmp) => { comparisonResult = cmp; }
+                }),
+                rootDir: __dirname
+            })
+        );
+
+        if (saveRes && saveRes.reason === 'UNCHANGED') {
+            return res.json({
+                ok: true,
+                action: 'unchanged',
+                similarity: saveRes.similarity ?? 1,
+                message: 'La letra guardada ya coincide y está verificada.'
+            });
+        }
+
+        if (saveRes && saveRes.ok) {
+            if (saveRes.needsRetry) {
+                scheduleStudyDriveRetry();
+            } else {
+                _englishDriveRetryCount = 0;
+            }
+            bumpSyncRevision('music');
+            serverLogger.info('DRIVE_NOTES', 'Letra verificada y reemplazada en Word', {
+                heading: saveRes.heading,
+                previousStatus: comparisonResult?.status || 'mismatch',
+                verified: Boolean(saveRes.verified),
+                mode: saveRes.mode
+            });
+            return res.json({
+                ok: true,
+                action: 'replaced',
+                previousStatus: comparisonResult?.status || 'mismatch',
+                similarity: comparisonResult?.similarity ?? 0,
+                lyrics: sanitizedFresh,
+                mode: saveRes.mode,
+                verified: Boolean(saveRes.verified),
+                needsRetry: Boolean(saveRes.needsRetry),
+                message: 'Letra verificada y reemplazada correctamente en Word.'
+            });
+        }
+
+        if (['DUPLICATE_OTHER_SONG', 'SECTION_MISMATCH', 'NO_RELIABLE_LYRICS', 'EMPTY_LYRICS'].includes(saveRes?.reason)) {
+            return res.status(409).json({
+                ok: false,
+                action: 'rejected',
+                reason: saveRes.reason,
+                matchedSong: saveRes.matchedSong || '',
+                similarity: saveRes.similarity ?? null,
+                message: saveRes.error || 'La letra candidata no pasó la validación; el archivo Word no fue modificado.'
+            });
+        }
+
+        if (saveRes?.reason === 'SONG_NOT_FOUND') {
+            return res.status(404).json({
+                ok: false,
+                action: 'not_found',
+                reason: 'SONG_NOT_FOUND',
+                message: saveRes.error || 'La canción no se encontró en English_Learning_Notebook.docx.'
+            });
+        }
+
+        return res.status(500).json({
+            ok: false,
+            action: 'error',
+            reason: saveRes?.reason || 'VERIFY_REPLACE_FAILED',
+            message: saveRes?.error || 'Error al verificar y actualizar la letra en Word.'
+        });
+    } catch (err) {
+        console.error('[VERIFY_REPLACE_LYRICS_ERROR]', err);
+        if (err && err.code === 'LOCK_TIMEOUT') {
+            return res.status(503).json({
+                ok: false,
+                action: 'error',
+                reason: 'LOCK_TIMEOUT',
+                message: 'Concurrent English Notebook file write busy; please retry shortly.'
+            });
+        }
+        return res.status(500).json({
+            ok: false,
+            action: 'error',
+            reason: 'VERIFY_REPLACE_FAILED',
+            message: 'Error verifying and replacing song lyrics.'
+        });
     }
 });
 
