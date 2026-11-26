@@ -3706,6 +3706,12 @@
             <strong id="postponePopoverTitle">⏳ Posponer actividad</strong>
             <button type="button" class="modal-close-btn" id="btnClosePostponePopover" aria-label="Cerrar menú posponer">✕</button>
         </div>
+        <div class="agenda-postpone-quick-time-grid">
+            <button type="button" class="agenda-quick-date-btn" data-postpone-minutes="15">+15 min</button>
+            <button type="button" class="agenda-quick-date-btn" data-postpone-minutes="30">+30 min</button>
+            <button type="button" class="agenda-quick-date-btn" data-postpone-minutes="60">+1 hora</button>
+            <button type="button" class="agenda-quick-date-btn" data-postpone-minutes="120">+2 horas</button>
+        </div>
         <div class="agenda-postpone-quick-grid">
             <button type="button" class="agenda-quick-date-btn" data-postpone-days="1">+1 día (Mañana)</button>
             <button type="button" class="agenda-quick-date-btn" data-postpone-days="2">+2 días</button>
@@ -3714,8 +3720,12 @@
         </div>
         <div class="agenda-postpone-custom-row">
             <label for="postponeCustomDaysInput">Posponer</label>
-            <input type="number" id="postponeCustomDaysInput" min="1" max="365" value="4" class="select-compact">
-            <span>días</span>
+            <input type="number" id="postponeCustomDaysInput" min="1" max="720" value="15" class="select-compact">
+            <select id="postponeCustomUnitSelect" class="select-compact" aria-label="Unidad de tiempo para posponer">
+                <option value="minutes" selected>minutos</option>
+                <option value="hours">horas</option>
+                <option value="days">días</option>
+            </select>
             <button type="button" class="btn-secondary btn-small" id="btnApplyPostponeCustomDays">Aplicar</button>
         </div>
         <div class="agenda-postpone-cal-section">

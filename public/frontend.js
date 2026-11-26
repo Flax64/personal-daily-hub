@@ -12279,7 +12279,53 @@ function renderAgendaBoard() {
     }
 }
 
-function cargarAgendaSemana() {
+function captureAgendaScrollSnapshot() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+    const mainEl = document.querySelector('.main-content');
+    const tableScroll = document.getElementById('agendaTableScroll');
+    const schoolTableScroll = document.getElementById('agendaSchoolTableScroll');
+    const dayTabs = document.getElementById('agendaDayTabs');
+    return {
+        winX: window.scrollX || 0,
+        winY: window.scrollY || 0,
+        mainTop: mainEl ? mainEl.scrollTop : 0,
+        tableLeft: tableScroll ? tableScroll.scrollLeft : 0,
+        tableTop: tableScroll ? tableScroll.scrollTop : 0,
+        schoolLeft: schoolTableScroll ? schoolTableScroll.scrollLeft : 0,
+        schoolTop: schoolTableScroll ? schoolTableScroll.scrollTop : 0,
+        tabsLeft: dayTabs ? dayTabs.scrollLeft : 0
+    };
+}
+
+function restoreAgendaScrollSnapshot(snap) {
+    if (!snap || typeof window === 'undefined' || typeof document === 'undefined') return;
+    const apply = () => {
+        const mainEl = document.querySelector('.main-content');
+        const tableScroll = document.getElementById('agendaTableScroll');
+        const schoolTableScroll = document.getElementById('agendaSchoolTableScroll');
+        const dayTabs = document.getElementById('agendaDayTabs');
+        if (mainEl) mainEl.scrollTop = snap.mainTop;
+        if (tableScroll) {
+            tableScroll.scrollLeft = snap.tableLeft;
+            tableScroll.scrollTop = snap.tableTop;
+        }
+        if (schoolTableScroll) {
+            schoolTableScroll.scrollLeft = snap.schoolLeft;
+            schoolTableScroll.scrollTop = snap.schoolTop;
+        }
+        if (dayTabs) dayTabs.scrollLeft = snap.tabsLeft;
+        if (typeof window.scrollTo === 'function') {
+            window.scrollTo(snap.winX, snap.winY);
+        }
+    };
+    apply();
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(apply);
+    }
+}
+
+function cargarAgendaSemana({ preserveScroll = false } = {}) {
+    const scrollSnap = preserveScroll ? captureAgendaScrollSnapshot() : null;
     ensureAcademicPlannerLoaded();
     const monday = getMondayOfOffset(agendaState.weekOffset);
     const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
@@ -12297,14 +12343,14 @@ function cargarAgendaSemana() {
     }
 
     const weekStats = document.getElementById('agendaWeekStats');
-    if (weekStats) {
+    if (weekStats && !preserveScroll) {
         weekStats.textContent = tUi('Loading activities...', 'Cargando actividades...');
     }
 
     const beginMs = Date.parse(`${begin}T00:00:00Z`);
     const isHistoricalRange = Number.isFinite(beginMs) && (Date.now() - beginMs) > (28 * 24 * 60 * 60 * 1000);
     const loadingBanner = document.getElementById('agendaLoadingBanner');
-    if (loadingBanner) {
+    if (loadingBanner && !preserveScroll) {
         loadingBanner.replaceChildren(createLoadingBanner(
             isHistoricalRange
                 ? tUi('Loading older agenda records (may take a moment longer)...', 'Cargando agenda de fechas anteriores (puede tardar un poco más)...')
@@ -12330,6 +12376,7 @@ function cargarAgendaSemana() {
             if (typeof renderAgendaHeaderCalendar === 'function') {
                 renderAgendaHeaderCalendar(true);
             }
+            if (scrollSnap) restoreAgendaScrollSnapshot(scrollSnap);
         })
         .catch(err => {
             if (isAbortError(err) || !agendaLoadTracker.isCurrent(reqToken.seq)) return;
@@ -12343,6 +12390,7 @@ function cargarAgendaSemana() {
             if (typeof renderAgendaHeaderCalendar === 'function') {
                 renderAgendaHeaderCalendar(false);
             }
+            if (scrollSnap) restoreAgendaScrollSnapshot(scrollSnap);
             if (weekStats) {
                 weekStats.textContent = tUi('Could not load agenda (check RegistrosAgenda table in DB).', 'No se pudo cargar la agenda (revisa la tabla RegistrosAgenda en la BD).');
             }
@@ -12354,6 +12402,92 @@ function shiftYmdDateClient(ymd, deltaDays = 0) {
     const [y, m, d] = String(ymd).trim().split('-').map(Number);
     const dt = new Date(Date.UTC(y, m - 1, d + (Number(deltaDays) || 0)));
     return dt.toISOString().slice(0, 10);
+}
+
+function computePostponedAgendaBlock(horaStr, categoria = 'personal') {
+    if (String(categoria || '').trim().toLowerCase() === 'universidad') {
+        return 'escuela';
+    }
+    const match = /^([01]\d|2[0-3]):([0-5]\d)/.exec(String(horaStr || '').trim());
+    const hour = match ? Number(match[1]) : 9;
+    if (hour < 12) return 'manana';
+    if (hour < 19) return 'tarde';
+    return 'noche';
+}
+
+function computePostponedAgendaDateTime({
+    currentFecha = '',
+    currentHora = '09:00',
+    offsetMinutes = 15,
+    nowDate = new Date(),
+    timeZone = '',
+    categoria = 'personal',
+    fromNow = false
+} = {}) {
+    const nowDt = nowDate instanceof Date ? nowDate : new Date(nowDate ?? Date.now());
+    let todayIso = '';
+    let nowMinutesOfDay = 0;
+
+    const cleanTz = typeof timeZone === 'string' ? timeZone.trim() : '';
+    if (cleanTz) {
+        try {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: cleanTz,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            }).formatToParts(nowDt);
+            const map = {};
+            parts.forEach((p) => { map[p.type] = p.value; });
+            const h = Number(map.hour) % 24;
+            const m = Number(map.minute) || 0;
+            todayIso = `${map.year}-${map.month}-${map.day}`;
+            nowMinutesOfDay = h * 60 + m;
+        } catch (_) {
+            todayIso = '';
+        }
+    }
+    if (!todayIso) {
+        const y = nowDt.getFullYear();
+        const mo = String(nowDt.getMonth() + 1).padStart(2, '0');
+        const d = String(nowDt.getDate()).padStart(2, '0');
+        todayIso = `${y}-${mo}-${d}`;
+        nowMinutesOfDay = nowDt.getHours() * 60 + nowDt.getMinutes();
+    }
+
+    const cleanFecha = /^\d{4}-\d{2}-\d{2}$/.test(String(currentFecha || '').trim())
+        ? String(currentFecha).trim()
+        : todayIso;
+    const hMatch = /^([01]\d|2[0-3]):([0-5]\d)/.exec(String(currentHora || '').trim());
+    const scheduledMinutes = hMatch ? (Number(hMatch[1]) * 60 + Number(hMatch[2])) : (9 * 60);
+
+    const usedNowBase = Boolean(fromNow) || cleanFecha <= todayIso;
+    const baseFecha = usedNowBase ? todayIso : cleanFecha;
+    const baseMinutes = usedNowBase ? nowMinutesOfDay : scheduledMinutes;
+
+    const deltaMin = Math.round(Number(offsetMinutes) || 0);
+    const totalMinutes = baseMinutes + deltaMin;
+    const dayCarry = Math.floor(totalMinutes / 1440);
+    const remMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+    const newHour = Math.floor(remMinutes / 60);
+    const newMin = remMinutes % 60;
+    const hora = `${String(newHour).padStart(2, '0')}:${String(newMin).padStart(2, '0')}`;
+
+    const [by, bm, bd] = baseFecha.split('-').map(Number);
+    const fecha = new Date(Date.UTC(by, bm - 1, bd + dayCarry)).toISOString().slice(0, 10);
+    const bloque = computePostponedAgendaBlock(hora, categoria);
+
+    return {
+        fecha,
+        hora,
+        bloque,
+        crossedMidnight: fecha !== cleanFecha,
+        dayCarry,
+        usedNowBase
+    };
 }
 
 function getMondayYmdForDateClient(ymd) {
@@ -12528,33 +12662,63 @@ function toggleAgendaItem(item, ui = {}, targetEstado = null) {
     }, { extraDisable: [ui.row, ui.checkBtn, ui.statusSelect, ui.postponeBtn, ui.skipBtn, ui.editBtn, ui.delBtn] });
 }
 
-function posponerAgendaItem(item, { days = null, targetDate = '' } = {}, lockEl = null) {
+function posponerAgendaItem(item, { days = null, targetDate = '', offsetMinutes = null } = {}, lockEl = null) {
     if (!item || !item.id) return Promise.resolve(false);
     const lockBtn = lockEl || document.createElement('button');
-    const bodyPayload = targetDate
-        ? { targetDate: String(targetDate).trim() }
-        : { days: Number.parseInt(days, 10) };
+    const hasOffsetMins = Number.isInteger(offsetMinutes) && offsetMinutes > 0;
+    const bodyPayload = hasOffsetMins
+        ? { offsetMinutes }
+        : (targetDate
+            ? { targetDate: String(targetDate).trim() }
+            : { days: Number.parseInt(days, 10) });
+
     return runWithButtonLock(lockBtn, async () => {
         try {
             const respData = await submitMutationRequest({
                 url: `/api/postpone-agenda/${item.id}`,
                 method: 'PATCH',
                 scopeKey: `agenda-postpone:${item.id}`,
-                signature: JSON.stringify(bodyPayload),
+                signature: `${item.fecha || ''}:${item.hora || ''}:${JSON.stringify(bodyPayload)}`,
                 buildBody: () => bodyPayload,
                 parseJson: true
             });
-            const newFecha = respData?.fecha || targetDate || shiftYmdDateClient(item.fecha, days);
+            const newFecha = respData?.fecha || targetDate || (hasOffsetMins ? item.fecha : shiftYmdDateClient(item.fecha, days));
+            const newHora = respData?.hora || item.hora || '';
             const popover = document.getElementById('agendaPostponePopover');
             if (popover) popover.hidden = true;
-            if (newFecha) agendaState.selectedDate = newFecha;
-            cargarAgendaSemana();
+
+            const scrollSnap = captureAgendaScrollSnapshot();
+            if (respData?.item && Array.isArray(agendaState.items)) {
+                const idx = agendaState.items.findIndex(x => Number(x.id) === Number(item.id));
+                if (idx >= 0) {
+                    agendaState.items[idx] = respData.item;
+                    renderAgendaBoard();
+                    restoreAgendaScrollSnapshot(scrollSnap);
+                }
+            }
+
+            cargarAgendaSemana({ preserveScroll: true });
             if (typeof refreshOpenAgendaHeaderCalendar === 'function') refreshOpenAgendaHeaderCalendar();
             cargarRecordatoriosActivos();
-            showToast('ok', tUi(
-                `Activity postponed to ${newFecha}.`,
-                `Actividad pospuesta al ${newFecha}.`
-            ));
+
+            if (hasOffsetMins && newHora) {
+                if (newFecha && newFecha !== item.fecha) {
+                    showToast('ok', tUi(
+                        `Activity postponed to ${newFecha} at ${newHora}.`,
+                        `Actividad pospuesta al ${newFecha} a las ${newHora}.`
+                    ));
+                } else {
+                    showToast('ok', tUi(
+                        `Activity postponed to ${newHora}.`,
+                        `Actividad pospuesta a las ${newHora}.`
+                    ));
+                }
+            } else {
+                showToast('ok', tUi(
+                    `Activity postponed to ${newFecha}.`,
+                    `Actividad pospuesta al ${newFecha}.`
+                ));
+            }
             return true;
         } catch (err) {
             showToast('err', `${tUi('Failed to postpone activity', 'Error al posponer la actividad')}: ${tServer(err.message)}`);
@@ -13023,8 +13187,14 @@ function openAgendaPostponePopover(item, anchorBtn) {
     const tomorrowStr = shiftYmdDateClient(item.fecha, 1) || formatLocalDate(new Date());
     const dateInput = document.getElementById('postponeTargetDateInput');
     if (dateInput) dateInput.value = tomorrowStr;
+    const unitSelect = document.getElementById('postponeCustomUnitSelect');
+    if (unitSelect) unitSelect.value = 'minutes';
     const customInput = document.getElementById('postponeCustomDaysInput');
-    if (customInput) customInput.value = '4';
+    if (customInput) {
+        customInput.min = '1';
+        customInput.max = '720';
+        customInput.value = '15';
+    }
 
     const titleEl = document.getElementById('postponePopoverTitle');
     if (titleEl) {
@@ -13260,6 +13430,14 @@ if (agendaForm) {
         document.getElementById('btnClosePostponePopover')?.addEventListener('click', () => {
             postponePopover.hidden = true;
         });
+        postponePopover.querySelectorAll('[data-postpone-minutes]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mins = Number.parseInt(btn.getAttribute('data-postpone-minutes'), 10);
+                if (agendaCalendarUiState.postponeItem && Number.isInteger(mins) && mins > 0) {
+                    posponerAgendaItem(agendaCalendarUiState.postponeItem, { offsetMinutes: mins }, btn);
+                }
+            });
+        });
         postponePopover.querySelectorAll('[data-postpone-days]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const days = Number.parseInt(btn.getAttribute('data-postpone-days'), 10);
@@ -13268,14 +13446,52 @@ if (agendaForm) {
                 }
             });
         });
+        const customUnitSelect = document.getElementById('postponeCustomUnitSelect');
+        const customValueInput = document.getElementById('postponeCustomDaysInput');
+        if (customUnitSelect && customValueInput) {
+            customUnitSelect.addEventListener('change', () => {
+                const unit = customUnitSelect.value || 'minutes';
+                if (unit === 'minutes') {
+                    customValueInput.max = '720';
+                    customValueInput.value = '15';
+                } else if (unit === 'hours') {
+                    customValueInput.max = '72';
+                    customValueInput.value = '1';
+                } else {
+                    customValueInput.max = '365';
+                    customValueInput.value = '4';
+                }
+            });
+        }
         document.getElementById('btnApplyPostponeCustomDays')?.addEventListener('click', (ev) => {
-            const daysVal = Number.parseInt(document.getElementById('postponeCustomDaysInput')?.value || '0', 10);
-            if (!Number.isInteger(daysVal) || daysVal <= 0 || daysVal > 365) {
+            const unit = document.getElementById('postponeCustomUnitSelect')?.value || 'days';
+            const rawVal = Number.parseInt(document.getElementById('postponeCustomDaysInput')?.value || '0', 10);
+            if (unit === 'minutes') {
+                if (!Number.isInteger(rawVal) || rawVal < 1 || rawVal > 720) {
+                    showToast('err', tUi('Enter valid minutes (1-720).', 'Ingresa minutos válidos (1-720).'));
+                    return;
+                }
+                if (agendaCalendarUiState.postponeItem) {
+                    posponerAgendaItem(agendaCalendarUiState.postponeItem, { offsetMinutes: rawVal }, ev.currentTarget);
+                }
+                return;
+            }
+            if (unit === 'hours') {
+                if (!Number.isInteger(rawVal) || rawVal < 1 || rawVal > 72) {
+                    showToast('err', tUi('Enter valid hours (1-72).', 'Ingresa horas válidas (1-72).'));
+                    return;
+                }
+                if (agendaCalendarUiState.postponeItem) {
+                    posponerAgendaItem(agendaCalendarUiState.postponeItem, { offsetMinutes: rawVal * 60 }, ev.currentTarget);
+                }
+                return;
+            }
+            if (!Number.isInteger(rawVal) || rawVal <= 0 || rawVal > 365) {
                 showToast('err', tUi('Enter a valid number of days (1-365).', 'Ingresa una cantidad válida de días (1-365).'));
                 return;
             }
             if (agendaCalendarUiState.postponeItem) {
-                posponerAgendaItem(agendaCalendarUiState.postponeItem, { days: daysVal }, ev.currentTarget);
+                posponerAgendaItem(agendaCalendarUiState.postponeItem, { days: rawVal }, ev.currentTarget);
             }
         });
         document.getElementById('btnApplyPostponeDate')?.addEventListener('click', (ev) => {
@@ -15152,11 +15368,11 @@ function acknowledgeCommuteReminder(reminder, triggerBtn, cardEl = null) {
 function snoozeOrDismissReminder(reminder, action, minutes, triggerBtn) {
     runWithButtonLock(triggerBtn, async () => {
         try {
-            await submitMutationRequest({
+            const resData = await submitMutationRequest({
                 url: '/api/reminders/snooze',
                 method: 'POST',
                 scopeKey: `reminder-${action}:${reminder.key}`,
-                signature: `${action}:${minutes}`,
+                signature: `${action}:${minutes}:${reminder.targetDate || ''}:${reminder.targetTime || ''}`,
                 buildBody: () => ({
                     key: reminder.key,
                     action,
@@ -15168,6 +15384,23 @@ function snoozeOrDismissReminder(reminder, action, minutes, triggerBtn) {
                 }),
                 parseJson: true
             });
+            if (action === 'snooze' && (reminder.type === 'agenda' || resData?.rescheduled)) {
+                cargarAgendaSemana({ preserveScroll: true });
+                if (typeof refreshOpenAgendaHeaderCalendar === 'function') refreshOpenAgendaHeaderCalendar();
+                if (resData?.newHora) {
+                    if (resData.newFecha && reminder.targetDate && resData.newFecha !== reminder.targetDate) {
+                        showToast('ok', tUi(
+                            `Task moved +${minutes} min (now ${resData.newFecha} at ${resData.newHora}).`,
+                            `Tarea recorrida +${minutes} min (ahora el ${resData.newFecha} a las ${resData.newHora}).`
+                        ));
+                    } else {
+                        showToast('ok', tUi(
+                            `Task moved +${minutes} min (now at ${resData.newHora}).`,
+                            `Tarea recorrida +${minutes} min (ahora a las ${resData.newHora}).`
+                        ));
+                    }
+                }
+            }
             cargarRecordatoriosActivos();
         } catch (err) {
             showToast('err', `${tUi('Error updating reminder', 'Error al actualizar recordatorio')}: ${tServer(err.message)}`);

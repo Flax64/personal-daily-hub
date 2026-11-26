@@ -340,7 +340,7 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     return finish(null, agendaInserts.filter((a) => a.fecha === params[0]));
                 }
 
-                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?')) {
+                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, actividad = ?')) {
                     const id = Number(params[11]);
                     const item = agendaInserts.find((a) => a.id === id);
                     if (!item) return finish(null, { affectedRows: 0 });
@@ -355,6 +355,28 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     item.recordatorio_min = params[8];
                     item.materia_id = params[9] ?? null;
                     item.materia_nombre = params[10] ?? null;
+                    return finish(null, { affectedRows: 1 });
+                }
+
+                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ?, estado = ?, completada = ? WHERE id = ?')) {
+                    const id = Number(params[5]);
+                    const item = agendaInserts.find((a) => a.id === id);
+                    if (!item) return finish(null, { affectedRows: 0 });
+                    item.fecha = params[0];
+                    item.bloque = params[1];
+                    item.hora = params[2];
+                    item.estado = params[3];
+                    item.completada = params[4];
+                    return finish(null, { affectedRows: 1 });
+                }
+
+                if (normalized.startsWith('UPDATE RegistrosAgenda SET fecha = ?, bloque = ?, hora = ? WHERE id = ?')) {
+                    const id = Number(params[3]);
+                    const item = agendaInserts.find((a) => a.id === id);
+                    if (!item) return finish(null, { affectedRows: 0 });
+                    item.fecha = params[0];
+                    item.bloque = params[1];
+                    item.hora = params[2];
                     return finish(null, { affectedRows: 1 });
                 }
 
@@ -2051,6 +2073,203 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         } finally {
             sleepInserts.push(...backupSleeps);
         }
+    });
+
+    it('recalcula hora/fecha/bloque al posponer por minutos/horas en Agenda y recorre tareas reales al hacer snooze en notificaciones', async () => {
+        const formatTzParts = (dt, tz) => {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: tz,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            }).formatToParts(dt);
+            const map = {};
+            parts.forEach((p) => { map[p.type] = p.value; });
+            const h = Number(map.hour) % 24;
+            const m = Number(map.minute) || 0;
+            return {
+                fecha: `${map.year}-${map.month}-${map.day}`,
+                hora: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+                hour: h
+            };
+        };
+
+        const testTz = 'America/Monterrey';
+        await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/settings',
+            headers: { Cookie: adminCookie },
+            body: {
+                timezone: testTz,
+                agendaRemindersEnabled: true,
+                agendaNotifyTasks: true
+            }
+        });
+
+        const nowLocal = formatTzParts(new Date(), testTz);
+
+        // 1. Tarea personal de hoy pospuesta +30 min desde /api/postpone-agenda/:id
+        const createTodayPersonal = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-postpone-mins-1' },
+            body: {
+                fecha: nowLocal.fecha,
+                bloque: 'manana',
+                hora: '08:00',
+                titulo: 'Llamada bancaria',
+                tipo: 'tarea',
+                categoria: 'personal'
+            }
+        });
+        assert.strictEqual(createTodayPersonal.status, 201);
+        const personalTaskId = JSON.parse(createTodayPersonal.body).item.id;
+
+        const beforePostpone = Date.now();
+        const postpone30 = await request({
+            port,
+            method: 'PATCH',
+            reqPath: `/api/postpone-agenda/${personalTaskId}`,
+            headers: { Cookie: adminCookie },
+            body: { offsetMinutes: 30 }
+        });
+        const afterPostpone = Date.now();
+        assert.strictEqual(postpone30.status, 200);
+        const p30Json = JSON.parse(postpone30.body);
+
+        const exp1 = formatTzParts(new Date(beforePostpone + 30 * 60 * 1000), testTz);
+        const exp2 = formatTzParts(new Date(afterPostpone + 30 * 60 * 1000), testTz);
+        assert.ok(p30Json.hora === exp1.hora || p30Json.hora === exp2.hora, `hora esperada ${exp1.hora}/${exp2.hora}, obtenida ${p30Json.hora}`);
+        assert.ok(p30Json.fecha === exp1.fecha || p30Json.fecha === exp2.fecha);
+        const expectedHour = Number(p30Json.hora.split(':')[0]);
+        const expectedPersonalBlock = expectedHour < 12 ? 'manana' : (expectedHour < 19 ? 'tarde' : 'noche');
+        assert.strictEqual(p30Json.bloque, expectedPersonalBlock);
+
+        // 2. Tarea futura a las 23:30 pospuesta +90 min cruza medianoche al día siguiente a las 01:00
+        const futureBaseDt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+        const futureDateStr = formatTzParts(futureBaseDt, testTz).fecha;
+        const futureNextStr = formatTzParts(new Date(futureBaseDt.getTime() + 24 * 60 * 60 * 1000), testTz).fecha;
+
+        const createFuturePersonal = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-postpone-mins-future' },
+            body: {
+                fecha: futureDateStr,
+                bloque: 'noche',
+                hora: '23:30',
+                titulo: 'Lectura nocturna',
+                tipo: 'tarea',
+                categoria: 'personal'
+            }
+        });
+        assert.strictEqual(createFuturePersonal.status, 201);
+        const futureTaskId = JSON.parse(createFuturePersonal.body).item.id;
+
+        const postponeCrossMidnight = await request({
+            port,
+            method: 'PATCH',
+            reqPath: `/api/postpone-agenda/${futureTaskId}`,
+            headers: { Cookie: adminCookie },
+            body: { offsetMinutes: 90 }
+        });
+        assert.strictEqual(postponeCrossMidnight.status, 200);
+        const crossJson = JSON.parse(postponeCrossMidnight.body);
+        assert.strictEqual(crossJson.fecha, futureNextStr);
+        assert.strictEqual(crossJson.hora, '01:00');
+        assert.strictEqual(crossJson.bloque, 'manana');
+
+        // 3. POST /api/reminders/snooze sobre recordatorio tipo agenda recorre la tarea real en RegistrosAgenda
+        const beforeSnooze = Date.now();
+        const remSnoozeRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/reminders/snooze',
+            headers: { Cookie: adminCookie },
+            body: {
+                key: `agenda:${personalTaskId}:${p30Json.fecha}`,
+                action: 'snooze',
+                minutes: 15,
+                type: 'agenda',
+                refId: personalTaskId,
+                title: '[Personal Task] Llamada bancaria',
+                message: 'Llamada bancaria'
+            }
+        });
+        const afterSnooze = Date.now();
+        assert.strictEqual(remSnoozeRes.status, 200);
+        const remSnoozeJson = JSON.parse(remSnoozeRes.body);
+        assert.strictEqual(remSnoozeJson.action, 'snoozed');
+        assert.strictEqual(remSnoozeJson.rescheduled, true);
+
+        const sExp1 = formatTzParts(new Date(beforeSnooze + 15 * 60 * 1000), testTz);
+        const sExp2 = formatTzParts(new Date(afterSnooze + 15 * 60 * 1000), testTz);
+        assert.ok(remSnoozeJson.newHora === sExp1.hora || remSnoozeJson.newHora === sExp2.hora);
+        assert.ok(remSnoozeJson.newFecha === sExp1.fecha || remSnoozeJson.newFecha === sExp2.fecha);
+
+        const persistedPersonal = agendaInserts.find((a) => a.id === personalTaskId);
+        assert.strictEqual(persistedPersonal.hora, remSnoozeJson.newHora);
+        assert.strictEqual(persistedPersonal.fecha, remSnoozeJson.newFecha);
+        assert.strictEqual(persistedPersonal.bloque, remSnoozeJson.newBloque);
+        assert.strictEqual(reminderStatesMap.get(`1:agenda:${personalTaskId}:${remSnoozeJson.newFecha}`)?.estado, 'snoozed');
+
+        // 4. POST /api/reminders/action (action=snooze) sobre tarea universitaria preserva categoria/escuela/materia
+        const createUniTask = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-postpone-uni-1' },
+            body: {
+                fecha: nowLocal.fecha,
+                bloque: 'escuela',
+                hora: '10:00',
+                titulo: 'Entrega Proyecto Redes',
+                tipo: 'tarea',
+                categoria: 'universidad',
+                materia_nombre: 'Redes Avanzadas'
+            }
+        });
+        assert.strictEqual(createUniTask.status, 201);
+        const uniTaskId = JSON.parse(createUniTask.body).item.id;
+
+        const beforeActionSnooze = Date.now();
+        const actionSnoozeRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/reminders/action',
+            headers: { Cookie: adminCookie },
+            body: {
+                key: `agenda:${uniTaskId}:${nowLocal.fecha}`,
+                action: 'snooze',
+                minutes: 15,
+                type: 'agenda',
+                refId: uniTaskId,
+                title: '[Redes Avanzadas Task] Entrega Proyecto Redes',
+                message: 'Entrega Proyecto Redes'
+            }
+        });
+        const afterActionSnooze = Date.now();
+        assert.strictEqual(actionSnoozeRes.status, 200);
+        const actionJson = JSON.parse(actionSnoozeRes.body);
+        assert.strictEqual(actionJson.action, 'snoozed');
+        assert.strictEqual(actionJson.rescheduled, true);
+
+        const uExp1 = formatTzParts(new Date(beforeActionSnooze + 15 * 60 * 1000), testTz);
+        const uExp2 = formatTzParts(new Date(afterActionSnooze + 15 * 60 * 1000), testTz);
+        assert.ok(actionJson.newHora === uExp1.hora || actionJson.newHora === uExp2.hora);
+        assert.strictEqual(actionJson.newBloque, 'escuela');
+
+        const persistedUni = agendaInserts.find((a) => a.id === uniTaskId);
+        assert.strictEqual(persistedUni.categoria, 'universidad');
+        assert.strictEqual(persistedUni.bloque, 'escuela');
+        assert.strictEqual(persistedUni.materia_nombre, 'Redes Avanzadas');
+        assert.strictEqual(persistedUni.hora, actionJson.newHora);
     });
 
     it('gestiona catálogo Learn with Music por artistas/colaboraciones/mini álbumes, valida YouTube Music y aísla notas en Word E2EE', async () => {

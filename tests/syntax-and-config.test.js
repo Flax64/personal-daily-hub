@@ -1466,6 +1466,11 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
             'id="agendaRepeatMode"',
             'id="agendaRepeatSummaryPreview"',
             'id="agendaPostponePopover"',
+            'data-postpone-minutes="15"',
+            'data-postpone-minutes="30"',
+            'data-postpone-minutes="60"',
+            'data-postpone-minutes="120"',
+            'id="postponeCustomUnitSelect"',
             'value="skipped"'
         ]) {
             assert.ok(indexHtml.includes(reqAgendaSel), `public/index.html debe incluir ${reqAgendaSel}`);
@@ -1492,6 +1497,13 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
             assert.ok(styleCss.includes(cssCls), `public/style.css debe definir ${cssCls}`);
         }
         assert.ok(frontendJs.includes('posponerAgendaItem') && frontendJs.includes('openAgendaPostponePopover'));
+        assert.ok(frontendJs.includes('function computePostponedAgendaDateTime('), 'public/frontend.js debe definir computePostponedAgendaDateTime');
+        const postponeFnBlock = extractFnBlock('posponerAgendaItem', 'eliminarAgendaItem');
+        assert.equal(
+            /agendaState\.selectedDate\s*=/.test(postponeFnBlock),
+            false,
+            'posponerAgendaItem no debe cambiar agendaState.selectedDate ni sacar al usuario del día actual'
+        );
         assert.ok(
             frontendJs.includes('function canMoveAgendaItemToDate(') && frontendJs.includes('function cleanupAgendaDragState('),
             'public/frontend.js debe definir canMoveAgendaItemToDate y cleanupAgendaDragState'
@@ -1499,6 +1511,66 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
 
         const agendaSandbox = {};
         vm.runInNewContext(extractFnBlock('shiftYmdDateClient', 'toggleAgendaItem'), agendaSandbox);
+        const now1122 = new Date(2026, 10, 26, 11, 22, 0);
+        assert.deepEqual(
+            (() => {
+                const r = agendaSandbox.computePostponedAgendaDateTime({
+                    currentFecha: '2026-11-26',
+                    currentHora: '09:00',
+                    offsetMinutes: 15,
+                    nowDate: now1122,
+                    categoria: 'personal'
+                });
+                return { fecha: r.fecha, hora: r.hora, bloque: r.bloque };
+            })(),
+            { fecha: '2026-11-26', hora: '11:37', bloque: 'manana' }
+        );
+        const toAfternoon = agendaSandbox.computePostponedAgendaDateTime({
+            currentFecha: '2026-11-26',
+            currentHora: '10:00',
+            offsetMinutes: 30,
+            nowDate: new Date(2026, 10, 26, 11, 50, 0),
+            categoria: 'personal'
+        });
+        assert.equal(toAfternoon.hora, '12:20');
+        assert.equal(toAfternoon.bloque, 'tarde');
+        const toNight = agendaSandbox.computePostponedAgendaDateTime({
+            currentFecha: '2026-11-26',
+            currentHora: '17:00',
+            offsetMinutes: 30,
+            nowDate: new Date(2026, 10, 26, 18, 45, 0),
+            categoria: 'personal'
+        });
+        assert.equal(toNight.hora, '19:15');
+        assert.equal(toNight.bloque, 'noche');
+        const crossMidnight = agendaSandbox.computePostponedAgendaDateTime({
+            currentFecha: '2026-11-26',
+            currentHora: '23:00',
+            offsetMinutes: 25,
+            nowDate: new Date(2026, 10, 26, 23, 50, 0),
+            categoria: 'personal'
+        });
+        assert.equal(crossMidnight.fecha, '2026-11-27');
+        assert.equal(crossMidnight.hora, '00:15');
+        assert.equal(crossMidnight.bloque, 'manana');
+        const futureTask = agendaSandbox.computePostponedAgendaDateTime({
+            currentFecha: '2026-11-30',
+            currentHora: '14:00',
+            offsetMinutes: 60,
+            nowDate: now1122,
+            categoria: 'personal'
+        });
+        assert.equal(futureTask.fecha, '2026-11-30');
+        assert.equal(futureTask.hora, '15:00');
+        assert.equal(futureTask.bloque, 'tarde');
+        const uniTask = agendaSandbox.computePostponedAgendaDateTime({
+            currentFecha: '2026-11-26',
+            currentHora: '09:00',
+            offsetMinutes: 120,
+            nowDate: now1122,
+            categoria: 'universidad'
+        });
+        assert.equal(uniTask.bloque, 'escuela');
         assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-25', '2026-11-24', '2026-11-24'), false, 'No debe permitir mover hacia atrás respecto a la fecha origen');
         assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-20', '2026-11-22', '2026-11-24'), false, 'No debe permitir mover hacia una fecha pasada respecto a hoy');
         assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-24', '2026-11-24', '2026-11-24'), false, 'No debe mover al mismo día sin cambio de bloque personal');
