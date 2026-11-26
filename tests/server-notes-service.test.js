@@ -1813,4 +1813,68 @@ describe('Validación estricta de letras, unicidad en cuaderno y reemplazo atóm
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
+
+    it('aplica reglas exactas de apartados por idioma original (Inglés puro vs K-Pop/J-Pop) y limpia [music and singing]', () => {
+        const cleanedNoise = ytdlpService.stripNonLyricAudioTags([
+            'Oh, hey [music and singing] now, come outside',
+            '[singing]',
+            '[instrumental]',
+            '[cheering]',
+            '[applause]',
+            '(music)',
+            '♪ Raindrops shimmer on the garden stone ♪',
+            'Golden puddles under open skies'
+        ].join('\n'));
+        assert.equal(/\[music and singing\]|\[singing\]|\[instrumental\]|\[cheering\]|\[applause\]|\(music\)|♪/i.test(cleanedNoise), false);
+        assert.ok(cleanedNoise.includes('Oh, hey now, come outside'));
+        assert.ok(cleanedNoise.includes('Raindrops shimmer on the garden stone'));
+        assert.ok(cleanedNoise.includes('Golden puddles under open skies'));
+
+        // 1. Canción originalmente en Inglés puro: omite apartado en/Inglés y conserva Original (y ES si existe)
+        const pureEnBoth = langStudio.resolveAllowedLyricsSections({
+            songLanguage: 'English',
+            rawLyrics: `[ORIGINAL]\n${SUN_SHOWERS_INVENTED}\n\n[EN]\n${SUN_SHOWERS_INVENTED}\n\n[ES — Traducción IA]\nLluvia de sol afuera`
+        });
+        assert.strictEqual(pureEnBoth.isPureEnglish, true);
+        assert.strictEqual(pureEnBoth.hadRedundantEnglish, true);
+        assert.strictEqual(pureEnBoth.tracks.en, '');
+        assert.ok(pureEnBoth.tracks.original.includes('Oh, hey now, come outside'));
+        assert.deepStrictEqual(pureEnBoth.allowedCodes, ['original', 'es']);
+        assert.doesNotMatch(pureEnBoth.formattedLyrics, /^\[EN\]/m);
+
+        const pureEnOnlyEnTrack = langStudio.resolveAllowedLyricsSections({
+            songLanguage: 'en',
+            tracks: { original: '', ko: '', en: SUN_SHOWERS_INVENTED, ja: '', es: '' }
+        });
+        assert.strictEqual(pureEnOnlyEnTrack.tracks.en, '');
+        assert.ok(pureEnOnlyEnTrack.tracks.original.includes('Oh, hey now, come outside'));
+        assert.deepStrictEqual(pureEnOnlyEnTrack.allowedCodes, ['original']);
+
+        const pureEnExtract = ytdlpService.deduplicateAndFormatLyricTracks([
+            { rawLanguage: 'en', language: 'en', lyrics: `Oh, hey [music and singing] now, come outside\n${SUN_SHOWERS_INVENTED}`, source: 'yt-dlp:en', score: 90 }
+        ], 5, { preferredLangs: ['en', 'ko', 'es', 'ja'], songLanguage: 'English' });
+        assert.strictEqual(pureEnExtract.tracks.en, '');
+        assert.ok(pureEnExtract.tracks.original.includes('Oh, hey now, come outside'));
+        assert.doesNotMatch(pureEnExtract.lyrics || pureEnExtract.combinedLyrics, /\[EN\]|\[music and singing\]/i);
+
+        // 2. Canción K-Pop (en_ko / ko): conserva Original + KO + EN disponibles
+        const kpopResolved = langStudio.resolveAllowedLyricsSections({
+            songLanguage: 'en_ko',
+            rawLyrics: '[ORIGINAL]\n밤하늘 아래 shining light\n\n[KO]\n밤하늘 아래\n\n[EN]\nUnder the night sky shining light'
+        });
+        assert.strictEqual(kpopResolved.isKpop, true);
+        assert.deepStrictEqual(kpopResolved.allowedCodes, ['original', 'ko', 'en']);
+        assert.ok(kpopResolved.tracks.ko.includes('밤하늘 아래'));
+        assert.ok(kpopResolved.tracks.en.includes('Under the night sky shining light'));
+
+        // 3. Canción J-Pop (en_ja / ja): conserva Original + JA + EN disponibles
+        const jpopResolved = langStudio.resolveAllowedLyricsSections({
+            songLanguage: 'en_ja',
+            rawLyrics: '[ORIGINAL]\n夜空に光る shining star\n\n[JA]\n夜空に光る\n\n[EN]\nShining star in the night sky'
+        });
+        assert.strictEqual(jpopResolved.isJpop, true);
+        assert.deepStrictEqual(jpopResolved.allowedCodes, ['original', 'en', 'ja']);
+        assert.ok(jpopResolved.tracks.ja.includes('夜空に光る'));
+        assert.ok(jpopResolved.tracks.en.includes('Shining star in the night sky'));
+    });
 });

@@ -7260,6 +7260,142 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         }
     });
 
+    it('limpia apartado Inglés redundante en canción en inglés existente al llamar /api/english/music/verify-replace-lyrics sin duplicar ni corromper el .docx', async () => {
+        const fs = require('node:fs');
+        const os = require('node:os');
+        const { spawnSync } = require('node:child_process');
+        const langStudio = require('../lib/language-studio');
+        const ytdlpService = require(path.join(ROOT, 'lib', 'ytdlp-service'));
+        const origExtract = ytdlpService.extractSongLyrics;
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-clean-redundant-en-'));
+        const docxPath = path.join(tmpDir, 'English_Learning_Notebook.docx');
+        const prevKey = process.env.JOURNAL_SECRET_KEY;
+        const prevEngPath = process.env.ENGLISH_WORD_FILE_PATH;
+        const prevJrnPath = process.env.JOURNAL_LOCAL_PATH;
+        const prevRclone = process.env.RCLONE_CONFIG;
+
+        const SUN_LINES = [
+            'Oh, hey now, come outside',
+            'Raindrops shimmer on the garden stone',
+            'Golden puddles under open skies',
+            'Warm breeze carries every quiet tone',
+            'Step into the brightness after rain',
+            'Clouds are drifting past the tallest trees'
+        ].join('\n');
+
+        try {
+            process.env.JOURNAL_SECRET_KEY = '0123456789abcdef0123456789abcdef';
+            process.env.ENGLISH_WORD_FILE_PATH = docxPath;
+            process.env.JOURNAL_LOCAL_PATH = path.join(tmpDir, 'Diario.docx');
+            process.env.RCLONE_CONFIG = path.join(tmpDir, 'nonexistent-rclone.conf');
+
+            const pyBin = process.platform === 'win32' ? 'python' : 'python3';
+            // Construir .docx heredado con Language: English y secciones redundantes Original + English
+            const pySeed = spawnSync(
+                pyBin,
+                [
+                    '-c',
+                    [
+                        'import io, sys, zipfile',
+                        `sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'lib'))})`,
+                        'import docx_writer as dw',
+                        'b = dw._build_minimal_docx_bytes(mode="english")',
+                        'out, _ = dw.update_english_docx_bytes(b, {"category":"music","language":"English","song_title":"Sun Showers","artists_display":"JISOO","yt_music_url":"https://music.youtube.com/watch?v=REUpBcmDbTE","notes":"Nota personal intacta","vocabulary_list":"stone = piedra","lyrics_study": sys.argv[2]})',
+                        '# Inyectar sección heredada English (como ocurría antes de la regla por idioma)',
+                        'extra_xml = "".join([',
+                        '    "Clouds are drifting past the tallest trees</w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t></w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t>English</w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t>Oh, hey [music] now, come outside</w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t>Raindrops shimmer on the garden stone</w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t>Golden puddles under open skies</w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t>Warm breeze carries every quiet tone</w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t>Step into the brightness after rain</w:t></w:r></w:p>",',
+                        '    "<w:p><w:r><w:t>Clouds are drifting past the tallest trees</w:t>"',
+                        '])',
+                        'with zipfile.ZipFile(io.BytesIO(out), "r") as zin:',
+                        '    doc_xml = zin.read("word/document.xml").decode("utf-8")',
+                        '    assert "Clouds are drifting past the tallest trees</w:t>" in doc_xml',
+                        '    doc_xml = doc_xml.replace("Clouds are drifting past the tallest trees</w:t>", extra_xml, 1)',
+                        '    ob = io.BytesIO()',
+                        '    with zipfile.ZipFile(ob, "w", zipfile.ZIP_DEFLATED) as zout:',
+                        '        for info in zin.infolist():',
+                        '            zout.writestr(info, doc_xml.encode("utf-8") if info.filename == "word/document.xml" else zin.read(info.filename))',
+                        'with open(sys.argv[1], "wb") as f:',
+                        '    f.write(ob.getvalue())'
+                    ].join('\n'),
+                    docxPath,
+                    SUN_LINES
+                ],
+                { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } }
+            );
+            assert.strictEqual(pySeed.status, 0, pySeed.stderr || pySeed.stdout);
+
+            const beforeParsed = langStudio.parseStudyNotebookDocxBuffer(fs.readFileSync(docxPath), { includeAllEntries: true });
+            const beforeSong = langStudio.findNotebookSongEntry(beforeParsed, { songTitle: 'Sun Showers', artistName: 'JISOO' });
+            assert.ok(beforeSong && beforeSong.lyrics.includes('English\n'));
+
+            ytdlpService.extractSongLyrics = async () => ({
+                ok: true,
+                videoId: 'REUpBcmDbTE',
+                lyrics: `[ORIGINAL]\n${SUN_LINES}\n\n[EN]\n${SUN_LINES}`,
+                source: 'youtube:asr-captions'
+            });
+
+            const cleanRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/english/music/verify-replace-lyrics',
+                headers: { Cookie: adminCookie },
+                body: {
+                    songTitle: 'Sun Showers',
+                    artistName: 'JISOO',
+                    ytMusicUrl: 'https://music.youtube.com/watch?v=REUpBcmDbTE',
+                    language: 'English'
+                }
+            });
+            assert.strictEqual(cleanRes.status, 200, cleanRes.body);
+            const cleanJson = JSON.parse(cleanRes.body);
+            assert.strictEqual(cleanJson.ok, true);
+            assert.strictEqual(cleanJson.action, 'replaced');
+
+            const afterBytes = fs.readFileSync(docxPath);
+            const afterParsed = langStudio.parseStudyNotebookDocxBuffer(afterBytes, { includeAllEntries: true });
+            const musicAfter = (afterParsed.allEntries || afterParsed.entries).filter((e) => e.section === 'music');
+            assert.strictEqual(musicAfter.length, 1);
+            const afterSong = langStudio.findNotebookSongEntry(afterParsed, { songTitle: 'Sun Showers', artistName: 'JISOO' });
+            assert.ok(afterSong);
+            assert.ok(afterSong.lyrics.includes('Oh, hey now, come outside'));
+            assert.strictEqual(/\bEnglish\n/i.test(afterSong.lyrics), false, 'Debe eliminar el apartado redundante English del .docx');
+            assert.ok(String(afterSong.fields?.notes || '').includes('Nota personal intacta'));
+            assert.ok(String(afterSong.fields?.vocabulary_list || '').includes('stone = piedra'));
+
+            // Segunda verificación debe reportar unchanged
+            const secondRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/english/music/verify-replace-lyrics',
+                headers: { Cookie: adminCookie },
+                body: {
+                    songTitle: 'Sun Showers',
+                    artistName: 'JISOO',
+                    ytMusicUrl: 'https://music.youtube.com/watch?v=REUpBcmDbTE',
+                    language: 'English'
+                }
+            });
+            assert.strictEqual(secondRes.status, 200, secondRes.body);
+            assert.strictEqual(JSON.parse(secondRes.body).action, 'unchanged');
+        } finally {
+            ytdlpService.extractSongLyrics = origExtract;
+            if (prevKey === undefined) delete process.env.JOURNAL_SECRET_KEY; else process.env.JOURNAL_SECRET_KEY = prevKey;
+            if (prevEngPath === undefined) delete process.env.ENGLISH_WORD_FILE_PATH; else process.env.ENGLISH_WORD_FILE_PATH = prevEngPath;
+            if (prevJrnPath === undefined) delete process.env.JOURNAL_LOCAL_PATH; else process.env.JOURNAL_LOCAL_PATH = prevJrnPath;
+            if (prevRclone === undefined) delete process.env.RCLONE_CONFIG; else process.env.RCLONE_CONFIG = prevRclone;
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
     it('aplica rate limit contra fuerza bruta en login y saturación DoS en endpoints API', async () => {
         // 1. Fuerza bruta en login (10 intentos fallidos -> el 11° devuelve 429 con Retry-After)
         let blockedLoginRes = null;

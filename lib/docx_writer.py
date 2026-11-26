@@ -115,12 +115,17 @@ def _formatear_encabezado_idioma_word(clave: str, raw_header: str = "") -> str:
                 return f"{base_name} — {suffix}"
     return base_name
 _RE_HANGUL_CHAR = re.compile(r"[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F]")
+_RE_JAPANESE_CHAR = re.compile(r"[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]")
 _RE_STRUCTURAL_TAG_LINE = re.compile(
     r"^\[(?:intro|verse(?:\s*\d+)?|pre-?chorus|post-?chorus|chorus|refrain|bridge|rap(?:\s*part)?|interlude|outro|hook|solo|breakdown|coro|verso(?:\s*\d+)?|puente|estribillo)[^\]]*\]$",
     re.IGNORECASE,
 )
+_RE_RUIDO_SUBTITULO_INLINE = re.compile(
+    r"[\[(]\s*(?:(?:upbeat|soft|gentle|slow|fast|loud|quiet|background|ambient|dramatic|crowd|audience|playing|continues|fades|fading|out|in|and|&|\+|\/|,|-|\s)*(?:music|singing|instrumental|applause|laughter|laughs|laughing|cheering|cheers|clapping|whistling|humming|sighs|sighing|gasps|música|musica|cantando|aplausos|risas|ovación|ovacion|음악|박수|웃음|환호|노래|音楽|拍手|歓声|歌)(?:(?:\s+(?:and|&|\+|\/|,|-|playing|continues|fades|fading|out|in|upbeat|soft|gentle|loud|quiet|background|music|singing|instrumental|applause|laughter|laughs|laughing|cheering|cheers|clapping|whistling|humming|música|musica|cantando|aplausos|risas))|\s)*)[\])]",
+    re.IGNORECASE,
+)
 _RE_RUIDO_SUBTITULO_LINEA = re.compile(
-    r"^(?:\[(?:음악|音楽|歌|music|applause|laughter|cheering|instrumental)\]|\s*[\[\]]\s*)$",
+    rf"^(?:{_RE_RUIDO_SUBTITULO_INLINE.pattern}|[♪♫♩♬\s]+|\s*[\[\]]\s*)$",
     re.IGNORECASE,
 )
 _RE_TRADUCCION_ES_EN_NOTAS = re.compile(
@@ -1681,7 +1686,13 @@ def _limpiar_ruido_letra(texto) -> str:
         s = line.strip()
         if s and _RE_RUIDO_SUBTITULO_LINEA.match(s):
             continue
-        limpias.append(line.rstrip())
+        cleaned_line = _RE_RUIDO_SUBTITULO_INLINE.sub(" ", line)
+        cleaned_line = re.sub(r"(^|\s)[♪♫♩♬]+(?=\s|$)", r"\1", cleaned_line)
+        cleaned_line = re.sub(r"^[♪♫♩♬]+\s*|\s*[♪♫♩♬]+$", "", cleaned_line)
+        cleaned_line = re.sub(r"[ \t]{2,}", " ", cleaned_line).rstrip()
+        if s and not cleaned_line.strip():
+            continue
+        limpias.append(cleaned_line)
     res = re.sub(r"\n{3,}", "\n\n", "\n".join(limpias))
     return res.strip()
 
@@ -1765,7 +1776,7 @@ def _combinar_campo_multilinea(prev_val, new_val, append=False) -> str:
     return f"{prev_clean}\n---\n{new_clean}"
 
 
-def _combinar_letra_por_idiomas(prev_val, new_val, append=False) -> str:
+def _combinar_letra_por_idiomas(prev_val, new_val, append=False, song_language="") -> str:
     prev_clean = _limpiar_ruido_letra(prev_val)
     new_clean = _limpiar_ruido_letra(new_val)
     if not new_clean and not prev_clean:
@@ -1822,6 +1833,27 @@ def _combinar_letra_por_idiomas(prev_val, new_val, append=False) -> str:
         else:
             ordered_keys.append(slot)
             block_map[slot] = (clave, _formatear_encabezado_idioma_word(clave, enc) if clave else enc, clean_body)
+
+    non_es_sample = "\n".join(
+        block_map[k][2]
+        for k in ordered_keys
+        if k != "es" and k in block_map and block_map[k][2]
+    )
+    has_cjk_in_song = bool(_RE_HANGUL_CHAR.search(non_es_sample) or _RE_JAPANESE_CHAR.search(non_es_sample))
+    lang_code_song = _normalizar_codigo_idioma_estudio(song_language) if str(song_language or "").strip() else ""
+    is_pure_en_song = (lang_code_song == "en") and not has_cjk_in_song
+    if is_pure_en_song and "en" in block_map:
+        en_clave, en_enc, en_cuerpo = block_map["en"]
+        has_orig_body = bool(
+            (block_map.get("original") and block_map["original"][2].strip())
+            or (block_map.get("__base__") and block_map["__base__"][2].strip())
+        )
+        if en_cuerpo.strip() and not has_orig_body:
+            if "original" not in block_map:
+                ordered_keys.append("original")
+            block_map["original"] = ("original", "Original", en_cuerpo)
+        del block_map["en"]
+        ordered_keys = [k for k in ordered_keys if k != "en"]
 
     canon_order = {"__base__": 0, "original": 1, "ko": 2, "en": 3, "ja": 4, "es": 5}
     ordered_keys = sorted(ordered_keys, key=lambda k: (canon_order.get(k, 6), ordered_keys.index(k)))
@@ -1923,7 +1955,13 @@ def _elegir_titulo_cancion_canonico(old_title, new_title) -> str:
 def _combinar_metadata_cancion_word(existing_fields, new_entry) -> dict:
     old = existing_fields or {}
     append_study = bool(new_entry.get("append_study_fields"))
-    combined_lyrics = _combinar_letra_por_idiomas(old.get("lyrics_study"), new_entry.get("lyrics_study"), append=append_study)
+    eff_lang = _limpiar_linea(new_entry.get("language")) or _limpiar_linea(old.get("language"))
+    combined_lyrics = _combinar_letra_por_idiomas(
+        old.get("lyrics_study"),
+        new_entry.get("lyrics_study"),
+        append=append_study,
+        song_language=eff_lang,
+    )
     old_notes_clean = _limpiar_notas_redundantes_cancion(old.get("notes"), combined_lyrics)
     new_notes_clean = _limpiar_notas_redundantes_cancion(new_entry.get("notes"), combined_lyrics)
     merged_notes = _limpiar_notas_redundantes_cancion(
@@ -2652,18 +2690,30 @@ def update_english_docx_bytes(orig_bytes: bytes | None, raw_entry) -> tuple[byte
                 body.remove(rm_el)
 
         if replace_mode:
+            eff_lang = _limpiar_linea(combined_existing.get("language")) or _limpiar_linea(entry.get("language"))
+            sanitized_replace_lyrics = _combinar_letra_por_idiomas("", new_lyrics_clean, append=False, song_language=eff_lang) or new_lyrics_clean
             merged_entry = {
                 **combined_existing,
                 "category": "music",
-                "language": _limpiar_linea(combined_existing.get("language")) or _limpiar_linea(entry.get("language")),
+                "language": eff_lang,
                 "song_title": _limpiar_linea(combined_existing.get("song_title")) or target_title or "Untitled Song",
                 "artists_display": _limpiar_linea(combined_existing.get("artists_display")) or target_artist or "Unknown Artist",
                 "yt_music_url": _limpiar_linea(combined_existing.get("yt_music_url")) or _limpiar_linea(entry.get("yt_music_url")),
-                "lyrics_study": new_lyrics_clean,
+                "lyrics_study": sanitized_replace_lyrics,
                 "append_study_fields": False,
             }
         else:
-            merged_entry = _combinar_metadata_cancion_word(combined_existing, entry) if combined_existing is not None else dict(entry)
+            if combined_existing is not None:
+                merged_entry = _combinar_metadata_cancion_word(combined_existing, entry)
+            else:
+                merged_entry = dict(entry)
+                if merged_entry.get("lyrics_study"):
+                    merged_entry["lyrics_study"] = _combinar_letra_por_idiomas(
+                        "",
+                        merged_entry.get("lyrics_study"),
+                        append=False,
+                        song_language=merged_entry.get("language") or "",
+                    )
         toc_range = _encontrar_rango_toc(list(body))
         sec_start, sec_end, items = _buscar_rango_seccion(body, style_levels, "music", toc_range)
         if sec_start is None:
