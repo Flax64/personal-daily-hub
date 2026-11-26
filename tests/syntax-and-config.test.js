@@ -1481,6 +1481,10 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
             'id="agendaSchoolWeekBoard"',
             'id="agendaDropTimeModal"',
             'id="agendaDropTimeInput"',
+            'id="agendaDropPositionHint"',
+            'id="agendaDropRangeHint"',
+            'id="agendaDropTightNote"',
+            'id="agendaDropTimeError"',
             'id="btnConfirmAgendaDropTime"',
             'id="agendaModalQuickDateBar"',
             'id="agendaModalCalendarBox"',
@@ -1513,10 +1517,19 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
             '.agenda-drag-handle',
             '.is-drop-valid',
             '.is-drop-invalid',
+            '.is-insert-before',
+            '.is-insert-after',
+            '.agenda-item.is-drop-settled',
             'prefers-reduced-motion'
         ]) {
             assert.ok(styleCss.includes(cssCls), `public/style.css debe definir ${cssCls}`);
         }
+        const reducedMotionMatch = styleCss.match(/@media\s*\(\s*prefers-reduced-motion:\s*reduce\s*\)\s*\{[\s\S]*?\}\s*$/);
+        assert.ok(reducedMotionMatch, 'public/style.css debe incluir bloque @media (prefers-reduced-motion: reduce)');
+        assert.ok(
+            reducedMotionMatch[0].includes('.is-insert-before') && reducedMotionMatch[0].includes('.is-insert-after'),
+            '@media (prefers-reduced-motion: reduce) debe incluir .is-insert-before y .is-insert-after'
+        );
         assert.ok(frontendJs.includes('posponerAgendaItem') && frontendJs.includes('openAgendaPostponePopover'));
         assert.ok(frontendJs.includes('function computePostponedAgendaDateTime('), 'public/frontend.js debe definir computePostponedAgendaDateTime');
         const postponeFnBlock = extractFnBlock('posponerAgendaItem', 'eliminarAgendaItem');
@@ -1526,8 +1539,11 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
             'posponerAgendaItem no debe cambiar agendaState.selectedDate ni sacar al usuario del día actual'
         );
         assert.ok(
-            frontendJs.includes('function canMoveAgendaItemToDate(') && frontendJs.includes('function cleanupAgendaDragState('),
-            'public/frontend.js debe definir canMoveAgendaItemToDate y cleanupAgendaDragState'
+            frontendJs.includes('function canMoveAgendaItemToDate(') &&
+            frontendJs.includes('function computeAgendaReorderTimeBounds(') &&
+            frontendJs.includes('function evaluateAgendaCardDrop(') &&
+            frontendJs.includes('function cleanupAgendaDragState('),
+            'public/frontend.js debe definir canMoveAgendaItemToDate, computeAgendaReorderTimeBounds, evaluateAgendaCardDrop y cleanupAgendaDragState'
         );
 
         const agendaSandbox = {};
@@ -1605,6 +1621,116 @@ describe('Arquitectura Fases 1-5: Plug-and-Play Cloud, Caddy HTTPS, Dual Drive, 
             'Debe permitir cambiar de bloque personal (ej. Mañana -> Tarde) en fecha actual o futura'
         );
         assert.equal(agendaSandbox.canMoveAgendaItemToDate('2026-11-24', '2026-11-27', '2026-11-24'), true, 'Debe permitir mover hacia días futuros');
+        assert.equal(
+            agendaSandbox.canMoveAgendaItemToDate('2026-11-24', '2026-11-24', '2026-11-24', {
+                categoria: 'universidad',
+                allowSameDayReorder: true
+            }),
+            true,
+            'Debe permitir reordenar en el mismo día con allowSameDayReorder'
+        );
+
+        // Pruebas unitarias de computeAgendaReorderTimeBounds (antes, después, entre dos, pegadas y límites extremos)
+        assert.equal(typeof agendaSandbox.computeAgendaReorderTimeBounds, 'function');
+        const boundsBefore = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [{ hora: '12:00', titulo: 'Almuerzo' }],
+            insertIndex: 0,
+            isPersonal: false
+        });
+        assert.equal(boundsBefore.minTime, '00:00');
+        assert.equal(boundsBefore.maxTime, '11:59');
+        assert.equal(boundsBefore.suggestedTime, '11:45');
+        assert.equal(boundsBefore.isTight, false);
+        assert.match(boundsBefore.positionLabel, /Antes de "Almuerzo" \(12:00\)/);
+
+        const boundsBeforeBlock = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [{ hora: '15:00', titulo: 'Lectura' }],
+            insertIndex: 0,
+            targetBloque: 'tarde',
+            isPersonal: true
+        });
+        assert.equal(boundsBeforeBlock.minTime, '12:00');
+        assert.equal(boundsBeforeBlock.maxTime, '14:59');
+        assert.equal(boundsBeforeBlock.suggestedTime, '14:45');
+
+        const boundsAfter = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [{ hora: '13:00', actividad: 'Laboratorio — Sala B' }],
+            insertIndex: 1,
+            isPersonal: false
+        });
+        assert.equal(boundsAfter.minTime, '13:01');
+        assert.equal(boundsAfter.maxTime, '23:59');
+        assert.equal(boundsAfter.suggestedTime, '13:15');
+        assert.match(boundsAfter.positionLabel, /Después de "Laboratorio" \(13:00\)/);
+
+        const boundsAfterBlock = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [{ hora: '10:00', titulo: 'Desayuno' }],
+            insertIndex: 1,
+            targetBloque: 'manana',
+            isPersonal: true
+        });
+        assert.equal(boundsAfterBlock.minTime, '10:01');
+        assert.equal(boundsAfterBlock.maxTime, '11:59');
+        assert.equal(boundsAfterBlock.suggestedTime, '10:15');
+
+        const boundsBetween = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [
+                { hora: '12:00', titulo: 'Clase A' },
+                { hora: '12:49', titulo: 'Clase B' }
+            ],
+            insertIndex: 1,
+            isPersonal: false
+        });
+        assert.equal(boundsBetween.minTime, '12:01');
+        assert.equal(boundsBetween.maxTime, '12:48');
+        assert.equal(boundsBetween.suggestedTime, '12:25');
+        assert.equal(boundsBetween.isTight, false);
+        assert.match(boundsBetween.positionLabel, /Entre "Clase A" \(12:00\) y "Clase B" \(12:49\)/);
+
+        const boundsTightAdjacent = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [
+                { hora: '12:00', titulo: 'Reunión 1' },
+                { hora: '12:01', titulo: 'Reunión 2' }
+            ],
+            insertIndex: 1,
+            isPersonal: false
+        });
+        assert.equal(boundsTightAdjacent.minTime, '12:00');
+        assert.equal(boundsTightAdjacent.maxTime, '12:01');
+        assert.equal(boundsTightAdjacent.suggestedTime, '12:00');
+        assert.equal(boundsTightAdjacent.isTight, true);
+        assert.ok(boundsTightAdjacent.note.length > 0);
+
+        const boundsTightEqual = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [
+                { hora: '12:00', titulo: 'A' },
+                { hora: '12:00', titulo: 'B' }
+            ],
+            insertIndex: 1,
+            isPersonal: false
+        });
+        assert.equal(boundsTightEqual.minTime, '12:00');
+        assert.equal(boundsTightEqual.maxTime, '12:00');
+        assert.equal(boundsTightEqual.suggestedTime, '12:00');
+        assert.equal(boundsTightEqual.isTight, true);
+
+        const boundsStartDay = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [{ hora: '00:00', titulo: 'Medianoche' }],
+            insertIndex: 0,
+            isPersonal: false
+        });
+        assert.equal(boundsStartDay.minTime, '00:00');
+        assert.equal(boundsStartDay.maxTime, '00:00');
+        assert.equal(boundsStartDay.suggestedTime, '00:00');
+
+        const boundsEndDay = agendaSandbox.computeAgendaReorderTimeBounds({
+            siblings: [{ hora: '23:59', titulo: 'Cierre' }],
+            insertIndex: 1,
+            isPersonal: false
+        });
+        assert.equal(boundsEndDay.minTime, '23:59');
+        assert.equal(boundsEndDay.maxTime, '23:59');
+        assert.equal(boundsEndDay.suggestedTime, '23:59');
         assert.deepEqual(
             Array.from(agendaSandbox.computeAgendaRepeatDates({
                 startDate: '2026-11-18',
