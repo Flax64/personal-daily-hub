@@ -4148,29 +4148,31 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
         const { fecha, hora } = req.body;
         const { tipo, categoria, estado, recordatorioMin } = normalizeAgendaItemFields(req.body);
         const enforcePreventBackdate = req.body.preventBackdate === true || req.body.preventBackdate === 'true';
-        let existingRow = null;
         let cachedSettings = null;
 
+        const existingRows = await dbQueryAsync(
+            `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora,
+                    bloque, recordatorio_min, materia_id, materia_nombre
+             FROM RegistrosAgenda
+             WHERE id = ?
+             LIMIT 1`,
+            [id]
+        );
+        if (!Array.isArray(existingRows) || existingRows.length === 0) {
+            return res.status(404).send('Activity not found.');
+        }
+        const existingRow = existingRows[0];
+        const sourceFecha = existingRow.fecha instanceof Date
+            ? existingRow.fecha.toISOString().slice(0, 10)
+            : String(existingRow.fecha || '').slice(0, 10);
+        const existingHora = String(existingRow.hora || '').trim().slice(0, 5);
+
         if (enforcePreventBackdate) {
-            const existingRows = await dbQueryAsync(
-                `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, bloque, materia_id, materia_nombre
-                 FROM RegistrosAgenda
-                 WHERE id = ?
-                 LIMIT 1`,
-                [id]
-            );
-            if (!Array.isArray(existingRows) || existingRows.length === 0) {
-                return res.status(404).send('Activity not found.');
-            }
-            existingRow = existingRows[0];
-            const sourceFecha = existingRow.fecha instanceof Date
-                ? existingRow.fecha.toISOString().slice(0, 10)
-                : String(existingRow.fecha || '').slice(0, 10);
             cachedSettings = await loadUserSettings(req.user.id);
             const todayIso = getLocalNowParts(cachedSettings?.timezone).dateStr;
             if (
                 (/^\d{4}-\d{2}-\d{2}$/.test(sourceFecha) && fecha < sourceFecha) ||
-                (/^\d{4}-\d{2}-\d{2}$/.test(todayIso) && fecha < todayIso)
+                (/^\d{4}-\d{2}-\d{2}$/.test(todayIso) && fecha < todayIso && fecha !== sourceFecha)
             ) {
                 return res.status(400).send('Cannot move an activity to an earlier date.');
             }
@@ -4229,7 +4231,13 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
             return res.status(404).send('Activity not found.');
         }
         if (estado === 'done' || estado === 'skipped') {
-            db.query("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
+            await dbQueryAsync("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+        } else if (
+            sourceFecha !== fecha ||
+            existingHora !== horaNormalizada ||
+            Number(existingRow.recordatorio_min ?? -999) !== Number(recordatorioMin ?? -999)
+        ) {
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
         }
         bumpSyncRevision('agenda');
         res.json({

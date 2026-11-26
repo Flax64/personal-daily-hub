@@ -1814,6 +1814,55 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         assert.strictEqual(dndMovedBody.item.materia_nombre, 'Arquitectura de Computadoras');
         assert.strictEqual(dndMovedBody.item.estado, 'in_progress');
 
+        // Reordenamiento en el mismo día hacia hora más temprana y más tardía con preventBackdate: true
+        const dndSameDayEarlier = await request({
+            port,
+            method: 'PUT',
+            reqPath: `/api/update-agenda/${dndItem.id}`,
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: dndFutureDate,
+                bloque: 'escuela',
+                hora: '08:20',
+                titulo: 'Entrega Arquitectura Cloud',
+                descripcion: 'Laboratorio Sistemas',
+                tipo: 'tarea',
+                categoria: 'universidad',
+                materia_nombre: 'Arquitectura de Computadoras',
+                estado: 'in_progress',
+                recordatorio_min: 30,
+                preventBackdate: true
+            }
+        });
+        assert.strictEqual(dndSameDayEarlier.status, 200);
+        const dndSameDayEarlierBody = JSON.parse(dndSameDayEarlier.body);
+        assert.strictEqual(dndSameDayEarlierBody.item.fecha, dndFutureDate);
+        assert.strictEqual(dndSameDayEarlierBody.item.hora, '08:20');
+
+        const dndSameDayLater = await request({
+            port,
+            method: 'PUT',
+            reqPath: `/api/update-agenda/${dndItem.id}`,
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: dndFutureDate,
+                bloque: 'escuela',
+                hora: '16:45',
+                titulo: 'Entrega Arquitectura Cloud',
+                descripcion: 'Laboratorio Sistemas',
+                tipo: 'tarea',
+                categoria: 'universidad',
+                materia_nombre: 'Arquitectura de Computadoras',
+                estado: 'in_progress',
+                recordatorio_min: 30,
+                preventBackdate: true
+            }
+        });
+        assert.strictEqual(dndSameDayLater.status, 200);
+        const dndSameDayLaterBody = JSON.parse(dndSameDayLater.body);
+        assert.strictEqual(dndSameDayLaterBody.item.fecha, dndFutureDate);
+        assert.strictEqual(dndSameDayLaterBody.item.hora, '16:45');
+
         const dndMoveBackwards = await request({
             port,
             method: 'PUT',

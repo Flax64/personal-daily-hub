@@ -11714,12 +11714,15 @@ function getVisibleAgendaDays() {
     });
 }
 
+let agendaRecentlyMovedFlash = { id: null, until: 0 };
+
 function crearElementoActividad(item) {
     const tipo = item.tipo === 'tarea' ? 'tarea' : 'evento';
     const categoria = item.categoria === 'universidad' ? 'universidad' : 'personal';
     const estado = getAgendaItemStatus(item);
     const isDone = estado === 'done';
     const isSkipped = estado === 'skipped';
+    const resolvedBloque = categoria === 'universidad' ? 'escuela' : resolvePersonalAgendaBlock(item);
 
     const row = document.createElement('div');
     row.className = `agenda-item${isDone ? ' is-done' : ''}${isSkipped ? ' is-skipped' : ''}`;
@@ -11728,13 +11731,32 @@ function crearElementoActividad(item) {
     }
     row.dataset.date = String(item.fecha || '');
     row.dataset.categoria = categoria;
+    row.dataset.bloque = resolvedBloque;
+    row.dataset.hora = String(item.hora || '').trim().slice(0, 5);
+
+    if (
+        agendaRecentlyMovedFlash.id !== null &&
+        item.id !== undefined &&
+        item.id !== null &&
+        Number(item.id) === Number(agendaRecentlyMovedFlash.id) &&
+        Date.now() < agendaRecentlyMovedFlash.until
+    ) {
+        row.classList.add('is-drop-settled');
+        const remainingMs = Math.max(250, agendaRecentlyMovedFlash.until - Date.now());
+        setTimeout(() => {
+            row.classList.remove('is-drop-settled');
+            if (Date.now() >= agendaRecentlyMovedFlash.until && Number(agendaRecentlyMovedFlash.id) === Number(item.id)) {
+                agendaRecentlyMovedFlash.id = null;
+            }
+        }, remainingMs);
+    }
 
     const dragHandle = document.createElement('span');
     dragHandle.className = 'agenda-drag-handle';
     dragHandle.setAttribute('role', 'button');
     dragHandle.tabIndex = 0;
-    dragHandle.title = tUi('Drag to another day', 'Arrastrar a otro día');
-    dragHandle.setAttribute('aria-label', tUi('Drag to another day', 'Arrastrar a otro día'));
+    dragHandle.title = tUi('Drag to reorder or move to another day', 'Arrastrar para reordenar o mover a otro día');
+    dragHandle.setAttribute('aria-label', dragHandle.title);
     dragHandle.textContent = '⋮⋮';
 
     const checkBtn = document.createElement('button');
@@ -12649,7 +12671,13 @@ function canMoveAgendaItemToDate(sourceDateIso, targetDateIso, todayIso, moveMet
         return false;
     }
     const effectiveToday = /^\d{4}-\d{2}-\d{2}$/.test(today) ? today : src;
-    if (tgt < src || tgt < effectiveToday) {
+    if (tgt < src) {
+        return false;
+    }
+    if (tgt === src && Boolean(moveMeta?.allowSameDayReorder)) {
+        return true;
+    }
+    if (tgt < effectiveToday) {
         return false;
     }
     if (tgt > src) {
@@ -12663,6 +12691,169 @@ function canMoveAgendaItemToDate(sourceDateIso, targetDateIso, todayIso, moveMet
         return true;
     }
     return false;
+}
+
+function parseAgendaHhMmToMinutes(rawHora) {
+    const m = /^(-?\d{1,2}):(\d{2})/.exec(String(rawHora || '').trim());
+    if (!m) return null;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    return Math.max(0, Math.min(1439, hh * 60 + mm));
+}
+
+function formatAgendaMinutesToHhMm(totalMinutes) {
+    const clamped = Math.max(0, Math.min(1439, Math.round(Number(totalMinutes) || 0)));
+    const hh = String(Math.floor(clamped / 60)).padStart(2, '0');
+    const mm = String(clamped % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
+}
+
+function computeAgendaReorderTimeBounds({
+    siblings = [],
+    insertIndex = 0,
+    targetBloque = '',
+    isPersonal = false
+} = {}) {
+    const translate = (en, es) => (typeof tUi === 'function' ? tUi(en, es) : es);
+    const extractTitle = (task) => {
+        if (!task || typeof task !== 'object') return translate('Activity', 'Actividad');
+        const tExp = String(task.titulo || '').replace(/\s+/g, ' ').trim();
+        if (tExp) return tExp;
+        const rawAct = String(task.actividad || '').replace(/\s+/g, ' ').trim();
+        if (!rawAct) return translate('Activity', 'Actividad');
+        const sepIdx = rawAct.indexOf(' — ');
+        return sepIdx > 0 ? rawAct.slice(0, sepIdx).trim() : rawAct;
+    };
+    const clampMin = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+    const cleanSiblings = Array.isArray(siblings) ? siblings : [];
+    const parsedIdx = Number(insertIndex);
+    const safeIndex = Math.max(
+        0,
+        Math.min(cleanSiblings.length, Number.isFinite(parsedIdx) ? Math.trunc(parsedIdx) : 0)
+    );
+
+    const prevTask = safeIndex > 0 ? cleanSiblings[safeIndex - 1] : null;
+    const nextTask = safeIndex < cleanSiblings.length ? cleanSiblings[safeIndex] : null;
+
+    const normBloque = String(targetBloque || '').trim().toLowerCase();
+    const personalBlockRanges = {
+        manana: [0, 719],
+        tarde: [720, 1139],
+        noche: [1140, 1439]
+    };
+    const personalBlockDefaults = {
+        manana: 9 * 60,
+        tarde: 15 * 60,
+        noche: 20 * 60
+    };
+    const blockRange = Boolean(isPersonal) && personalBlockRanges[normBloque]
+        ? personalBlockRanges[normBloque]
+        : null;
+
+    let minMin = blockRange ? blockRange[0] : 0;
+    let maxMin = blockRange ? blockRange[1] : 1439;
+    let suggestedMin = blockRange ? (personalBlockDefaults[normBloque] ?? blockRange[0]) : 9 * 60;
+    let mode = 'empty';
+    let isTight = false;
+    let positionLabelEs = '';
+    let positionLabelEn = '';
+
+    if (!prevTask && nextTask) {
+        mode = 'before';
+        const nextRaw = parseAgendaHhMmToMinutes(nextTask.hora);
+        const nextMin = nextRaw === null ? 9 * 60 : nextRaw;
+        const nextTitle = extractTitle(nextTask);
+        const nextHora = formatAgendaMinutesToHhMm(nextMin);
+        positionLabelEs = `Antes de "${nextTitle}" (${nextHora})`;
+        positionLabelEn = `Before "${nextTitle}" (${nextHora})`;
+
+        if (nextMin <= 0) {
+            minMin = 0;
+            maxMin = 0;
+            suggestedMin = 0;
+            isTight = true;
+        } else {
+            maxMin = nextMin - 1;
+            minMin = (blockRange && blockRange[0] <= maxMin) ? blockRange[0] : 0;
+            suggestedMin = clampMin(nextMin - 15, minMin, maxMin);
+        }
+    } else if (prevTask && !nextTask) {
+        mode = 'after';
+        const prevRaw = parseAgendaHhMmToMinutes(prevTask.hora);
+        const prevMin = prevRaw === null ? 9 * 60 : prevRaw;
+        const prevTitle = extractTitle(prevTask);
+        const prevHora = formatAgendaMinutesToHhMm(prevMin);
+        positionLabelEs = `Después de "${prevTitle}" (${prevHora})`;
+        positionLabelEn = `After "${prevTitle}" (${prevHora})`;
+
+        if (prevMin >= 1439) {
+            minMin = 1439;
+            maxMin = 1439;
+            suggestedMin = 1439;
+            isTight = true;
+        } else {
+            minMin = prevMin + 1;
+            maxMin = (blockRange && blockRange[1] >= minMin) ? blockRange[1] : 1439;
+            suggestedMin = clampMin(prevMin + 15, minMin, maxMin);
+        }
+    } else if (prevTask && nextTask) {
+        mode = 'between';
+        const prevRaw = parseAgendaHhMmToMinutes(prevTask.hora);
+        const nextRaw = parseAgendaHhMmToMinutes(nextTask.hora);
+        const prevMin = prevRaw === null ? 9 * 60 : prevRaw;
+        const nextMin = nextRaw === null ? prevMin : nextRaw;
+        const prevTitle = extractTitle(prevTask);
+        const nextTitle = extractTitle(nextTask);
+        const prevHora = formatAgendaMinutesToHhMm(prevMin);
+        const nextHora = formatAgendaMinutesToHhMm(nextMin);
+        positionLabelEs = `Entre "${prevTitle}" (${prevHora}) y "${nextTitle}" (${nextHora})`;
+        positionLabelEn = `Between "${prevTitle}" (${prevHora}) and "${nextTitle}" (${nextHora})`;
+
+        const lowMin = Math.min(prevMin, nextMin);
+        const highMin = Math.max(prevMin, nextMin);
+        if ((highMin - lowMin) <= 1) {
+            minMin = lowMin;
+            maxMin = highMin;
+            suggestedMin = lowMin;
+            isTight = true;
+        } else {
+            minMin = lowMin + 1;
+            maxMin = highMin - 1;
+            suggestedMin = clampMin(Math.round((lowMin + highMin) / 2), minMin, maxMin);
+        }
+    } else {
+        suggestedMin = clampMin(suggestedMin, minMin, maxMin);
+    }
+
+    const minTime = formatAgendaMinutesToHhMm(minMin);
+    const maxTime = formatAgendaMinutesToHhMm(maxMin);
+    const suggestedTime = formatAgendaMinutesToHhMm(suggestedMin);
+    const positionLabel = positionLabelEs ? translate(positionLabelEn, positionLabelEs) : '';
+    const rangeLabel = translate(`Allowed time: ${minTime} – ${maxTime}`, `Hora permitida: ${minTime} – ${maxTime}`);
+    const note = isTight
+        ? translate(
+            'Neighbor tasks have no free minute between them; inclusive range allowed.',
+            'Las tareas vecinas no tienen minuto libre intermedio; se permite rango inclusivo.'
+        )
+        : '';
+
+    return {
+        minTime,
+        maxTime,
+        suggestedTime,
+        mode,
+        isTight,
+        positionLabel,
+        positionLabelEs,
+        positionLabelEn,
+        rangeLabel,
+        note
+    };
+}
+if (typeof window !== 'undefined') {
+    window.computeAgendaReorderTimeBounds = computeAgendaReorderTimeBounds;
 }
 
 function toggleAgendaItem(item, ui = {}, targetEstado = null) {
@@ -13886,6 +14077,8 @@ const agendaDragRuntime = {
     startY: 0,
     started: false,
     hoveredZoneEl: null,
+    hoveredCardEl: null,
+    insertPosition: null,
     detachTempListeners: null
 };
 let pendingAgendaDropContext = null;
@@ -13895,6 +14088,135 @@ function formatAgendaHumanDayShort(ymd) {
     const [y, m, d] = String(ymd).trim().split('-').map(Number);
     const dt = new Date(y, m - 1, d);
     return dt.toLocaleDateString(tLocale(), { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+function clearAgendaInsertIndicators() {
+    if (typeof document !== 'undefined') {
+        document.querySelectorAll('.is-insert-before, .is-insert-after').forEach(el => {
+            el.classList.remove('is-insert-before', 'is-insert-after');
+        });
+    }
+    agendaDragRuntime.hoveredCardEl = null;
+    agendaDragRuntime.insertPosition = null;
+}
+
+function getAgendaTargetSiblingsAndInsertIndex(draggedItem, targetCardEl, position, targetDate, targetCat, targetBlock) {
+    const filtered = (Array.isArray(agendaState?.items) ? agendaState.items : [])
+        .filter(i => Boolean(i) && (typeof matchesAgendaFilters === 'function' ? matchesAgendaFilters(i) : true));
+
+    const sameScopeItems = sortAgendaItemsByTime(
+        filtered.filter(i => {
+            if (!i || Number(i.id) === Number(draggedItem.id)) return false;
+            if (String(i.fecha || '') !== targetDate) return false;
+            const iCat = i.categoria === 'universidad' ? 'universidad' : 'personal';
+            if (iCat !== targetCat) return false;
+            if (targetCat === 'personal') {
+                return resolvePersonalAgendaBlock(i) === targetBlock;
+            }
+            return true;
+        })
+    );
+
+    const targetId = Number(targetCardEl?.dataset?.agendaId);
+    const targetIdx = sameScopeItems.findIndex(s => Number(s.id) === targetId);
+    const insertIndex = targetIdx >= 0
+        ? (position === 'after' ? targetIdx + 1 : targetIdx)
+        : (position === 'after' ? sameScopeItems.length : 0);
+
+    return {
+        siblings: sameScopeItems,
+        insertIndex,
+        targetIdx
+    };
+}
+
+function evaluateAgendaCardDrop(draggedItem, targetCardEl, clientY, todayIso = formatLocalDate(new Date())) {
+    if (!draggedItem || !targetCardEl || !targetCardEl.dataset) {
+        return { valid: false, reason: 'none' };
+    }
+    if (!targetCardEl.closest('#agendaDayBoard, #agendaWeekBoard, #agendaSchoolWeekBoard')) {
+        return { valid: false, reason: 'none' };
+    }
+    const targetId = Number(targetCardEl.dataset.agendaId);
+    if (Number.isFinite(targetId) && targetId === Number(draggedItem.id)) {
+        return { valid: false, reason: 'self' };
+    }
+
+    const draggedCat = draggedItem.categoria === 'universidad' ? 'universidad' : 'personal';
+    const targetCat = targetCardEl.dataset.categoria === 'universidad' ? 'universidad' : 'personal';
+    if (draggedCat !== targetCat) {
+        return { valid: false, reason: 'category' };
+    }
+
+    const targetDate = String(targetCardEl.dataset.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+        return { valid: false, reason: 'none' };
+    }
+
+    const parentZone = targetCardEl.closest('[data-drop-zone]');
+    const targetBlock = targetCat === 'universidad'
+        ? 'escuela'
+        : (String(targetCardEl.dataset.bloque || parentZone?.dataset?.bloque || 'manana').trim().toLowerCase() || 'manana');
+
+    const isSameDay = targetDate === String(draggedItem.fecha || '').trim();
+    const dateAllowed = canMoveAgendaItemToDate(draggedItem.fecha, targetDate, todayIso, {
+        categoria: draggedCat,
+        allowSameDayReorder: isSameDay
+    });
+    if (!dateAllowed) {
+        return { valid: false, reason: 'backdate', targetDate, targetBlock };
+    }
+
+    const rect = targetCardEl.getBoundingClientRect();
+    const midpoint = rect.top + (rect.height / 2);
+    const position = clientY < midpoint ? 'before' : 'after';
+
+    const { siblings, insertIndex } = getAgendaTargetSiblingsAndInsertIndex(
+        draggedItem,
+        targetCardEl,
+        position,
+        targetDate,
+        targetCat,
+        targetBlock
+    );
+
+    const sourceBlock = draggedCat === 'universidad' ? 'escuela' : resolvePersonalAgendaBlock(draggedItem);
+    if (isSameDay && sourceBlock === targetBlock) {
+        const filteredAll = (Array.isArray(agendaState?.items) ? agendaState.items : [])
+            .filter(i => Boolean(i) && (typeof matchesAgendaFilters === 'function' ? matchesAgendaFilters(i) : true));
+        const containerWithDragged = sortAgendaItemsByTime(
+            filteredAll.filter(i => {
+                if (!i || String(i.fecha || '') !== targetDate) return false;
+                const iCat = i.categoria === 'universidad' ? 'universidad' : 'personal';
+                if (iCat !== targetCat) return false;
+                return targetCat === 'personal' ? resolvePersonalAgendaBlock(i) === targetBlock : true;
+            })
+        );
+        const origIndex = containerWithDragged.findIndex(i => Number(i.id) === Number(draggedItem.id));
+        if (origIndex >= 0 && insertIndex === origIndex) {
+            return { valid: false, reason: 'same-slot', targetDate, targetBlock };
+        }
+    }
+
+    const bounds = computeAgendaReorderTimeBounds({
+        siblings,
+        insertIndex,
+        targetBloque: targetCat === 'personal' ? targetBlock : '',
+        isPersonal: targetCat === 'personal'
+    });
+
+    return {
+        valid: true,
+        reason: 'ok',
+        isCardReorder: true,
+        position,
+        targetCardEl,
+        targetDate,
+        targetBlock,
+        siblings,
+        insertIndex,
+        bounds
+    };
 }
 
 function evaluateAgendaDropZone(item, zoneEl, todayIso = formatLocalDate(new Date())) {
@@ -13931,12 +14253,12 @@ function evaluateAgendaDropZone(item, zoneEl, todayIso = formatLocalDate(new Dat
             return { valid: false, reason: 'category', targetDate, targetBlock: null };
         }
         if (targetDate === item.fecha) {
-            return { valid: false, reason: 'same', targetDate, targetBlock: 'cole' };
+            return { valid: false, reason: 'same', targetDate, targetBlock: 'escuela' };
         }
         const ok = canMoveAgendaItemToDate(item.fecha, targetDate, todayIso, {
             categoria: 'universidad'
         });
-        return { valid: ok, reason: ok ? 'ok' : 'backdate', targetDate, targetBlock: 'cole' };
+        return { valid: ok, reason: ok ? 'ok' : 'backdate', targetDate, targetBlock: 'escuela' };
     }
 
     if (zoneType === 'day-tab' || zoneType === 'calendar-day') {
@@ -13969,6 +14291,7 @@ function cleanupAgendaDragState() {
         try { agendaDragRuntime.ghostEl.remove(); } catch (_) { /* ignore */ }
         agendaDragRuntime.ghostEl = null;
     }
+    clearAgendaInsertIndicators();
     if (typeof document !== 'undefined') {
         document.body?.classList?.remove('agenda-dragging-active');
         document.querySelectorAll('.agenda-item.is-dragging').forEach(el => el.classList.remove('is-dragging'));
@@ -14000,15 +14323,46 @@ function paintAllAgendaDropZonesForActiveDrag(item) {
     });
 }
 
+function clearAgendaDropModalError() {
+    const errEl = document.getElementById('agendaDropTimeError');
+    const timeInput = document.getElementById('agendaDropTimeInput');
+    if (errEl) {
+        errEl.hidden = true;
+        errEl.textContent = '';
+    }
+    if (timeInput) {
+        timeInput.classList.remove('is-invalid');
+    }
+}
+
+function showAgendaDropModalError(msg) {
+    const errEl = document.getElementById('agendaDropTimeError');
+    const timeInput = document.getElementById('agendaDropTimeInput');
+    if (errEl) {
+        protectUserNode(errEl);
+        errEl.textContent = msg;
+        errEl.hidden = false;
+    }
+    if (timeInput) {
+        timeInput.classList.add('is-invalid');
+        timeInput.focus();
+    }
+}
+
 function openAgendaDropTimeModal(item, evalRes) {
     const modal = document.getElementById('agendaDropTimeModal');
     const titleEl = document.getElementById('agendaDropItemTitle');
     const dateChangeEl = document.getElementById('agendaDropDateChange');
     const catBadgeEl = document.getElementById('agendaDropCatBadge');
+    const posHintEl = document.getElementById('agendaDropPositionHint');
+    const rangeHintEl = document.getElementById('agendaDropRangeHint');
+    const tightNoteEl = document.getElementById('agendaDropTightNote');
     const timeInput = document.getElementById('agendaDropTimeInput');
     const blockGroup = document.getElementById('agendaDropBlockGroup');
     const blockSelect = document.getElementById('agendaDropBlockSelect');
     if (!modal || !timeInput || !item || !evalRes?.targetDate) return;
+
+    clearAgendaDropModalError();
 
     const itemCat = item.categoria === 'universidad' ? 'universidad' : 'personal';
     const parsed = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
@@ -14020,12 +14374,20 @@ function openAgendaDropTimeModal(item, evalRes) {
         ? (['manana', 'tarde', 'noche'].includes(evalRes.targetBlock) ? evalRes.targetBlock : sourcePersonalBlock)
         : '';
 
+    let minTime = '00:00';
+    let maxTime = '23:59';
     let initialHora = curHora;
-    if (
+    const hasBounds = Boolean(evalRes.isCardReorder && evalRes.bounds);
+
+    if (hasBounds) {
+        minTime = evalRes.bounds.minTime || '00:00';
+        maxTime = evalRes.bounds.maxTime || '23:59';
+        initialHora = evalRes.bounds.suggestedTime || curHora;
+    } else if (
         itemCat === 'personal' &&
         ['manana', 'tarde', 'noche'].includes(evalRes.targetBlock) &&
         evalRes.targetBlock !== sourcePersonalBlock &&
-        inferAgendaBlockClient(curHora, 'personal') !== evalRes.targetBlock
+        computePostponedAgendaBlock(curHora, 'personal') !== evalRes.targetBlock
     ) {
         initialHora = AGENDA_DROP_BLOCK_DEFAULTS[evalRes.targetBlock] || curHora;
     }
@@ -14033,7 +14395,11 @@ function openAgendaDropTimeModal(item, evalRes) {
     pendingAgendaDropContext = {
         item,
         targetDate: evalRes.targetDate,
-        targetBlock: evalRes.targetBlock || null
+        targetBlock: evalRes.targetBlock || null,
+        isCardReorder: Boolean(evalRes.isCardReorder),
+        minTime,
+        maxTime,
+        bounds: evalRes.bounds || null
     };
 
     if (titleEl) {
@@ -14041,7 +14407,10 @@ function openAgendaDropTimeModal(item, evalRes) {
         titleEl.textContent = parsed.titulo || item.actividad || '--';
     }
     if (dateChangeEl) {
-        dateChangeEl.textContent = `${formatAgendaHumanDayShort(item.fecha)} → ${formatAgendaHumanDayShort(evalRes.targetDate)}`;
+        protectUserNode(dateChangeEl);
+        dateChangeEl.textContent = item.fecha === evalRes.targetDate
+            ? `${formatAgendaHumanDayShort(evalRes.targetDate)} (${tUi('Same day', 'Mismo día')})`
+            : `${formatAgendaHumanDayShort(item.fecha)} → ${formatAgendaHumanDayShort(evalRes.targetDate)}`;
     }
     if (catBadgeEl) {
         if (itemCat === 'universidad') {
@@ -14055,13 +14424,45 @@ function openAgendaDropTimeModal(item, evalRes) {
         }
     }
 
+    if (posHintEl) {
+        if (hasBounds && evalRes.bounds.positionLabel) {
+            protectUserNode(posHintEl);
+            posHintEl.textContent = evalRes.bounds.positionLabel;
+            posHintEl.hidden = false;
+        } else {
+            posHintEl.hidden = true;
+            posHintEl.textContent = '';
+        }
+    }
+    if (rangeHintEl) {
+        if (hasBounds) {
+            protectUserNode(rangeHintEl);
+            rangeHintEl.textContent = evalRes.bounds.rangeLabel || tUi(`Allowed time: ${minTime} – ${maxTime}`, `Hora permitida: ${minTime} – ${maxTime}`);
+            rangeHintEl.hidden = false;
+        } else {
+            rangeHintEl.hidden = true;
+            rangeHintEl.textContent = '';
+        }
+    }
+    if (tightNoteEl) {
+        if (hasBounds && evalRes.bounds.isTight && evalRes.bounds.note) {
+            protectUserNode(tightNoteEl);
+            tightNoteEl.textContent = evalRes.bounds.note;
+            tightNoteEl.hidden = false;
+        } else {
+            tightNoteEl.hidden = true;
+            tightNoteEl.textContent = '';
+        }
+    }
+
+    timeInput.min = minTime;
+    timeInput.max = maxTime;
     timeInput.value = initialHora;
+
     if (blockGroup && blockSelect) {
         if (itemCat === 'personal') {
             blockGroup.hidden = false;
-            blockSelect.value = ['manana', 'tarde', 'noche'].includes(targetPersonalBlock)
-                ? targetPersonalBlock
-                : inferAgendaBlockClient(initialHora, 'personal');
+            blockSelect.value = computePostponedAgendaBlock(initialHora, 'personal') || targetPersonalBlock || 'manana';
         } else {
             blockGroup.hidden = true;
         }
@@ -14074,6 +14475,7 @@ function openAgendaDropTimeModal(item, evalRes) {
 
 function closeAgendaDropTimeModal() {
     pendingAgendaDropContext = null;
+    clearAgendaDropModalError();
     const modal = document.getElementById('agendaDropTimeModal');
     if (modal) modal.hidden = true;
     if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
@@ -14082,30 +14484,42 @@ function closeAgendaDropTimeModal() {
 function wireAgendaCardDrag(cardEl, handleEl, item) {
     if (!cardEl || !handleEl || !item || !item.id) return;
 
+    cardEl.addEventListener('dragstart', (ev) => ev.preventDefault());
     handleEl.addEventListener('dragstart', (ev) => ev.preventDefault());
     handleEl.addEventListener('click', (ev) => ev.stopPropagation());
 
-    handleEl.addEventListener('pointerdown', (downEv) => {
+    const beginDragSession = (downEv, fromHandle) => {
         if (downEv.button !== undefined && downEv.button !== 0) return;
         if (busyActionElements.has(cardEl)) return;
-        downEv.stopPropagation();
-        if (downEv.cancelable) downEv.preventDefault();
+        if (fromHandle) {
+            downEv.stopPropagation();
+            if (downEv.cancelable) downEv.preventDefault();
+        } else {
+            if (downEv.pointerType !== 'mouse') return;
+            if (downEv.target && typeof downEv.target.closest === 'function') {
+                if (downEv.target.closest('button, select, input, textarea, a, label, option, .jira-status-select, .agenda-item-actions, .agenda-check-circle, .agenda-drag-handle')) {
+                    return;
+                }
+            }
+        }
 
         cleanupAgendaDragState();
 
         agendaDragRuntime.item = item;
         agendaDragRuntime.sourceEl = cardEl;
-        agendaDragRuntime.handleEl = handleEl;
+        agendaDragRuntime.handleEl = fromHandle ? handleEl : null;
         agendaDragRuntime.pointerId = downEv.pointerId;
         agendaDragRuntime.startX = downEv.clientX;
         agendaDragRuntime.startY = downEv.clientY;
         agendaDragRuntime.started = false;
 
-        try {
-            if (typeof handleEl.setPointerCapture === 'function') {
-                handleEl.setPointerCapture(downEv.pointerId);
-            }
-        } catch (_) { /* ignore */ }
+        if (fromHandle) {
+            try {
+                if (typeof handleEl.setPointerCapture === 'function') {
+                    handleEl.setPointerCapture(downEv.pointerId);
+                }
+            } catch (_) { /* ignore */ }
+        }
 
         const updateGhostPosition = (cx, cy) => {
             if (!agendaDragRuntime.ghostEl) return;
@@ -14157,16 +14571,36 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
             const hitEl = typeof document.elementFromPoint === 'function'
                 ? document.elementFromPoint(moveEv.clientX, moveEv.clientY)
                 : null;
+            const hitCardEl = hitEl && typeof hitEl.closest === 'function'
+                ? hitEl.closest('#agendaDayBoard .agenda-item, #agendaWeekBoard .agenda-item, #agendaSchoolWeekBoard .agenda-item')
+                : null;
             const zoneEl = hitEl && typeof hitEl.closest === 'function'
                 ? hitEl.closest('#view-agenda [data-drop-zone]')
                 : null;
 
+            let suppressZoneHover = false;
+            clearAgendaInsertIndicators();
+            if (hitCardEl) {
+                const cardEval = evaluateAgendaCardDrop(item, hitCardEl, moveEv.clientY, formatLocalDate(new Date()));
+                if (cardEval.valid) {
+                    const cls = cardEval.position === 'before' ? 'is-insert-before' : 'is-insert-after';
+                    hitCardEl.classList.add(cls);
+                    agendaDragRuntime.hoveredCardEl = hitCardEl;
+                    agendaDragRuntime.insertPosition = cardEval.position;
+                } else if (cardEval.reason === 'self' || cardEval.reason === 'same-slot') {
+                    suppressZoneHover = true;
+                }
+            }
+
             if (agendaDragRuntime.hoveredZoneEl && agendaDragRuntime.hoveredZoneEl !== zoneEl) {
                 agendaDragRuntime.hoveredZoneEl.classList.remove('is-drop-hover');
             }
-            agendaDragRuntime.hoveredZoneEl = zoneEl;
-            if (zoneEl) {
+            if (zoneEl && !suppressZoneHover) {
+                agendaDragRuntime.hoveredZoneEl = zoneEl;
                 zoneEl.classList.add('is-drop-hover');
+            } else {
+                if (zoneEl) zoneEl.classList.remove('is-drop-hover');
+                agendaDragRuntime.hoveredZoneEl = null;
             }
         };
 
@@ -14174,16 +14608,39 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
             if (upEv.pointerId !== agendaDragRuntime.pointerId) return;
             const wasStarted = agendaDragRuntime.started;
             const draggedItem = agendaDragRuntime.item;
+            let hitCardEl = null;
             let zoneEl = null;
             try {
                 if (wasStarted && typeof document.elementFromPoint === 'function') {
                     const hitEl = document.elementFromPoint(upEv.clientX, upEv.clientY);
+                    hitCardEl = hitEl && typeof hitEl.closest === 'function'
+                        ? hitEl.closest('#agendaDayBoard .agenda-item, #agendaWeekBoard .agenda-item, #agendaSchoolWeekBoard .agenda-item')
+                        : null;
                     zoneEl = hitEl && typeof hitEl.closest === 'function'
                         ? hitEl.closest('#view-agenda [data-drop-zone]')
                         : null;
                 }
-                if (wasStarted && draggedItem && zoneEl) {
-                    const evalRes = evaluateAgendaDropZone(draggedItem, zoneEl, formatLocalDate(new Date()));
+
+                const todayIso = formatLocalDate(new Date());
+                if (wasStarted && draggedItem && hitCardEl) {
+                    const cardEval = evaluateAgendaCardDrop(draggedItem, hitCardEl, upEv.clientY, todayIso);
+                    if (cardEval.valid) {
+                        openAgendaDropTimeModal(draggedItem, cardEval);
+                    } else if (cardEval.reason === 'self' || cardEval.reason === 'same-slot') {
+                        // Drop on itself or exact same slot: cancel cleanly without modal
+                    } else if (cardEval.reason === 'backdate') {
+                        showToast('info', tUi(
+                            'Cannot move an activity to an earlier date.',
+                            'No puedes mover una actividad hacia una fecha anterior.'
+                        ));
+                    } else if (cardEval.reason === 'category') {
+                        showToast('info', tUi(
+                            'Drop this activity inside its matching section or on the calendar.',
+                            'Suelta esta actividad dentro de su sección correspondiente o en el calendario.'
+                        ));
+                    }
+                } else if (wasStarted && draggedItem && zoneEl) {
+                    const evalRes = evaluateAgendaDropZone(draggedItem, zoneEl, todayIso);
                     if (evalRes.valid) {
                         openAgendaDropTimeModal(draggedItem, evalRes);
                     } else if (evalRes.reason === 'backdate') {
@@ -14216,7 +14673,10 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
             window.removeEventListener('pointerup', onPointerUp);
             window.removeEventListener('pointercancel', onPointerCancel);
         };
-    });
+    };
+
+    handleEl.addEventListener('pointerdown', (downEv) => beginDragSession(downEv, true));
+    cardEl.addEventListener('pointerdown', (downEv) => beginDragSession(downEv, false));
 }
 
 (function initAgendaDragDropAndModalHandlers() {
@@ -14240,13 +14700,16 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
         if (ev.target === dropModal) closeAgendaDropTimeModal();
     });
 
-    dropTimeInput?.addEventListener('change', () => {
+    const syncDropBlockAndClearError = () => {
+        clearAgendaDropModalError();
         if (!pendingAgendaDropContext || !dropBlockSelect) return;
         const itemCat = pendingAgendaDropContext.item?.categoria === 'universidad' ? 'universidad' : 'personal';
-        if (itemCat === 'personal' && dropTimeInput.value) {
-            dropBlockSelect.value = inferAgendaBlockClient(dropTimeInput.value, 'personal');
+        if (itemCat === 'personal' && dropTimeInput?.value) {
+            dropBlockSelect.value = computePostponedAgendaBlock(dropTimeInput.value, 'personal');
         }
-    });
+    };
+    dropTimeInput?.addEventListener('input', syncDropBlockAndClearError);
+    dropTimeInput?.addEventListener('change', syncDropBlockAndClearError);
 
     dropForm?.addEventListener('submit', (ev) => {
         ev.preventDefault();
@@ -14257,33 +14720,45 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
             return;
         }
 
-        const { item, targetDate } = pendingAgendaDropContext;
+        const { item, targetDate, isCardReorder, minTime, maxTime } = pendingAgendaDropContext;
         const newHora = String(dropTimeInput?.value || '').trim().slice(0, 5);
         if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(newHora)) {
-            showToast('err', tUi('Choose a valid time (HH:MM).', 'Elige una hora válida (HH:MM).'));
+            showAgendaDropModalError(tUi('Choose a valid time (HH:MM).', 'Elige una hora válida (HH:MM).'));
+            return;
+        }
+
+        const chosenMin = parseAgendaHhMmToMinutes(newHora);
+        const minAllowedMin = parseAgendaHhMmToMinutes(minTime || '00:00');
+        const maxAllowedMin = parseAgendaHhMmToMinutes(maxTime || '23:59');
+        if (
+            chosenMin === null ||
+            (minAllowedMin !== null && chosenMin < minAllowedMin) ||
+            (maxAllowedMin !== null && chosenMin > maxAllowedMin)
+        ) {
+            showAgendaDropModalError(tUi(
+                `Choose a time within the allowed range (${minTime} – ${maxTime}) to respect the drop position.`,
+                `Elige una hora dentro del rango permitido (${minTime} – ${maxTime}) para respetar la posición donde soltaste la tarea.`
+            ));
             return;
         }
 
         const itemCat = item.categoria === 'universidad' ? 'universidad' : 'personal';
-        const chosenPersonalBlock = dropBlockSelect?.value && ['manana', 'tarde', 'noche'].includes(dropBlockSelect.value)
-            ? dropBlockSelect.value
-            : inferAgendaBlockClient(newHora, 'personal');
         const nextBloque = itemCat === 'universidad'
-            ? inferAgendaBlockClient(newHora, 'universidad')
-            : chosenPersonalBlock;
+            ? 'escuela'
+            : computePostponedAgendaBlock(newHora, 'personal');
 
         const todayIso = formatLocalDate(new Date());
         const allowed = canMoveAgendaItemToDate(item.fecha, targetDate, todayIso, {
             categoria: itemCat,
             sourceBlock: itemCat === 'personal' ? resolvePersonalAgendaBlock(item) : item.bloque,
-            targetBlock: nextBloque
+            targetBlock: nextBloque,
+            allowSameDayReorder: Boolean(isCardReorder)
         });
         if (!allowed) {
-            showToast('err', tUi(
+            showAgendaDropModalError(tUi(
                 'Cannot move an activity to an earlier date.',
                 'No puedes mover una actividad hacia una fecha anterior.'
             ));
-            closeAgendaDropTimeModal();
             return;
         }
 
@@ -14306,9 +14781,12 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
             preventBackdate: true
         };
 
+        const scrollSnap = captureAgendaScrollSnapshot();
+        const prevSnapshot = { ...item };
+
         runWithButtonLock(btnConfirm, async () => {
             try {
-                await submitMutationRequest({
+                const respData = await submitMutationRequest({
                     url: `/api/update-agenda/${item.id}`,
                     method: 'PUT',
                     scopeKey: `agenda-drop:${item.id}`,
@@ -14318,14 +14796,33 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
                     parseJson: true,
                     buildBody: () => payload
                 });
+
+                agendaRecentlyMovedFlash = { id: Number(item.id), until: Date.now() + 1800 };
+                if (respData?.item && Array.isArray(agendaState.items)) {
+                    const idx = agendaState.items.findIndex(x => Number(x.id) === Number(item.id));
+                    if (idx >= 0) {
+                        agendaState.items[idx] = respData.item;
+                    }
+                }
                 closeAgendaDropTimeModal();
-                agendaState.selectedDate = targetDate;
-                cargarAgendaSemana();
+                renderAgendaBoard();
+                restoreAgendaScrollSnapshot(scrollSnap);
+                cargarAgendaSemana({ preserveScroll: true });
                 renderAgendaHeaderCalendar(true);
                 cargarRecordatoriosActivos();
                 showToast('ok', tUi('Activity rescheduled!', '¡Actividad reagendada!'));
             } catch (err) {
-                showToast('err', `${tUi('Failed to reschedule activity', 'No se pudo reagendar la actividad')}: ${tServer(err.message)}`);
+                if (Array.isArray(agendaState.items)) {
+                    const idx = agendaState.items.findIndex(x => Number(x.id) === Number(item.id));
+                    if (idx >= 0) {
+                        agendaState.items[idx] = prevSnapshot;
+                        renderAgendaBoard();
+                        restoreAgendaScrollSnapshot(scrollSnap);
+                    }
+                }
+                const errMsg = `${tUi('Failed to reschedule activity', 'No se pudo reagendar la actividad')}: ${tServer(err.message)}`;
+                showAgendaDropModalError(errMsg);
+                showToast('err', errMsg);
             } finally {
                 cleanupAgendaDragState();
             }

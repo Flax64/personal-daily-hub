@@ -3674,15 +3674,19 @@
                 <h3 id="agendaDropTimeModalTitle">🕒 Confirm New Time</h3>
                 <button type="button" class="modal-close-btn" id="btnCloseAgendaDropTimeModal" aria-label="Close">✕</button>
             </div>
-            <form id="agendaDropTimeForm" autocomplete="off">
+            <form id="agendaDropTimeForm" autocomplete="off" novalidate>
                 <div class="agenda-drop-summary-box" id="agendaDropSummaryBox">
                     <strong class="agenda-drop-item-title" id="agendaDropItemTitle">--</strong>
                     <span class="agenda-drop-date-change" id="agendaDropDateChange">--</span>
                     <span class="agenda-drop-cat-badge" id="agendaDropCatBadge"></span>
+                    <span class="agenda-drop-position-hint" id="agendaDropPositionHint" hidden></span>
+                    <span class="agenda-drop-range-hint" id="agendaDropRangeHint" hidden></span>
                 </div>
                 <div class="form-group">
                     <label for="agendaDropTimeInput">New time:</label>
                     <input type="time" id="agendaDropTimeInput" required>
+                    <small class="agenda-drop-tight-note" id="agendaDropTightNote" hidden></small>
+                    <p class="agenda-drop-time-error" id="agendaDropTimeError" role="alert" aria-live="polite" hidden></p>
                 </div>
                 <div class="form-group" id="agendaDropBlockGroup">
                     <label for="agendaDropBlockSelect">Personal time block:</label>

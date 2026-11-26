@@ -11988,6 +11988,60 @@ body.agenda-dragging-active {
     transform: scale(0.98);
 }
 
+.agenda-item.is-insert-before,
+.agenda-item.is-insert-after,
+.is-insert-before,
+.is-insert-after {
+    position: relative;
+    overflow: visible;
+    z-index: 3;
+    transition: transform 0.14s ease, opacity 0.14s ease;
+}
+
+.agenda-item.is-insert-before,
+.is-insert-before {
+    transform: translate3d(0, 2px, 0);
+}
+
+.agenda-item.is-insert-after,
+.is-insert-after {
+    transform: translate3d(0, -2px, 0);
+}
+
+.agenda-item.is-insert-before::before,
+.is-insert-before::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    top: -5px;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--brand-primary);
+    box-shadow: 0 0 0 2px var(--brand-primary-soft, rgba(59, 130, 246, 0.24));
+    pointer-events: none;
+}
+
+.agenda-item.is-insert-after::after,
+.is-insert-after::after {
+    content: "";
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    bottom: -5px;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--brand-primary);
+    box-shadow: 0 0 0 2px var(--brand-primary-soft, rgba(59, 130, 246, 0.24));
+    pointer-events: none;
+}
+
+.agenda-item.is-drop-settled {
+    border-color: var(--brand-primary);
+    box-shadow: 0 0 0 2px var(--brand-primary-soft, rgba(59, 130, 246, 0.26));
+    transition: box-shadow 0.24s ease, border-color 0.24s ease;
+}
+
 .agenda-drag-ghost {
     position: fixed;
     left: 0;
@@ -12067,6 +12121,57 @@ body.agenda-dragging-active {
     color: var(--text-muted);
 }
 
+.agenda-drop-position-hint {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+}
+
+.agenda-drop-range-hint {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 700;
+    background: var(--brand-primary-soft, rgba(59, 130, 246, 0.14));
+    border: 1px solid var(--brand-primary-border, rgba(59, 130, 246, 0.35));
+    color: var(--brand-primary);
+}
+
+.agenda-drop-tight-note {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    color: var(--text-muted);
+}
+
+.agenda-drop-time-error {
+    margin: 7px 0 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: #b91c1c;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+#agendaDropTimeInput.is-invalid {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
+}
+
+:root[data-theme="dark"] .agenda-drop-time-error {
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(248, 113, 113, 0.42);
+}
+
 :root[data-theme="dark"] .agenda-calendar-panel,
 :root[data-theme="dark"] .agenda-section-head,
 :root[data-theme="dark"] .agenda-drop-summary-box {
@@ -12110,6 +12215,11 @@ body.agenda-dragging-active {
 @media (prefers-reduced-motion: reduce) {
     .agenda-drag-handle,
     .agenda-item.is-dragging,
+    .agenda-item.is-insert-before,
+    .agenda-item.is-insert-after,
+    .is-insert-before,
+    .is-insert-after,
+    .agenda-item.is-drop-settled,
     .agenda-drag-ghost,
     .is-drop-valid,
     .is-drop-valid.is-drop-hover,
@@ -12117,5 +12227,6 @@ body.agenda-dragging-active {
     .agenda-calendar-panel .agenda-cal-day {
         transition: none !important;
         transform: none !important;
+        animation: none !important;
     }
 }
