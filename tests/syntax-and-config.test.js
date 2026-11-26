@@ -427,6 +427,7 @@ describe('Integridad de configuración, Docker, SQL y CI/CD', () => {
             'id="musicLyricsMetaBadge"',
             'id="musicLyricsAlbumPlaylistBox"',
             'id="btnMusicExtractLyrics"',
+            'id="btnVerifyReplaceSongLyrics"',
             'id="btnMusicCopyLyricsToStudy"',
             'id="btnMusicTranslateLyricsSel"',
             'floating-translate-sel-btn',

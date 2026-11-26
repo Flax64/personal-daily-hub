@@ -1492,3 +1492,325 @@ describe('lib/server-notes-service & lib/docx_writer.py (Notas autónomas en Ubu
         }
     });
 });
+
+describe('Validación estricta de letras, unicidad en cuaderno y reemplazo atómico en docx_writer.py', () => {
+    const extLyrics = require('../lib/external-lyrics-and-meta');
+    const ytdlpService = require('../lib/ytdlp-service');
+
+    const ADDICTED_INVENTED = [
+        'Now you got me so addicted',
+        'Spinning slowly in the midnight glow',
+        'Every echo keeps me waiting here',
+        'Shadows dancing on the avenue',
+        'Counting signals till the morning comes',
+        'Silver ribbons in the quiet room',
+        'Never letting go of what we drew'
+    ].join('\n');
+
+    const SUN_SHOWERS_INVENTED = [
+        'Oh, hey now, come outside',
+        'Raindrops shimmer on the garden stone',
+        'Golden puddles under open skies',
+        'Warm breeze carries every quiet tone',
+        'Step into the brightness after rain',
+        'Clouds are drifting past the tallest trees',
+        'Laughing softly in the afternoon'
+    ].join('\n');
+
+    const FLOWER_INVENTED = [
+        'Petals open in the early frost',
+        'Crimson velvet by the windowsill',
+        'Footsteps fading down the gravel road',
+        'Lanterns flicker on the distant hill',
+        'Pages turning in the winter breeze',
+        'Starlight settles on the silent lake',
+        'Promise written in the morning dew'
+    ].join('\n');
+
+    it('normaliza títulos con sufijos de soundtrack/video y rechaza canciones distintas en LRCLIB y subtítulos ruidosos', async () => {
+        assert.strictEqual(
+            extLyrics.normalizeSongTitleForLyricsMatch('Sun Showers (From "The Angry Birds Movie 3")'),
+            'sun showers'
+        );
+        assert.strictEqual(
+            extLyrics.normalizeSongTitleForLyricsMatch('Sun Showers (Official Lyric Video) [OST]'),
+            'sun showers'
+        );
+        assert.strictEqual(
+            extLyrics.normalizeSongTitleForLyricsMatch('Sun Showers (feat. Guest)'),
+            'sun showers'
+        );
+
+        const wrongMatch = extLyrics.isLyricsTrackMatch({
+            requestedTitle: 'Sun Showers (From "The Angry Birds Movie 3")',
+            requestedArtist: 'JISOO',
+            candidateTitle: 'Addicted',
+            candidateArtist: 'JISOO'
+        });
+        assert.strictEqual(wrongMatch.ok, false);
+        assert.strictEqual(wrongMatch.reason, 'TITLE_MISMATCH');
+
+        const rightMatch = extLyrics.isLyricsTrackMatch({
+            requestedTitle: 'Sun Showers (From "The Angry Birds Movie 3")',
+            requestedArtist: 'JISOO',
+            candidateTitle: 'Sun Showers (OST)',
+            candidateArtist: 'JISOO'
+        });
+        assert.strictEqual(rightMatch.ok, true);
+
+        const lrclibRes = await extLyrics.fetchLyricsFromLrclib({
+            title: 'Sun Showers (From "The Angry Birds Movie 3")',
+            artist: 'JISOO',
+            fetchImpl: async () => ({
+                ok: true,
+                status: 200,
+                json: async () => ([
+                    {
+                        trackName: 'Addicted',
+                        artistName: 'JISOO',
+                        albumName: 'Single',
+                        plainLyrics: ADDICTED_INVENTED
+                    }
+                ])
+            })
+        });
+        assert.strictEqual(lrclibRes.ok, false);
+
+        const cleanedSubs = ytdlpService.stripNonLyricAudioTags(
+            'Oh, hey [music] now, come outside\n[Music]\n(music)\n[applause]\n♪ Raindrops shimmer ♪\nGolden puddles under open skies'
+        );
+        assert.ok(!/\[music\]|\(music\)|\[applause\]|♪/i.test(cleanedSubs));
+        assert.ok(cleanedSubs.includes('Oh, hey now, come outside'));
+        assert.ok(cleanedSubs.includes('Raindrops shimmer'));
+        assert.ok(cleanedSubs.includes('Golden puddles under open skies'));
+    });
+
+    it('detecta duplicados de otra canción (validateLyricsUniquenessAgainstNotebook) y secciones contradictorias (checkLyricsSectionConsistency)', () => {
+        const notebookData = {
+            ok: true,
+            allEntries: [
+                {
+                    section: 'music',
+                    title: 'Addicted',
+                    artist: 'JISOO',
+                    fields: { lyrics_study: ADDICTED_INVENTED }
+                },
+                {
+                    section: 'music',
+                    title: 'Sun Showers',
+                    artist: 'JISOO',
+                    fields: { lyrics_study: SUN_SHOWERS_INVENTED }
+                }
+            ]
+        };
+
+        const dupCheck = langStudio.validateLyricsUniquenessAgainstNotebook(notebookData, {
+            songTitle: 'Sun Showers (From "The Angry Birds Movie 3")',
+            artistName: 'JISOO',
+            candidateLyrics: ADDICTED_INVENTED
+        });
+        assert.strictEqual(dupCheck.valid, false);
+        assert.strictEqual(dupCheck.reason, 'DUPLICATE_OTHER_SONG');
+        assert.strictEqual(dupCheck.matchedSong, 'Addicted');
+        assert.ok(dupCheck.similarity >= 0.65);
+
+        const selfUpdateCheck = langStudio.validateLyricsUniquenessAgainstNotebook(notebookData, {
+            songTitle: 'Sun Showers',
+            artistName: 'JISOO',
+            candidateLyrics: SUN_SHOWERS_INVENTED
+        });
+        assert.strictEqual(selfUpdateCheck.valid, true);
+
+        const shortCheck = langStudio.validateLyricsUniquenessAgainstNotebook(notebookData, {
+            songTitle: 'Sun Showers',
+            artistName: 'JISOO',
+            candidateLyrics: 'Now you got me so addicted\nSpinning slowly in the midnight glow'
+        });
+        assert.strictEqual(shortCheck.valid, true);
+
+        const mismatchRes = langStudio.checkLyricsSectionConsistency({
+            language: 'English',
+            originalText: ADDICTED_INVENTED,
+            englishText: `Oh, hey [music] now, come outside\n${SUN_SHOWERS_INVENTED.split('\n').slice(1).join('\n')}`
+        });
+        assert.strictEqual(mismatchRes.consistent, false);
+        assert.strictEqual(mismatchRes.reason, 'SECTION_MISMATCH');
+        assert.ok(mismatchRes.similarity < 0.2);
+
+        const consistentRes = langStudio.checkLyricsSectionConsistency({
+            language: 'English',
+            originalText: SUN_SHOWERS_INVENTED,
+            englishText: SUN_SHOWERS_INVENTED
+        });
+        assert.strictEqual(consistentRes.consistent, true);
+
+        const koreanSkipped = langStudio.checkLyricsSectionConsistency({
+            language: 'Korean',
+            originalText: ADDICTED_INVENTED,
+            englishText: SUN_SHOWERS_INVENTED
+        });
+        assert.strictEqual(koreanSkipped.consistent, true);
+        assert.strictEqual(koreanSkipped.reason, 'NOT_APPLICABLE');
+
+        const cmpBad = langStudio.compareExistingVsFreshLyrics(
+            {
+                songTitle: 'Sun Showers',
+                artist: 'JISOO',
+                lyrics: `Original\n${ADDICTED_INVENTED}\n\nEnglish\n${SUN_SHOWERS_INVENTED}`,
+                fields: { language: 'English' }
+            },
+            SUN_SHOWERS_INVENTED,
+            { notebookData, songTitle: 'Sun Showers', artistName: 'JISOO', language: 'English' }
+        );
+        assert.ok(cmpBad.status === 'duplicate_other_song' || cmpBad.status === 'section_mismatch');
+        assert.strictEqual(cmpBad.shouldReplace, true);
+
+        const cmpGood = langStudio.compareExistingVsFreshLyrics(
+            {
+                songTitle: 'Sun Showers',
+                artist: 'JISOO',
+                lyrics: SUN_SHOWERS_INVENTED,
+                fields: { language: 'English' }
+            },
+            SUN_SHOWERS_INVENTED,
+            { notebookData, songTitle: 'Sun Showers', artistName: 'JISOO', language: 'English' }
+        );
+        assert.strictEqual(cmpGood.status, 'match');
+        assert.strictEqual(cmpGood.shouldReplace, false);
+    });
+
+    it('reemplaza únicamente lyrics_study en lib/docx_writer.py (replaceLyrics: true) sin duplicar ni corromper el .docx', () => {
+        const pyCmd = resolvePythonCmd();
+        assert.ok(pyCmd, 'Python 3 debe estar disponible');
+        const crypto = require('node:crypto');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-replace-lyrics-'));
+        const docxPath = path.join(tmpDir, 'English_Learning_Notebook.docx');
+        const utf8Env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+        const runWriterPayload = (payloadObj) => spawnSync(
+            pyCmd,
+            [path.join(ROOT, 'lib', 'docx_writer.py'), '--mode', 'english'],
+            { input: JSON.stringify(payloadObj), encoding: 'utf8', env: utf8Env }
+        );
+
+        try {
+            assert.strictEqual(runWriterPayload({
+                docxPath,
+                entry: {
+                    category: 'vocabulary',
+                    language: 'English',
+                    word: 'Downpour',
+                    spanish: 'Aguacero',
+                    example: 'A sudden downpour cooled the street.'
+                }
+            }).status, 0);
+
+            assert.strictEqual(runWriterPayload({
+                docxPath,
+                entry: {
+                    category: 'music',
+                    language: 'English',
+                    song_title: 'Sun Showers',
+                    artists_display: 'JISOO',
+                    album_title: 'Angry Birds OST',
+                    yt_music_url: 'https://music.youtube.com/watch?v=REUpBcmDbTE',
+                    lyrics_study: `Original\n${ADDICTED_INVENTED}\n\nEnglish\n${SUN_SHOWERS_INVENTED}`,
+                    vocabulary_list: 'outside = afuera',
+                    notes: 'Mis notas manuales'
+                }
+            }).status, 0);
+
+            assert.strictEqual(runWriterPayload({
+                docxPath,
+                entry: {
+                    category: 'music',
+                    language: 'English',
+                    song_title: 'Flower',
+                    artists_display: 'JISOO',
+                    album_title: 'ME',
+                    lyrics_study: FLOWER_INVENTED
+                }
+            }).status, 0);
+
+            const origBytes = fs.readFileSync(docxPath);
+            const replaceRes = runWriterPayload({
+                docxPath,
+                replaceLyrics: true,
+                entry: {
+                    category: 'music',
+                    language: 'English',
+                    song_title: 'Sun Showers',
+                    artists_display: 'JISOO',
+                    lyrics_study: SUN_SHOWERS_INVENTED,
+                    replace_lyrics: true
+                }
+            });
+            assert.strictEqual(replaceRes.status, 0, replaceRes.stderr || replaceRes.stdout);
+            const repJson = JSON.parse(replaceRes.stdout.trim());
+            assert.strictEqual(repJson.ok, true);
+            assert.strictEqual(repJson.replacedLyrics, true);
+            assert.strictEqual(repJson.songsBefore, 2);
+            assert.strictEqual(repJson.songsAfter, 2);
+
+            const bakPath = `${docxPath}.bak`;
+            assert.strictEqual(fs.existsSync(bakPath), true);
+            assert.strictEqual(fs.readFileSync(bakPath).equals(origBytes), true);
+
+            const updatedBytes = fs.readFileSync(docxPath);
+            assert.strictEqual(serverNotes.isValidDocxZipBuffer(updatedBytes), true);
+
+            const zipXmlCheck = spawnSync(
+                pyCmd,
+                [
+                    '-c',
+                    'import sys, zipfile, xml.etree.ElementTree as ET; zf = zipfile.ZipFile(sys.argv[1], "r"); assert zf.testzip() is None; ET.fromstring(zf.read("word/document.xml")); print("ZIP_XML_OK")',
+                    docxPath
+                ],
+                { encoding: 'utf8', env: utf8Env }
+            );
+            assert.strictEqual(zipXmlCheck.status, 0, zipXmlCheck.stderr);
+            assert.ok(zipXmlCheck.stdout.includes('ZIP_XML_OK'));
+
+            const parsed = langStudio.parseStudyNotebookDocxBuffer(updatedBytes, { includeAllEntries: true, includeAll: true });
+            assert.strictEqual(parsed.ok, true);
+            const musicEntries = (parsed.allEntries || parsed.entries).filter((e) => e.section === 'music');
+            assert.strictEqual(musicEntries.length, 2);
+
+            const sunEntry = langStudio.findNotebookSongEntry(parsed, { songTitle: 'Sun Showers', artistName: 'JISOO' });
+            assert.ok(sunEntry);
+            assert.ok(sunEntry.lyrics.includes('Oh, hey now, come outside'));
+            assert.ok(!/addicted/i.test(sunEntry.lyrics));
+            assert.ok(String(sunEntry.fields?.notes || '').includes('Mis notas manuales'));
+            assert.ok(String(sunEntry.fields?.vocabulary_list || '').includes('outside = afuera'));
+
+            const flowerEntry = langStudio.findNotebookSongEntry(parsed, { songTitle: 'Flower', artistName: 'JISOO' });
+            assert.ok(flowerEntry);
+            assert.ok(flowerEntry.lyrics.includes('Petals open in the early frost'));
+
+            const vocabEntries = (parsed.allEntries || parsed.entries).filter((e) => e.section === 'vocabulary');
+            assert.ok(vocabEntries.some((e) => /Downpour/i.test(e.title || e.text || '')));
+
+            // Caso negativo: reemplazar canción inexistente no modifica el archivo
+            const shaBeforeMissing = crypto.createHash('sha256').update(updatedBytes).digest('hex');
+            const missingRes = runWriterPayload({
+                docxPath,
+                replaceLyrics: true,
+                entry: {
+                    category: 'music',
+                    song_title: 'Unknown Track',
+                    artists_display: 'JISOO',
+                    lyrics_study: SUN_SHOWERS_INVENTED,
+                    replace_lyrics: true
+                }
+            });
+            assert.notStrictEqual(missingRes.status, 0);
+            const missingJson = JSON.parse(missingRes.stdout.trim());
+            assert.strictEqual(missingJson.ok, false);
+            assert.strictEqual(missingJson.reason, 'SONG_NOT_FOUND');
+            const shaAfterMissing = crypto.createHash('sha256').update(fs.readFileSync(docxPath)).digest('hex');
+            assert.strictEqual(shaAfterMissing, shaBeforeMissing);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+});

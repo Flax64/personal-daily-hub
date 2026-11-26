@@ -9099,6 +9099,7 @@ function actualizarPanelLetraCancion(song, { forceSyncText = false } = {}) {
     const viewer = document.getElementById('musicSongLyricsViewer');
     const hint = document.getElementById('musicLyricsStatusHint');
     const extractBtn = document.getElementById('btnMusicExtractLyrics');
+    const verifyReplaceBtn = document.getElementById('btnVerifyReplaceSongLyrics');
     const langFilterEl = document.getElementById('musicLyricsTrackLangFilter');
     const floatingSelBtn = document.getElementById('btnMusicTranslateLyricsSel');
     if (!card || !viewer) return;
@@ -9147,6 +9148,7 @@ function actualizarPanelLetraCancion(song, { forceSyncText = false } = {}) {
 
     const hasVideoId = Boolean(song.yt_video_id && /^[A-Za-z0-9_-]{11}$/.test(song.yt_video_id)) || Boolean(song.yt_music_url);
     if (extractBtn) extractBtn.disabled = !hasVideoId;
+    if (verifyReplaceBtn) verifyReplaceBtn.disabled = !hasVideoId;
 
     if (hint && !savedLyrics.trim()) {
         hint.textContent = tUi(
@@ -10918,6 +10920,7 @@ if (englishMusicStudioRoot) {
     }
 
     const btnMusicExtractLyrics = document.getElementById('btnMusicExtractLyrics');
+    const btnVerifyReplaceSongLyrics = document.getElementById('btnVerifyReplaceSongLyrics');
     const btnMusicSaveLyrics = document.getElementById('btnMusicSaveLyrics');
     const btnMusicTranslateLyricsSel = document.getElementById('btnMusicTranslateLyricsSel');
     const btnMusicTranslateFullLyricsEs = document.getElementById('btnMusicTranslateFullLyricsEs');
@@ -11008,6 +11011,56 @@ if (englishMusicStudioRoot) {
             runWithButtonLock(btnMusicExtractLyrics, async () => {
                 await solicitarOExtraerLetraViaPc(song, { silent: false, forceExtract });
             }, { loadingText: tUi('Searching lyrics...', 'Buscando letra...') });
+        });
+    }
+
+    if (btnVerifyReplaceSongLyrics) {
+        btnVerifyReplaceSongLyrics.addEventListener('click', () => {
+            const song = getCancionSeleccionada();
+            if (!song) {
+                showToast('err', tUi('Select a song from the catalog first.', 'Selecciona primero una canción del catálogo.'));
+                return;
+            }
+            runWithButtonLock(btnVerifyReplaceSongLyrics, async () => {
+                const hintEl = document.getElementById('musicLyricsStatusHint');
+                const res = await resilientFetchJson('/api/english/music/verify-replace-lyrics', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        songId: song.id,
+                        songTitle: song.titulo,
+                        artistName: formatSongArtistsSummary(song),
+                        ytMusicUrl: song.yt_music_url || song.youtube_url || '',
+                        language: song.idioma || ''
+                    })
+                }, { timeoutMs: 75000, maxRetries: 0 });
+
+                if (!res.ok || !res.data?.ok) {
+                    let errMsg = res.errorMessage || tUi('Could not verify song lyrics.', 'No se pudo verificar la letra de la canción.');
+                    try {
+                        const parsed = JSON.parse(String(res.errorMessage || ''));
+                        if (parsed && parsed.message) errMsg = parsed.message;
+                    } catch (_) {}
+                    if (hintEl) hintEl.textContent = tServer(errMsg);
+                    showToast('err', errMsg);
+                    return;
+                }
+
+                const payload = res.data;
+                if (payload.action === 'replaced') {
+                    delete musicState.sessionLyricsBySongId[song.id];
+                    if (songLyricsViewerEl) songLyricsViewerEl.value = '';
+                    await solicitarOExtraerLetraViaPc(song, { silent: true, forceExtract: false });
+                    const msg = payload.message || 'Letra verificada y reemplazada correctamente en Word.';
+                    if (hintEl) hintEl.textContent = tServer(msg);
+                    showToast('ok', msg);
+                    return;
+                }
+
+                const msg = payload.message || 'La letra guardada ya coincide y está verificada.';
+                if (hintEl) hintEl.textContent = tServer(msg);
+                showToast('ok', msg);
+            }, { loadingText: tUi('Verifying lyrics...', 'Verificando letra...') });
         });
     }
 

@@ -6819,6 +6819,228 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         }
     });
 
+    it('verifica y reemplaza letras inconsistentes con POST /api/english/music/verify-replace-lyrics (RBAC + replaced/unchanged/409)', async () => {
+        const fs = require('node:fs');
+        const os = require('node:os');
+        const serverNotes = require('../lib/server-notes-service');
+        const langStudio = require('../lib/language-studio');
+        const ytdlpService = require(path.join(ROOT, 'lib', 'ytdlp-service'));
+        const origExtract = ytdlpService.extractSongLyrics;
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdh-verify-replace-'));
+        const prevKey = process.env.JOURNAL_SECRET_KEY;
+        const prevEngPath = process.env.ENGLISH_WORD_FILE_PATH;
+        const prevJrnPath = process.env.JOURNAL_LOCAL_PATH;
+        const prevRclone = process.env.RCLONE_CONFIG;
+        const testKey = '0123456789abcdef0123456789abcdef';
+
+        const ADDICTED_LINES = [
+            'Now you got me so addicted',
+            'Spinning slowly in the midnight glow',
+            'Every echo keeps me waiting here',
+            'Shadows dancing on the avenue',
+            'Counting signals till the morning comes',
+            'Silver ribbons in the quiet room'
+        ].join('\n');
+
+        const SUN_LINES = [
+            'Oh, hey now, come outside',
+            'Raindrops shimmer on the garden stone',
+            'Golden puddles under open skies',
+            'Warm breeze carries every quiet tone',
+            'Step into the brightness after rain',
+            'Clouds are drifting past the tallest trees'
+        ].join('\n');
+
+        const FLOWER_LINES = [
+            'Petals open in the early frost',
+            'Crimson velvet by the windowsill',
+            'Footsteps fading down the gravel road',
+            'Lanterns flicker on the distant hill',
+            'Pages turning in the winter breeze',
+            'Starlight settles on the silent lake'
+        ].join('\n');
+
+        try {
+            process.env.JOURNAL_SECRET_KEY = testKey;
+            process.env.ENGLISH_WORD_FILE_PATH = path.join(tmpDir, 'English_Learning_Notebook.docx');
+            process.env.JOURNAL_LOCAL_PATH = path.join(tmpDir, 'Diario.docx');
+            process.env.RCLONE_CONFIG = path.join(tmpDir, 'nonexistent-rclone.conf');
+
+            // Sembrar Sun Showers (con letra errónea de otra canción en Original) y Flower
+            const seedSun = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/send-english',
+                headers: { Cookie: adminCookie },
+                body: {
+                    texto: serverNotes.encryptClientE2ee(JSON.stringify({
+                        category: 'music',
+                        language: 'English',
+                        song_title: 'Sun Showers (From "The Angry Birds Movie 3")',
+                        artists_display: 'JISOO',
+                        yt_music_url: 'https://music.youtube.com/watch?v=REUpBcmDbTE',
+                        lyrics_study: `Original\n${ADDICTED_LINES}`
+                    }), testKey)
+                }
+            });
+            assert.strictEqual(seedSun.status, 200);
+
+            const seedFlower = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/send-english',
+                headers: { Cookie: adminCookie },
+                body: {
+                    texto: serverNotes.encryptClientE2ee(JSON.stringify({
+                        category: 'music',
+                        language: 'English',
+                        song_title: 'Flower',
+                        artists_display: 'JISOO',
+                        lyrics_study: FLOWER_LINES
+                    }), testKey)
+                }
+            });
+            assert.strictEqual(seedFlower.status, 200);
+
+            // /api/send-english debe rechazar con 409 si otra canción intenta guardar letra duplicada
+            const dupSaveRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/send-english',
+                headers: { Cookie: adminCookie },
+                body: {
+                    texto: serverNotes.encryptClientE2ee(JSON.stringify({
+                        category: 'music',
+                        language: 'English',
+                        song_title: 'Butterfly',
+                        artists_display: 'JISOO',
+                        lyrics_study: FLOWER_LINES
+                    }), testKey)
+                }
+            });
+            assert.strictEqual(dupSaveRes.status, 409);
+
+            const verifyPayload = {
+                songTitle: 'Sun Showers (From "The Angry Birds Movie 3")',
+                artistName: 'JISOO',
+                ytMusicUrl: 'https://music.youtube.com/watch?v=REUpBcmDbTE',
+                language: 'English'
+            };
+
+            // RBAC: sin sesión -> 401; médico no admin -> 403
+            const unauthVerify = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/english/music/verify-replace-lyrics',
+                body: verifyPayload
+            });
+            assert.strictEqual(unauthVerify.status, 401);
+
+            const medicoVerify = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/english/music/verify-replace-lyrics',
+                headers: { Cookie: medicoCookie },
+                body: verifyPayload
+            });
+            assert.strictEqual(medicoVerify.status, 403);
+
+            // 1) Letra en Word no coincide -> reemplaza limpiamente con la letra verificada (limpiando [music])
+            ytdlpService.extractSongLyrics = async () => ({
+                ok: true,
+                videoId: 'REUpBcmDbTE',
+                lyrics: SUN_LINES.replace('Oh, hey now, come outside', 'Oh, hey [music] now, come outside\n[Music]'),
+                source: 'youtube:asr-captions'
+            });
+
+            const replacedRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/english/music/verify-replace-lyrics',
+                headers: { Cookie: adminCookie },
+                body: verifyPayload
+            });
+            assert.strictEqual(replacedRes.status, 200, replacedRes.body);
+            const replacedJson = JSON.parse(replacedRes.body);
+            assert.strictEqual(replacedJson.ok, true);
+            assert.strictEqual(replacedJson.action, 'replaced');
+
+            const docxAfterReplace = fs.readFileSync(process.env.ENGLISH_WORD_FILE_PATH);
+            const parsedAfter = langStudio.parseStudyNotebookDocxBuffer(docxAfterReplace, { includeAllEntries: true, includeAll: true });
+            assert.strictEqual(parsedAfter.ok, true);
+            const musicAfter = (parsedAfter.allEntries || parsedAfter.entries).filter((e) => e.section === 'music');
+            assert.strictEqual(musicAfter.length, 2);
+
+            const updatedSun = langStudio.findNotebookSongEntry(parsedAfter, { songTitle: 'Sun Showers', artistName: 'JISOO' });
+            assert.ok(updatedSun);
+            assert.ok(updatedSun.lyrics.includes('Oh, hey now, come outside'));
+            assert.ok(!/\[music\]/i.test(updatedSun.lyrics));
+            assert.ok(!/addicted/i.test(updatedSun.lyrics));
+
+            const intactFlower = langStudio.findNotebookSongEntry(parsedAfter, { songTitle: 'Flower', artistName: 'JISOO' });
+            assert.ok(intactFlower);
+            assert.ok(intactFlower.lyrics.includes('Petals open in the early frost'));
+
+            // 2) Segunda llamada cuando ya coincide -> action: 'unchanged' sin modificar el archivo
+            const shaAfterReplace = crypto.createHash('sha256').update(docxAfterReplace).digest('hex');
+            ytdlpService.extractSongLyrics = async () => ({
+                ok: true,
+                videoId: 'REUpBcmDbTE',
+                lyrics: SUN_LINES,
+                source: 'youtube:asr-captions'
+            });
+
+            const unchangedRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/english/music/verify-replace-lyrics',
+                headers: { Cookie: adminCookie },
+                body: verifyPayload
+            });
+            assert.strictEqual(unchangedRes.status, 200, unchangedRes.body);
+            const unchangedJson = JSON.parse(unchangedRes.body);
+            assert.strictEqual(unchangedJson.ok, true);
+            assert.strictEqual(unchangedJson.action, 'unchanged');
+            assert.strictEqual(
+                crypto.createHash('sha256').update(fs.readFileSync(process.env.ENGLISH_WORD_FILE_PATH)).digest('hex'),
+                shaAfterReplace
+            );
+
+            // 3) Si la letra candidata duplica otra canción del cuaderno (Flower) -> 409 y no modifica el archivo
+            ytdlpService.extractSongLyrics = async () => ({
+                ok: true,
+                videoId: 'REUpBcmDbTE',
+                lyrics: FLOWER_LINES,
+                source: 'ytmusic:innertube:song'
+            });
+
+            const dupRejectRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/english/music/verify-replace-lyrics',
+                headers: { Cookie: adminCookie },
+                body: verifyPayload
+            });
+            assert.strictEqual(dupRejectRes.status, 409, dupRejectRes.body);
+            const dupRejectJson = JSON.parse(dupRejectRes.body);
+            assert.strictEqual(dupRejectJson.ok, false);
+            assert.strictEqual(dupRejectJson.reason, 'DUPLICATE_OTHER_SONG');
+            assert.strictEqual(dupRejectJson.matchedSong, 'Flower');
+            assert.strictEqual(
+                crypto.createHash('sha256').update(fs.readFileSync(process.env.ENGLISH_WORD_FILE_PATH)).digest('hex'),
+                shaAfterReplace
+            );
+        } finally {
+            ytdlpService.extractSongLyrics = origExtract;
+            if (prevKey === undefined) delete process.env.JOURNAL_SECRET_KEY; else process.env.JOURNAL_SECRET_KEY = prevKey;
+            if (prevEngPath === undefined) delete process.env.ENGLISH_WORD_FILE_PATH; else process.env.ENGLISH_WORD_FILE_PATH = prevEngPath;
+            if (prevJrnPath === undefined) delete process.env.JOURNAL_LOCAL_PATH; else process.env.JOURNAL_LOCAL_PATH = prevJrnPath;
+            if (prevRclone === undefined) delete process.env.RCLONE_CONFIG; else process.env.RCLONE_CONFIG = prevRclone;
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
     it('aplica rate limit contra fuerza bruta en login y saturación DoS en endpoints API', async () => {
         // 1. Fuerza bruta en login (10 intentos fallidos -> el 11° devuelve 429 con Retry-After)
         let blockedLoginRes = null;
