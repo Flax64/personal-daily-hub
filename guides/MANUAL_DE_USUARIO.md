@@ -22,8 +22,8 @@
 | **Propietario (`admin`)** | Control total de todos los módulos, Word, Planner, IA y Ajustes. | Automática cada **Domingo 00:00**. |
 | **Psiquiatra / Médico** | **Solo lectura** en `📈 Resumen Semanal` (Ánimo, Sueño/Desvelos y Crisis). | Automática cada **Domingo 00:00**. |
 
-* **Sync en tiempo real (PC ↔ Celular):** Los cambios que guardes en un dispositivo se reflejan automáticamente en tus sesiones abiertas vía **SSE** (`SyncRevisions`). Si la pestaña pasa a segundo plano, pausa la conexión para ahorrar batería y re-sincroniza al regresar.
-* **Idioma EN / ES:** Cambia al instante entre Inglés y Español con `🌐 EN / ES` (cabecera o barra lateral).
+* **Sync en tiempo real (PC ↔ Celular):** Los cambios que guardes en un dispositivo (incluyendo idioma `EN`/`ES`) se reflejan automáticamente en tus sesiones abiertas vía **SSE** (`SyncRevisions`). Si la pestaña pasa a segundo plano, pausa la conexión para ahorrar batería y re-sincroniza al regresar.
+* **Idioma EN / ES 100% sincronizado:** Cambia al instante entre Inglés y Español con `🌐 EN / ES` (cabecera o barra lateral) o en `#view-settings`; el idioma elegido se guarda en el servidor para traducir también `#reminderTray` y las notificaciones push `ntfy`.
 * **Navegación fluida en móvil y PC:**
   * Desliza con el dedo hacia la izquierda sobre el menú lateral para cerrarlo (*swipe-to-close*).
   * El botón **Atrás** del navegador/celular navega entre vistas (`history.pushState`) y recargar la página regresa siempre limpio a **Inicio**.
@@ -71,15 +71,16 @@
 ## 4. Agenda Semanal, Horario ITS, CRUD Campus/Salones y Alertas Maps
 
 ### 🗓️ Agenda Semanal (`#view-agenda`)
-* Crea **Eventos** o **Tareas** divididos en **🎓 Universidad** y **👤 Personal** con flujo tipo Jira (**To Do**, **In Progress**, **Done**, **Skipped**), tareas repetitivas (`🔁 Repetir cada X días`) y recordatorios anticipados hasta de 1 semana en proyectos largos.
+* Crea **Eventos** o **Tareas** divididos en **🎓 Universidad** y **👤 Personal** con flujo tipo Jira (**To Do**, **In Progress**, **Done**, **Skipped**), tareas repetitivas (`🔁 Repetir cada X días`) y recordatorios anticipados.
+* **Arrastre desde toda la tarjeta:** En PC arrastra cualquier tarjeta desde su título, cuerpo, fondo o agarre `⋮⋮` (los botones `✓`, `⏳`, `⏭`, `✏`, `🗑` y el selector de estado siguen clicables normalmente); en móvil/tablet usa `⋮⋮` de inmediato o mantén presionada `220 ms` cualquier zona libre de la tarjeta sin bloquear el scroll.
+* **Tareas «En progreso» silenciosas por 1 hora:** Al pasar una tarea a *En progreso*, se silencian avisos normales y solo recibirás 1 seguimiento al cumplirse 1 hora.
 
-### 🎓 Horario ITS, CRUD de Campus/Salones y Alertas Inteligentes (`#view-horario`)
-* **CRUD de Campus y Salones:** Además de los 3 campus base del TecNM Saltillo (**Principal CTO-002**, **Miravalle CTO-003**, **Boillot/Sistemas CTO-004**), puedes crear, editar o eliminar **campus y códigos de salón** personalizados con sus coordenadas sobre Maps.
-* **Alertas inteligentes por zona GPS (`computeCommuteAlertMilestones`):**
-  * **En Casa:** avisos escalonados en `[T+20, T+10, T, 10]` min antes (siendo `T` el tiempo estimado en auto).
-  * **Lejos:** aviso anticipado en `[T+10]` min antes.
-  * **Cerca del campus/destino:** recordatorios finales a los `20` y `15` min antes del inicio.
-* **Confirmación rápida (`OK`):** Tocar **`OK`** en la notificación móvil silencia avisos restantes de esa clase/turno hoy y limpia alertas previas equivalentes.
+### 🎓 Horario ITS, Materias (Pausa/Promedio) y Alertas Maps (`#view-horario` + `#view-settings`)
+* **Gestión manual de Campus y Materias:** Administra tus **campus y salones** desde la guía de clases/croquis, pausa o reanuda avisos individuales por materia (`🔕 Pausar avisos` / `🔔 Reanudar avisos`), marca materias completadas y captura su calificación final (`0–100`) para ver automáticamente el **Promedio del semestre**.
+* **Alertas inteligentes por zona GPS (configurables en `#view-settings`):**
+  * **En Casa o Lejos:** avisa desde `tiempo en auto + 30 min` y repite cada `5 min` hasta presionar `OK` o iniciar la clase/turno.
+  * **Cerca del campus (radio `<= 0.5 km`):** recuerda en `20, 15, 10` min antes del inicio.
+* **Confirmación rápida (`OK`):** Tocar **`OK`** en `ntfy` o en `#reminderTray` silencia avisos restantes de esa clase/turno hoy y reemplaza alertas previas equivalentes.
 
 ---
 

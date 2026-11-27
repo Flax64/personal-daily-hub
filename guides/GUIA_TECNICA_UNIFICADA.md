@@ -1,6 +1,6 @@
 # 🏛️ Guía Técnica Unificada y Blueprint de Recreación — Personal Daily Hub
 
-> Documento técnico maestro, versionado en `guides/` y excluido del contexto Docker en `.dockerignore`. Consolida la arquitectura real vigente (**Blue-Green con Caddy**, **Ubuntu Server 8 GB RAM**, **Tailscale Serve HTTPS**, **Sync SSE en tiempo real**, **descarga cifrada `pdh-j2` en RAM de `Diario.docx`**, **Dual Drive**, **auto-versionado SemVer 2.0.0** y **recreación completa desde cero**).
+> Documento técnico maestro, versionado en `guides/` y excluido del contexto Docker en `.dockerignore`. Consolida la arquitectura real vigente (**Blue-Green con Caddy**, **Ubuntu Server 8 GB RAM**, **Tailscale Serve HTTPS**, **Sync SSE en tiempo real**, **descarga cifrada `pdh-j2` en RAM de `Diario.docx`**, **Dual Drive**, **auto-versionado SemVer 2.0.0** y **recreación completa desde cero**). Para explicaciones conceptuales detalladas consulta [docs/CONCEPTOS_Y_ARQUITECTURA.md](../docs/CONCEPTOS_Y_ARQUITECTURA.md) y para reconstrucción guiada por fases [docs/RECREAR_DESDE_CERO.md](../docs/RECREAR_DESDE_CERO.md).
 
 ---
 
@@ -134,7 +134,7 @@ El archivo [`init.sql`](../init.sql) define **15 tablas**, y al iniciar el servi
 | 1 | `RegistrosMood` | Estados de ánimo por franja horaria | `fecha`, `momento_dia` (`Madrugada`, `Morning`, `Noon`, `Afternoon`, `Night`), `estado_animo`, `color_hex`, `UNIQUE(fecha, momento_dia)` |
 | 2 | `RegistrosSleep` | Sueño nocturno, siestas y desvelos | `horas DECIMAL(4,2)`, `calidad`, `hora_dormir`, `hora_despertar`, `es_desvelo TINYINT(1)`, `tipo_registro` (`normal`, `siesta`, `desvelo_tarde`, `desvelo_total`), `motivo_desvelo`, `idx_sleep_fecha` |
 | 3 | `RegistrosCrisis` | Bitácora clínica de episodios agudos | `fecha`, `hora`, `tipo_crisis VARCHAR(100)` (incluye `Otro` y tipos personalizados), `intensidad TINYINT (1-5)`, `motivo VARCHAR(1000)`, `idx_crisis_fecha` |
-| 4 | `RegistrosAgenda` | Eventos y tareas (`universidad` / `personal`) | `bloque` (`manana`, `cole`, `tarde`, `noche`), `tipo` (`evento`, `tarea`), `categoria`, `materia_id`, `materia_nombre`, `estado` (`todo`, `in_progress`, `done`, `skipped`), `completada`, `recordatorio_min` |
+| 4 | `RegistrosAgenda` | Eventos y tareas (`universidad` / `personal`) | `bloque` (`manana`, `cole`, `tarde`, `noche`), `tipo` (`evento`, `tarea`), `categoria`, `materia_id`, `materia_nombre`, `estado` (`todo`, `in_progress`, `done`, `skipped`), `completada`, `recordatorio_min`, `en_progreso_desde` (`DATETIME NULL`) |
 | 5 | `Usuarios` | Cuentas y roles del sistema | `nombre`, `email UNIQUE`, `password_hash`, `rol ENUM('admin','psiquiatra')`, `estado ENUM('activo','inactivo','suspendido')` |
 | 6 | `SesionesAuth` | Tokens de sesión opacos hasheados | `usuario_id FK CASCADE`, `token_hash CHAR(64) UNIQUE`, `expira_en DATETIME`, máx. **3 sesiones activas** por usuario |
 | 7 | `CodigosSeguridad` | OTP de registro, recuperación y MFA | `email`, `tipo ENUM('registro','reset','mfa')`, `token_hash CHAR(64)`, `expira_en`, `usado`, `idx_codigo_email_tipo` |
@@ -173,8 +173,8 @@ El archivo [`init.sql`](../init.sql) define **15 tablas**, y al iniciar el servi
 | | `GET /api/journal/local-status` · `GET /api/journal/download` | `requireAdmin` | Reporta existencia/cifrado de `Diario.docx` o descarga copia cifrada OLE2 en crudo. |
 | | `GET` / `POST /api/journal/download-encrypted` | `requireAdmin` | Descifra `Diario.docx` **solo en RAM** (`--mode journal-export-plain`), lo re-cifra con `pdh-j2` binario con salt (contraseña propia) y devuelve sobre para descifrar en navegador. |
 | | `GET /api/journal/daily-status` · `POST /api/journal/verify-days` · `POST /api/journal/nothing-to-report` | `requireAdmin` | Verifica días escritos en `Diario.docx` (`--mode journal-inspect`) o registra días sin novedad. |
-| **Agenda y Recordatorios** | `GET /api/get-agenda` · `POST /api/insert-agenda` · `PUT /api/update-agenda/:id` · `PATCH /api/toggle-agenda/:id` · `PATCH /api/postpone-agenda/:id` · `DELETE /api/delete-agenda/:id` | `requireAdmin` | Flujo tipo Jira (`todo`/`in_progress`/`done`/`skipped`), categorías `universidad`/`personal` y recordatorios anticipados. |
-| | `GET /api/reminders/active` · `POST /api/reminders/snooze` | `requireAdmin` | Bandeja activa de alertas y posposición desde interfaz web. |
+| **Agenda y Recordatorios** | `GET /api/get-agenda` · `POST /api/insert-agenda` · `PUT /api/update-agenda/:id` · `PATCH /api/toggle-agenda/:id` · `PATCH /api/postpone-agenda/:id` · `DELETE /api/delete-agenda/:id` | `requireAdmin` | Flujo tipo Jira (`todo`/`in_progress`/`done`/`skipped`), `en_progreso_desde` (silencio 1h), categorías `universidad`/`personal` y posposición por minutos/horas/días sin cambiar de vista. |
+| | `GET /api/reminders/active` · `/api/reminders/pending` · `POST /api/reminders/snooze` · `POST /api/reminders/ack` · `POST /api/reminders/test-push` | `requireAdmin` | Bandeja activa/pendiente localizada al idioma (`EN`/`ES`), posposición, confirmación `OK` en app y push de prueba vía `lib/server-i18n.js`. |
 | | `GET` / `POST /api/reminders/action` | HMAC SHA-256 o Cookie Admin | Ejecuta acciones desde botones `ntfy` móvil (`snooze`, `dismiss`, `skip`, `complete_agenda` y `ack` = **OK**). |
 | **Planner ITS y GPS** | `GET` / `PUT /api/planner` · `POST /api/planner/sync-agenda` | `requireAdmin` | Horario ITS, campus/salones personalizados (CRUD en settings de planner), vacaciones, residencias/trabajo y sincronía a Agenda. |
 | | `POST /api/planner/location` · `POST /api/planner/resolve-room` | `requireAdmin` | Guarda casa/ubicación origen o resuelve salón (`R11`, `N21`, `A10`, etc.) a campus exacto. |
@@ -187,7 +187,7 @@ El archivo [`init.sql`](../init.sql) define **15 tablas**, y al iniciar el servi
 | | `GET /api/english/music/catalog` · `search` · `POST /resolve` · `CRUD /songs/:id` · `CRUD /albums/:id` · `PATCH /artists/:id` | `requireAdmin` | Catálogo musical, resolución YouTube/YT Music y organización por Álbum/Pista. |
 | | `POST /api/english/music/songs/:id/resolve-lyrics` · `extract` · `GET .../media` · `POST /translate-lyrics` | `requireAdmin` | Extracción de subtítulos `yt-dlp`, traducción completa y streaming `206` con validación SSRF. |
 | | `GET /api/english/music/ytdlp-status` · `POST /pc-jobs` · `GET /pc-jobs/poll` · `POST /pc-jobs/:jobId/result` · `GET /pc-jobs/:jobId` · `pc-word-drive-*` | `requireAdmin` / `verifyPcBridgeAuth` | Puente HMAC síncrono en RAM hacia PC Windows (`sincronizador.py`). |
-| **Ajustes** | `GET /api/settings` · `PUT /api/settings` · `POST /api/settings/test-notification` | `requireAdmin` | Guarda preferencias (`geminiApiKey` y `journalDownloadPassword` cifrados `pdh-s1:` en reposo y jamás devueltos en texto plano). |
+| **Ajustes** | `GET /api/settings` · `PUT /api/settings` · `PATCH /api/settings/language` · `POST /api/settings/test-notification` | `requireAdmin` | Guarda preferencias (`uiLanguage`, reglas Smart Commute, `geminiApiKey` y `journalDownloadPassword` cifrados `pdh-s1:` en reposo) y sincroniza idioma SSE entre dispositivos. |
 
 ---
 
@@ -217,15 +217,15 @@ El archivo [`init.sql`](../init.sql) define **15 tablas**, y al iniciar el servi
 * **Cero carga en reposo (`0 queries/seg`):** Cuando no hay clientes SSE conectados (`sseClients.size === 0`), `stopSyncTimersIfIdle()` detiene por completo los temporizadores de polling (`3s`) y heartbeat (`25s`).
 * En el navegador (`public/frontend.js`), al cambiar a segundo plano (`visibilitychange` oculta la pestaña), el cliente pausa/cierra la conexión SSE activa y re-sincroniza inmediatamente vía `/api/sync/revisions` al volver a primer plano.
 
-### 5.3 Planner ITS, Maps, CRUD Campus/Salones y Alertas Inteligentes `ntfy`
+### 5.3 Planner ITS, Maps, CRUD Campus/Salones, Materias (`pausa`/`promedio`) y Alertas Inteligentes `ntfy`
 
-* **Directorio ITS base y CRUD dinámico:** Pre-carga coordenadas exactas sobre accesos viales de Saltillo (`Principal CTO-002`: `25.4414, -100.9922`; `Miravalle CTO-003`: `25.4194, -101.0232`; `Boillot/Glorieta CTO-004`: `25.4385, -100.9940`), más alta, edición y eliminación dinámica de **campus y códigos de salón** desde UI (`PUT /api/planner`).
+* **Gestión manual de campus y materias:** Alta, edición y eliminación dinámica de **campus y salones** desde UI (`#itsCroquisDirectoryCards`), conservando compatibilidad backend de ubicaciones previas en `/api/planner/location` (sin bloque fijo de 3 botones en `#view-horario`). Cada materia soporta `remindersPaused` (pausa avisos de clase/traslado), `completed` (pausa automática al aprobar) y `finalGrade` (`0–100`) con cálculo del promedio semestral en `#plannerSemesterAverageBadge`.
+* **Regla de 1 hora en tareas `en_progreso` (`en_progreso_desde`):** Al pasar a `in_progress`, silencia avisos normales previos/puntuales y envía 1 seguimiento al cumplirse `>= 60 min`.
 * **Protección Anti-Null-Island `(0,0)` y GPS Móvil:** Rechaza coordenadas inválidas o `(0,0)`, prioriza pines exactos `!3d...!4d...` en enlaces de Google Maps y soporta captura GPS desde el celular incluso fuera de contexto seguro mediante webhook firmado HMAC (`GET`/`POST /api/planner/phone-location`) y ping profundo `ntfy`.
-* **Hitos adaptativos por zona (`computeCommuteAlertMilestones`):** Dado el tiempo estimado de traslado `T` (minutos):
-  * **En Casa (`zone: 'home'`, dentro del radio de hogar o sin GPS vivo):** dispara en hitos `[T+20, T+10, T, 10]` min antes del evento.
-  * **Lejos (`zone: 'away_far'`):** dispara alerta temprana única en `[T+10]` min antes.
-  * **Cerca del destino (`zone: 'near_destination'`, `<= nearRadiusKm`, def. `0.85 km`):** cambia a recordatorios cortos `[20, 15]` min antes de iniciar la clase/turno.
-* **Confirmación `OK` en `ntfy` (`action=ack`):** Cada notificación enviada incluye el botón de confirmación **`OK`** hacia `/api/reminders/action?action=ack...`. Al pulsarlo, el servidor marca ese turno/clase como reconocido por hoy (evitando nuevos avisos escalonados del mismo evento) y reemplaza/descarta las alertas previas pendientes asociadas a esa ventana.
+* **Hitos adaptativos por zona (`computeSmartCommuteAlertSchedule` configurables en `#view-settings`):** Dado el tiempo estimado de traslado `T` (minutos):
+  * **En Casa o Lejos (`zone: 'home' | 'away'`):** inicia en `T + commuteExtraBufferMinutes` (`T + 30 min` por defecto) y repite cada `commuteRepeatEveryMinutes` (`5 min` por defecto: ej. `41, 36, 31, ..., 1 min` antes) hasta confirmar `OK` o iniciar la clase/turno.
+  * **Cerca del destino (`zone: 'near'`, radio `<= commuteNearRadiusKm`, def. `0.5 km`):** dispara recordatorios cortos configurados en `commuteNearAlertMinutes` (por defecto `20, 15, 10` min antes) hasta confirmar `OK` o iniciar.
+* **Confirmación `OK` en `ntfy` (`action=ack`) y localización `EN/ES`:** Cada notificación se genera en el idioma activo (`uiLanguage` vía `lib/server-i18n.js`) e incluye botones traducidos (`OK`, `Mark done` / `Marcar hecha`, `Snooze 15m` / `Posponer 15m`, etc.). Al confirmar **`OK`**, el servidor detiene avisos restantes de ese turno hoy y reemplaza alertas previas equivalentes.
 
 ### 5.4 Sueño, Crisis y Resumen Semanal
 
