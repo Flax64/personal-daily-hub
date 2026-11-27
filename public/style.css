@@ -12067,6 +12067,37 @@ input[type="password"] {
     cursor: grabbing;
 }
 
+#plannerPanelLocations .planner-location-picker-card:last-child {
+    margin-bottom: 0;
+}
+
+.agenda-item,
+.agenda-task-card,
+.agenda-card {
+    cursor: grab;
+}
+
+.agenda-item.is-dragging,
+.agenda-task-card.is-dragging,
+.agenda-card.is-dragging,
+body.agenda-dragging-active .agenda-item {
+    cursor: grabbing;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.agenda-item button,
+.agenda-item select,
+.agenda-item a,
+.agenda-item label,
+.agenda-item [role="button"],
+.agenda-item .agenda-check-circle,
+.agenda-item .agenda-status-select,
+.agenda-item .jira-status-select,
+.agenda-item .agenda-mini-btn {
+    cursor: pointer;
+}
+
 body.agenda-dragging-active {
     user-select: none;
     -webkit-user-select: none;
