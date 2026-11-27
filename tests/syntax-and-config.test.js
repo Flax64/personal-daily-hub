@@ -2580,4 +2580,33 @@ describe('Mejoras de Materias (Pausa/Promedio), En Progreso 1h y Smart Commute e
         assert.match(styleCss, /\.agenda-task-card\.is-dragging[\s\S]*?cursor:\s*grabbing\b/);
         assert.match(styleCss, /\.agenda-item\s+\.agenda-status-select[\s\S]*?cursor:\s*pointer\b/);
     });
+
+    it('mantiene documentación técnica completa en docs/, enlaces válidos en README.md, .dockerignore y cero secretos reales', () => {
+        const readme = readText('README.md');
+        const dockerignore = readText('.dockerignore');
+        assert.ok(dockerignore.includes('docs'), '.dockerignore debe excluir docs/ del build Docker');
+
+        for (const docPath of ['docs/CONCEPTOS_Y_ARQUITECTURA.md', 'docs/RECREAR_DESDE_CERO.md']) {
+            const fullPath = path.resolve(ROOT, docPath);
+            assert.equal(fs.existsSync(fullPath), true, `Debe existir ${docPath}`);
+            assert.ok(readme.includes(`(${docPath})`), `README.md debe enlazar ${docPath}`);
+            const text = readText(docPath);
+            assert.match(text.slice(0, 1200), /## .*[ÍI]ndice/i, `${docPath} debe incluir índice al inicio`);
+            assert.equal(text.includes('file:///'), false, `${docPath} no debe contener enlaces locales file:///`);
+            assert.equal(text.includes('docs-privados'), false, `${docPath} no debe referenciar docs-privados`);
+            assert.equal(text.includes('🌈'), false, `${docPath} no debe contener emoji arcoíris`);
+            assert.equal(/flavio\.flax1234@gmail\.com/i.test(text), false, `${docPath} no debe incluir correos personales reales`);
+            assert.equal(/C:\\\\Users\\\\flavi|C:\\Users\\flavi/i.test(text), false, `${docPath} no debe incluir rutas locales Windows personales`);
+        }
+
+        const archDoc = readText('docs/CONCEPTOS_Y_ARQUITECTURA.md');
+        for (const conceptToken of ['pdh-j2', 'GET_LOCK', 'SyncRevisions', 'computeSmartCommuteAlertSchedule', 'isAgendaCardInteractiveTarget', 'lib/server-i18n.js', 'Blue-Green', 'Tailscale', 'rclone', 'ntfy']) {
+            assert.ok(archDoc.includes(conceptToken), `docs/CONCEPTOS_Y_ARQUITECTURA.md debe documentar ${conceptToken}`);
+        }
+
+        const recreateDoc = readText('docs/RECREAR_DESDE_CERO.md');
+        for (const phaseToken of ['Fase 1', 'Fase 2', 'Fase 3', 'Fase 4', 'Fase 5', 'Fase 6', 'Fase 7', 'init.sql', 'local-vault.js', 'blue-green.sh', 'npm test']) {
+            assert.ok(recreateDoc.includes(phaseToken), `docs/RECREAR_DESDE_CERO.md debe documentar ${phaseToken}`);
+        }
+    });
 });
