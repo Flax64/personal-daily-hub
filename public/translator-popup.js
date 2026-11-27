@@ -82,7 +82,14 @@
         }
 
         if (window.DailyHubI18n && typeof window.DailyHubI18n.onChange === 'function') {
-            window.DailyHubI18n.onChange(() => {
+            window.DailyHubI18n.onChange((nextLang, meta) => {
+                if (!meta || meta.source !== 'server') {
+                    fetch('/api/settings/language', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ uiLanguage: nextLang })
+                    }).catch(() => {});
+                }
                 checkPopupAuth();
             });
         }

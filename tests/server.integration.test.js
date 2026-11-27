@@ -90,9 +90,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
         process.env.SMTP_USER = 'smtp@example.com';
         process.env.SMTP_PASS = 'abcdefghijklmnop';
         process.env.DISABLE_REMINDER_SCHEDULER = 'true';
-        process.env.RATE_LIMIT_WRITE_MAX = '250';
-        process.env.RATE_LIMIT_READ_MAX = '400';
-        process.env.RATE_LIMIT_API_MAX = '1000';
+        process.env.RATE_LIMIT_WRITE_MAX = '500';
+        process.env.RATE_LIMIT_READ_MAX = '800';
+        process.env.RATE_LIMIT_API_MAX = '2000';
 
         const mockDb = {
             query(sql, paramsOrCb, maybeCb) {
@@ -7530,6 +7530,7 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                 reqPath: '/api/settings',
                 headers: { Cookie: adminCookie },
                 body: {
+                    uiLanguage: 'es',
                     timezone: 'UTC',
                     agendaRemindersEnabled: true,
                     agendaNotifyTasks: true,
@@ -7737,6 +7738,7 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                 reqPath: '/api/settings',
                 headers: { Cookie: adminCookie },
                 body: {
+                    uiLanguage: origSettings.uiLanguage || 'en',
                     timezone: origSettings.timezone || 'America/Monterrey',
                     agendaRemindersEnabled: origSettings.agendaRemindersEnabled !== false,
                     agendaNotifyTasks: origSettings.agendaNotifyTasks !== false,
@@ -7748,6 +7750,167 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     commuteRepeatEveryMinutes: origSettings.commuteRepeatEveryMinutes ?? 5,
                     commuteNearAlertMinutes: origSettings.commuteNearAlertMinutes ?? [20, 15, 10],
                     commuteNearRadiusKm: origSettings.commuteNearRadiusKm ?? 0.5
+                }
+            });
+        }
+    });
+
+    it('persiste y sincroniza uiLanguage (en/es) en Ajustes, bandeja #reminderTray y notificaciones push ntfy', async () => {
+        const invalidPatchRes = await request({
+            port,
+            method: 'PATCH',
+            reqPath: '/api/settings/language',
+            headers: { Cookie: adminCookie },
+            body: { uiLanguage: 'pt' }
+        });
+        assert.strictEqual(invalidPatchRes.status, 400);
+
+        const prevSettings = JSON.parse((await request({ port, reqPath: '/api/settings', headers: { Cookie: adminCookie } })).body).settings || {};
+
+        // 1. Cambiar a Español vía PATCH /api/settings/language
+        const patchEsRes = await request({
+            port,
+            method: 'PATCH',
+            reqPath: '/api/settings/language',
+            headers: { Cookie: adminCookie },
+            body: { uiLanguage: 'es' }
+        });
+        assert.strictEqual(patchEsRes.status, 200);
+        const patchEsData = JSON.parse(patchEsRes.body);
+        assert.strictEqual(patchEsData.uiLanguage, 'es');
+        assert.strictEqual(patchEsData.settings.uiLanguage, 'es');
+
+        // Habilitar ntfy y recordatorios de tareas para probar bandeja + push en ambos idiomas
+        const saveNtfyEs = await request({
+            port,
+            method: 'PUT',
+            reqPath: '/api/settings',
+            headers: { Cookie: adminCookie },
+            body: {
+                uiLanguage: 'es',
+                phoneNotificationsEnabled: true,
+                ntfyServerUrl: 'https://ntfy.sh',
+                ntfyTopic: 'hub_flavio_biling_99',
+                ntfyPriority: 4,
+                agendaRemindersEnabled: true,
+                agendaNotifyTasks: true,
+                agendaLeadMinutes: 15
+            }
+        });
+        assert.strictEqual(saveNtfyEs.status, 200);
+
+        const localNow = JSON.parse((await request({ port, reqPath: '/api/reminders/pending', headers: { Cookie: adminCookie } })).body).localNow;
+        const minsNow = Math.max(0, Number(localNow?.minutesOfDay || 10) - 5);
+        const hhmm = `${String(Math.floor(minsNow / 60)).padStart(2, '0')}:${String(minsNow % 60).padStart(2, '0')}`;
+
+        const addTaskRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'bilingual-rem-task-1' },
+            body: {
+                fecha: localNow.dateStr,
+                bloque: 'manana',
+                hora: hhmm,
+                titulo: 'Entrega Final E2EE',
+                tipo: 'tarea',
+                categoria: 'personal',
+                estado: 'todo',
+                recordatorio_min: 15
+            }
+        });
+        assert.strictEqual(addTaskRes.status, 201);
+        const taskId = JSON.parse(addTaskRes.body).item.id;
+
+        const originalFetch = globalThis.fetch;
+        const capturedPushes = [];
+        globalThis.fetch = async (url, options) => {
+            capturedPushes.push({ url, options });
+            return { ok: true, status: 200, text: async () => '{"id":"ntfy_biling_1"}' };
+        };
+        try {
+            // 2. Bandeja y test push en Español
+            const pendingEs = JSON.parse((await request({ port, reqPath: '/api/reminders/pending', headers: { Cookie: adminCookie } })).body);
+            assert.strictEqual(pendingEs.uiLanguage, 'es');
+            const taskRemEs = (pendingEs.pending || []).find(r => Number(r.refId) === Number(taskId));
+            assert.ok(taskRemEs, 'Debe incluir la tarea pendiente en /api/reminders/pending');
+            assert.ok(taskRemEs.title.includes('[Personal · Tarea]'), `Título esperado en español, recibió: ${taskRemEs.title}`);
+            assert.ok(taskRemEs.message.includes('Entrega Final E2EE'), 'Nunca debe traducir el título escrito por el usuario');
+
+            const testPushEsRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/reminders/test-push',
+                headers: { Cookie: adminCookie },
+                body: { publicBaseUrl: 'http://203.0.113.20:3000' }
+            });
+            assert.strictEqual(testPushEsRes.status, 200);
+            assert.ok(capturedPushes.length >= 1);
+            const pushEs = JSON.parse(capturedPushes[capturedPushes.length - 1].options.body);
+            assert.strictEqual(pushEs.title, 'Personal Daily Hub - Celular Conectado');
+            assert.ok(pushEs.actions.some(a => a.label === 'Abrir App'));
+            assert.ok(pushEs.actions.some(a => a.label === 'Posponer 15m'));
+            assert.ok(pushEs.actions.some(a => a.label === 'Omitir'));
+
+            // 3. Cambiar a Inglés y verificar que /api/reminders/pending y test-push cambien al instante
+            const patchEnRes = await request({
+                port,
+                method: 'PATCH',
+                reqPath: '/api/settings/language',
+                headers: { Cookie: adminCookie },
+                body: { uiLanguage: 'en' }
+            });
+            assert.strictEqual(patchEnRes.status, 200);
+            assert.strictEqual(JSON.parse(patchEnRes.body).uiLanguage, 'en');
+
+            const pendingEn = JSON.parse((await request({ port, reqPath: '/api/reminders/pending', headers: { Cookie: adminCookie } })).body);
+            assert.strictEqual(pendingEn.uiLanguage, 'en');
+            const taskRemEn = (pendingEn.pending || []).find(r => Number(r.refId) === Number(taskId));
+            assert.ok(taskRemEn);
+            assert.ok(taskRemEn.title.includes('[Personal Task]'), `Título esperado en inglés, recibió: ${taskRemEn.title}`);
+            assert.ok(taskRemEn.message.includes('Entrega Final E2EE'));
+
+            const testPushEnRes = await request({
+                port,
+                method: 'POST',
+                reqPath: '/api/reminders/test-push',
+                headers: { Cookie: adminCookie },
+                body: { publicBaseUrl: 'http://203.0.113.20:3000' }
+            });
+            assert.strictEqual(testPushEnRes.status, 200);
+            const pushEn = JSON.parse(capturedPushes[capturedPushes.length - 1].options.body);
+            assert.strictEqual(pushEn.title, 'Personal Daily Hub - Phone Connected');
+            assert.ok(pushEn.actions.some(a => a.label === 'Open App'));
+            assert.ok(pushEn.actions.some(a => a.label === 'Snooze 15m'));
+            assert.ok(pushEn.actions.some(a => a.label === 'Skip'));
+
+            // 4. Respuesta de /api/reminders/action respetando lang=es con token firmado real
+            const snoozeUrlObj = new URL(pushEn.actions[1].url);
+            const actionResEs = await request({
+                port,
+                method: 'POST',
+                reqPath: `${snoozeUrlObj.pathname}${snoozeUrlObj.search}&lang=es`
+            });
+            assert.strictEqual(actionResEs.status, 200);
+            assert.ok(JSON.parse(actionResEs.body).message.includes('Notificación de prueba pospuesta 15 minutos.'));
+        } finally {
+            globalThis.fetch = originalFetch;
+            await request({
+                port,
+                method: 'PATCH',
+                reqPath: `/api/toggle-agenda/${taskId}`,
+                headers: { Cookie: adminCookie },
+                body: { estado: 'done' }
+            });
+            await request({
+                port,
+                method: 'PUT',
+                reqPath: '/api/settings',
+                headers: { Cookie: adminCookie },
+                body: {
+                    uiLanguage: prevSettings.uiLanguage || 'en',
+                    phoneNotificationsEnabled: Boolean(prevSettings.phoneNotificationsEnabled),
+                    ntfyTopic: prevSettings.ntfyTopic || ''
                 }
             });
         }
