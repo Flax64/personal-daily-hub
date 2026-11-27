@@ -2018,7 +2018,71 @@
         ['Smart commute extra buffer minutes must be an integer between 5 and 120.', 'Los minutos extra de traslado deben ser un entero entre 5 y 120.'],
         ['Smart commute repeat interval must be an integer between 1 and 30 minutes.', 'El intervalo de repetición de traslado debe ser un entero entre 1 y 30 minutos.'],
         ['Near-campus alert minutes must be a list of positive integers between 1 and 180 (e.g. 20, 15, 10).', 'Los avisos cerca del campus deben ser una lista de enteros positivos entre 1 y 180 (ej. 20, 15, 10).'],
-        ['Proximity radius must be between 0.05 and 10 km.', 'El radio de cercanía debe estar entre 0.05 y 10 km.']
+        ['Proximity radius must be between 0.05 and 10 km.', 'El radio de cercanía debe estar entre 0.05 y 10 km.'],
+
+        // --- Language Studios: Hangul, Alphabet (+AI), Korean Read-Only & Comparator ---
+        ['🇰🇷 Korean Symbol Practice (Hangul Jamo, Batchim & Syllable Builder)', '🇰🇷 Práctica de Símbolos Coreanos (Hangul Jamo, Batchim y Armado de Sílabas)'],
+        ['Explore all 40 Hangul letters and the 7 final consonant (Batchim) rules, combine Unicode blocks (초성 + 중성 + 종성), listen to their pronunciation, and save the full alphabet to your Word notes.', 'Explora las 40 letras del Hangul y las 7 reglas de consonante final (Batchim), combina bloques Unicode (초성 + 중성 + 종성), escucha su pronunciación y guarda el alfabeto completo en tus notas Word.'],
+        ['Open the Word notebook viewer filtered on the Korean section', 'Abrir el visor del cuaderno Word filtrado en el apartado de Coreano'],
+        ['Save the full Korean alphabet and composition rules to Notes and Word Notebook', 'Guardar el alfabeto coreano completo y reglas de composición en Notas y Cuaderno Word'],
+        ['Filter Korean symbols', 'Filtrar símbolos coreanos'],
+        ['All (40 Jamo + Batchim)', 'Todos (40 Jamo + Batchim)'],
+        ['Basic Vowels (10)', 'Vocales Básicas (10)'],
+        ['Compound Vowels (11)', 'Vocales Compuestas (11)'],
+        ['Consonants (14)', 'Consonantes (14)'],
+        ['Double / Tense (5)', 'Dobles / Tensas (5)'],
+        ['Batchim Rules (7 finals)', 'Reglas Batchim (7 finales)'],
+        ['Select a Korean symbol to practice', 'Selecciona un símbolo coreano para practicar'],
+        ['🔊 Listen', '🔊 Escuchar'],
+        ['🧱 Korean Syllable Builder (초성 + 중성 + 종성)', '🧱 Constructor de Sílabas Coreanas (초성 + 중성 + 종성)'],
+        ['Vertical vowels (ㅏ, ㅓ, ㅣ) go to the right of the consonant; horizontal vowels (ㅗ, ㅜ, ㅡ) go underneath. Final Batchim (종성) always closes the block at the bottom.', 'Las vocales verticales (ㅏ, ㅓ, ㅣ) se colocan a la derecha de la consonante; las horizontales (ㅗ, ㅜ, ㅡ) van debajo. El Batchim (종성) siempre cierra el bloque abajo.'],
+        ['1. Initial Consonant (초성)', '1. Consonante Inicial (초성)'],
+        ['2. Medial Vowel (중성)', '2. Vocal Medial (중성)'],
+        ['3. Final Batchim (종성 · optional)', '3. Batchim Final (종성 · opcional)'],
+        ['Horizontal Block + bottom Batchim (C + V above / F below)', 'Bloque Horizontal + Batchim inferior (C + V arriba / F abajo)'],
+        ['🔊 Listen to Block', '🔊 Escuchar Bloque'],
+        ['🎲 Random Combine', '🎲 Combinar Aleatorio'],
+        ['Pass this syllable or word into the glossary form to save it', 'Pasar esta sílaba o palabra al formulario para guardarla en tu glosario'],
+        ['↘ Use in Glossary', '↘ Usar en Glosario'],
+        ['🎯 Hangul Recognition Mini Quiz', '🎯 Mini Quiz de Reconocimiento Hangul'],
+        ['What sound does this symbol have?', '¿Qué sonido tiene este símbolo?'],
+        ['Next Question →', 'Siguiente Pregunta →'],
+        ['🔤 Alphabets, Phonetics & Composition Rules by Language (+ AI)', '🔤 Alfabetos, Fonética y Reglas de Composición por Idioma (+ IA)'],
+        ['Generate with Gemini AI (or local structured guide) how each symbol sounds and how vowels, consonants, or characters combine into syllables and words. Save it in Notes and your Word Alphabets section.', 'Genera con Gemini IA (o guía estructurada local) cómo suena cada símbolo y cómo se combinan vocales, consonantes o caracteres para formar sílabas y palabras. Guárdalo en Notas y en el apartado de Alfabetos de tu Word.'],
+        ['View this language’s alphabets and notes in the Word notebook', 'Ver los alfabetos y notas de este idioma en el cuaderno Word'],
+        ['Alphabet Language', 'Idioma del Alfabeto'],
+        ['🇰🇷 Korean (Hangul · 자모 & Composition)', '🇰🇷 Coreano (Hangul · 자모 y Composición)'],
+        ['🇺🇸 English (26 Letters, Vowels & Digraphs)', '🇺🇸 Inglés (26 Letras, Vocales y Dígrafos)'],
+        ['🇯🇵 Japanese (Hiragana, Katakana & Kanji)', '🇯🇵 Japonés (Hiragana, Katakana y Kanji)'],
+        ['🎵 Hybrid K-Pop (Korean + English)', '🎵 K-Pop Híbrido (Coreano + Inglés)'],
+        ['🎌 Hybrid J-Pop (Japanese + English)', '🎌 J-Pop Híbrido (Japonés + Inglés)'],
+        ['Generation Engine', 'Motor de Generación'],
+        ['Automatic (Gemini AI or Local Guide)', 'Automático (Gemini IA o Guía Local)'],
+        ['Google Gemini AI (Deep)', 'Google Gemini IA (Profundo)'],
+        ['Local Structured Guide (Instant)', 'Guía Estructurada Local (Instantánea)'],
+        ['Focus or specific AI question (optional)', 'Enfoque o duda específica para la IA (opcional)'],
+        ['e.g. Explain how Batchim linking (연음) or silent English letters work...', 'Ej. Explica cómo se enlazan los Batchim (연음) o las letras mudas del inglés...'],
+        ['Save current guide to the Notes & Alphabets section in Word', 'Guardar la guía actual en el apartado de Notas y Alfabetos del Word'],
+        ['☁️ Auto-save on generate', '☁️ Auto-guardar al generar'],
+        ['Read-only view matching your Google Drive document (Basic Vowels, Compound Vowels, Consonants, Double/Tense, Batchim, Sound Linking 연음 & Examples). Does not modify or save anything.', 'Vista de solo lectura idéntica a tu documento de Google Drive (Vocales Básicas, Compuestas, Consonantes, Dobles/Tensas, Batchim, Enlace Sonoro 연음 y Ejemplos). No modifica ni guarda nada.'],
+        ['👁️ Read-Only · No Saving', '👁️ Solo Vista · Sin Guardar'],
+        ['Check read-only changes from your Korean Practice Google Drive folder', 'Consultar cambios en modo solo lectura desde tu carpeta Korean Practice de Google Drive'],
+        ['Search symbol, sound, or rule (e.g. ㅓ, Batchim, 연음, 사랑)...', 'Buscar símbolo, sonido o regla (ej. ㅓ, Batchim, 연음, 사랑)...'],
+        ['📁 Linked to Google Drive: Korean Alphabet (Hangul) & Word Formation Logic.docx', '📁 Vinculado a Google Drive: Alfabeto Coreano (Hangul) y Lógica de Formación de Palabras.docx'],
+        ['Type or paste any Korean symbol, syllable, or word to identify it, see how it sounds according to your Drive Korean Practice notes, and compare side by side. Never saves to Word or the database.', 'Escribe o pega cualquier símbolo, sílaba o palabra en coreano para identificar cuál es, cómo suena según tus notas de Korean Practice en Drive y compararlo lado a lado. No guarda nada en Word ni en la base de datos.'],
+        ['Return to the full Korean alphabet view', 'Volver a la vista completa del alfabeto coreano'],
+        ['e.g. ㅓ, ㅋ, 한국어, 사랑해...', 'Ej. ㅓ, ㅋ, 한국어, 사랑해...'],
+        ['Clear comparator fields', 'Limpiar campos del comparador'],
+        ['e.g. ㅗ, ㄱ, ㄲ, ㅔ...', 'Ej. ㅗ, ㄱ, ㄲ, ㅔ...'],
+        ['Frequent pairs to compare:', 'Pares frecuentes para comparar:'],
+        ['⌨️ Hangul Virtual Keyboard (tap symbols on PC without a Korean keyboard)', '⌨️ Teclado Virtual Hangul (toca símbolos si estás en PC sin teclado coreano)'],
+        ['Weekly Clinician View', 'Vista Semanal Clínica'],
+        ['Source language', 'Idioma origen'],
+        ['Target language (English or Spanish)', 'Idioma destino (Inglés o Español)'],
+        ['✓ Mark done', '✓ Marcar hecha'],
+        ['⏳ 1 hour in progress', '⏳ 1 hora en progreso'],
+        ['Pending', 'Pendiente'],
+        ['No Gemini key saved yet (Instant built-in 0-RAM Korean Romanization & EN/KR analyzer active).', 'Aún no hay clave de Gemini guardada (romanizador coreano instantáneo 0-RAM y analizador EN/KR activos).']
     ];
 
     var EN_FROM_KEY = new Map();
@@ -2577,6 +2641,23 @@
         if ((m = trim.match(/^⏳\s*(?:1 hour in progress|Llevas 1 hora en progreso):\s*(.+)$/i))) {
             return pick('⏳ 1 hour in progress: ', '⏳ Llevas 1 hora en progreso: ') + m[1];
         }
+        if ((m = trim.match(/^(?:Score|Aciertos):\s*(\d+)\s*\/\s*(\d+)$/i))) {
+            return pick('Score: ', 'Aciertos: ') + m[1] + ' / ' + m[2];
+        }
+        if ((m = trim.match(/^(\d+)\s+(?:record|records|registro|registros)$/i))) {
+            var recCount = Number(m[1]);
+            return m[1] + ' ' + (recCount === 1 ? pick('record', 'registro') : pick('records', 'registros'));
+        }
+        if ((m = trim.match(/^(?:Active key|Clave activa):\s*(.+)$/i))) {
+            return pick('Active key: ', 'Clave activa: ') + m[1];
+        }
+        if ((m = trim.match(/^(?:Smart commute alerts|Alertas inteligentes de traslado)\s+(active|paused|activas|pausadas)\s*·\s*\+(\d+)\s*min\s*(?:buffer|margen)\s*·\s*(?:repeat every|repetir cada)\s*(\d+)\s*min\s*·\s*(?:Near|Cerca):\s*([0-9,\s]+)\s*min\s*·\s*(?:Radius|Radio):\s*([0-9.]+)\s*km$/i))) {
+            var isActiveComm = m[1].toLowerCase() === 'active' || m[1].toLowerCase() === 'activas';
+            return pick(
+                'Smart commute alerts ' + (isActiveComm ? 'active' : 'paused') + ' · +' + m[2] + ' min buffer · repeat every ' + m[3] + ' min · Near: ' + m[4].trim() + ' min · Radius: ' + m[5] + ' km',
+                'Alertas inteligentes de traslado ' + (isActiveComm ? 'activas' : 'pausadas') + ' · +' + m[2] + ' min margen · repetir cada ' + m[3] + ' min · Cerca: ' + m[4].trim() + ' min · Radio: ' + m[5] + ' km'
+            );
+        }
         return null;
     }
 
@@ -2760,6 +2841,29 @@
                 }
             }
 
+            if (typeof rootEl.querySelectorAll === 'function') {
+                var calWeekHeaders = rootEl.querySelectorAll('.agenda-cal-weekdays');
+                var wdEn = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+                var wdEs = ['L', 'M', 'Mi', 'J', 'V', 'S', 'D'];
+                var wdList = currentLang === 'es' ? wdEs : wdEn;
+                for (var cIdx = 0; cIdx < calWeekHeaders.length; cIdx++) {
+                    var spans = calWeekHeaders[cIdx].querySelectorAll('span');
+                    for (var sIdx = 0; sIdx < spans.length && sIdx < 7; sIdx++) {
+                        if (spans[sIdx].textContent !== wdList[sIdx]) {
+                            spans[sIdx].textContent = wdList[sIdx];
+                        }
+                    }
+                }
+                var plannerWdBtns = rootEl.querySelectorAll('.agenda-weekday-btn[data-weekday]');
+                for (var pIdx = 0; pIdx < plannerWdBtns.length; pIdx++) {
+                    var pBtn = plannerWdBtns[pIdx];
+                    var wdNum = Number(pBtn.getAttribute('data-weekday'));
+                    if (wdNum >= 1 && wdNum <= 7 && pBtn.textContent !== wdList[wdNum - 1]) {
+                        pBtn.textContent = wdList[wdNum - 1];
+                    }
+                }
+            }
+
             syncToggleButtons();
             syncDocumentMeta();
         } finally {
@@ -2890,6 +2994,7 @@
 
     function setLang(nextLang, options) {
         var opts = options || {};
+        var source = opts.source || 'user';
         var resolved = normalizeLang(nextLang);
         var changed = resolved !== currentLang;
         currentLang = resolved;
@@ -2897,6 +3002,9 @@
         if (opts.persist !== false) {
             try {
                 if (root.localStorage) root.localStorage.setItem(STORAGE_KEY, resolved);
+                if (source !== 'server' && root.sessionStorage) {
+                    root.sessionStorage.setItem('pdh_ui_lang_explicit', '1');
+                }
             } catch (_) {}
         }
 
@@ -2907,7 +3015,7 @@
         if (changed || opts.forceNotify) {
             listeners.forEach(function (fn) {
                 try {
-                    fn(resolved);
+                    fn(resolved, { source: source, changed: changed });
                 } catch (_) {}
             });
         }

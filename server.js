@@ -79,6 +79,16 @@ const serverNotesService = require('./lib/server-notes-service');
 const { withMySqlAdvisoryLock } = require('./lib/distributed-lock');
 const { buildSafeRcloneExecEnv } = serverNotesService;
 const { createServerLogger, isAutomatedTestEnv } = require('./lib/server-logger');
+const {
+    isValidStrictUiLang,
+    normalizeUiLang,
+    resolveRequestUiLang,
+    tServer,
+    getReminderCategoryLabel,
+    localizeTrafficLabel,
+    localizeOriginLabel,
+    localizeItsBuildingLabel
+} = require('./lib/server-i18n');
 
 const REPLICA_ID = String(process.env.REPLICA_ID || os.hostname() || 'app').trim().slice(0, 64) || 'app';
 const APP_SLOT_NAME = String(process.env.APP_SLOT || '').trim().toLowerCase();
@@ -5884,6 +5894,7 @@ function sanitizeAcademicPlanner(rawPlanner = {}, basePlanner = getDefaultAcadem
 
 function getDefaultUserSettings() {
     return {
+        uiLanguage: 'en',
         defaultAgendaCategory: 'all',
         defaultAgendaLayout: 'auto',
         agendaShowWeekend: true,
@@ -5984,6 +5995,7 @@ function sanitizeSettingsForClient(settings = {}) {
     const hasJournalDownloadPwd = Boolean(resolveJournalDownloadPasswordFromSettings({ journalDownloadPassword }));
     return {
         ...rest,
+        uiLanguage: normalizeUiLang(rest.uiLanguage, 'en'),
         geminiApiKeyConfigured: hasUserKey || hasEnvKey,
         geminiKeySource: hasUserKey ? 'user' : (hasEnvKey ? 'server_env' : 'none'),
         geminiApiKeyHint: hasUserKey
@@ -6047,6 +6059,14 @@ function validateTimeZoneName(rawTz, fallbackTz) {
 
 function validateUserSettingsPayload(input = {}, base = getDefaultUserSettings()) {
     const next = { ...base };
+    next.uiLanguage = normalizeUiLang(base.uiLanguage, 'en');
+
+    if (input.uiLanguage !== undefined) {
+        if (!isValidStrictUiLang(input.uiLanguage)) {
+            return { error: tServer('en', 'error.invalid_ui_language') };
+        }
+        next.uiLanguage = normalizeUiLang(input.uiLanguage);
+    }
 
     if (input.defaultAgendaCategory !== undefined) {
         const val = String(input.defaultAgendaCategory).trim().toLowerCase();
@@ -6454,6 +6474,7 @@ function resolveUserOriginCoords(planner, isFirstClassOrShift = true) {
 function computeCandidateReminders({
     settings,
     localNow,
+    lang = null,
     moodLogsToday = [],
     sleepLogsToday = [],
     agendaItemsToday = [],
@@ -6461,8 +6482,37 @@ function computeCandidateReminders({
     inProgressItems = [],
     queueCounts = { journal: 0, english: 0 }
 }) {
+    const uiLang = normalizeUiLang(lang || settings?.uiLanguage, 'en');
     const candidates = [];
     const { dateStr, weekday, minutesOfDay } = localNow;
+    const attachMeta = (item) => {
+        const actions = [];
+        if (item.ackKey || ['class', 'residencias', 'work'].includes(item.type)) {
+            actions.push({ id: 'ack', label: tServer(uiLang, 'action.ok') });
+        }
+        if (item.canComplete && item.refId) {
+            actions.push({ id: 'complete', label: tServer(uiLang, 'action.mark_done') });
+        }
+        if (item.canSnooze) {
+            actions.push(
+                { id: 'snooze_15', label: tServer(uiLang, 'action.snooze_15m'), minutes: 15 },
+                { id: 'snooze_30', label: tServer(uiLang, 'action.snooze_30m'), minutes: 30 },
+                { id: 'snooze_60', label: tServer(uiLang, 'action.snooze_1h'), minutes: 60 }
+            );
+        }
+        actions.push({
+            id: 'dismiss',
+            label: String(item.key || '').startsWith('task-inprog:')
+                ? tServer(uiLang, 'action.ok_dismiss')
+                : tServer(uiLang, 'action.dismiss')
+        });
+        return {
+            ...item,
+            lang: uiLang,
+            categoryLabel: getReminderCategoryLabel(uiLang, item.type),
+            actions
+        };
+    };
 
     // 1. Automatic Mood Tracker mid-window reminders + Pending earlier mood check-ins
     if (settings.moodRemindersEnabled) {
@@ -6473,19 +6523,20 @@ function computeCandidateReminders({
             (!w.optional || settings.moodIncludeLateNight)
         );
         if (activeWin && minutesOfDay >= activeWin.triggerMin && !loggedMoments.has(activeWin.key)) {
-            candidates.push({
+            const locMoment = tServer(uiLang, `mood.moment.${activeWin.key}`);
+            candidates.push(attachMeta({
                 key: `mood:${dateStr}:${activeWin.key}`,
                 type: 'mood',
                 refId: null,
-                title: `Mood Check-in (${activeWin.label})`,
-                message: `Mid-${activeWin.label.toLowerCase()} check-in: log how you feel right now in Daily Hub.`,
+                title: tServer(uiLang, 'mood.mid_title', { moment: locMoment }),
+                message: tServer(uiLang, 'mood.mid_message', { momentLower: locMoment.toLowerCase() }),
                 targetView: 'mood',
                 targetDate: dateStr,
                 targetMoment: activeWin.key,
                 pendingMoments: [activeWin.key],
                 canSnooze: true,
                 canComplete: false
-            });
+            }));
         }
 
         if (settings.moodNotifyPending !== false) {
@@ -6495,22 +6546,22 @@ function computeCandidateReminders({
                 !loggedMoments.has(w.key)
             );
             if (missedWindows.length > 0) {
-                const missedLabels = missedWindows.map(w => w.label).join(', ');
+                const missedLabels = missedWindows.map(w => tServer(uiLang, `mood.moment.${w.key}`)).join(', ');
                 const firstMissed = missedWindows[0];
                 const latestMissed = missedWindows[missedWindows.length - 1];
-                candidates.push({
+                candidates.push(attachMeta({
                     key: `mood-pending:${dateStr}:${latestMissed.key}`,
                     type: 'mood',
                     refId: null,
-                    title: `Pending Mood Check-in (${missedLabels})`,
-                    message: `You still have unlogged mood block(s) for today (${missedLabels}). Tap to record your mood in Daily Hub.`,
+                    title: tServer(uiLang, 'mood.pending_title', { moments: missedLabels }),
+                    message: tServer(uiLang, 'mood.pending_message', { moments: missedLabels }),
                     targetView: 'mood',
                     targetDate: dateStr,
                     targetMoment: firstMissed.key,
                     pendingMoments: missedWindows.map(w => w.key),
                     canSnooze: true,
                     canComplete: false
-                });
+                }));
             }
         }
     }
@@ -6550,31 +6601,33 @@ function computeCandidateReminders({
             if (pendingBedtimeRow) {
                 const isDesveloPending = Number(pendingBedtimeRow.es_desvelo) === 1 || pendingBedtimeRow.tipo_registro === 'desvelo_tarde';
                 const targetDateVal = pendingBedtimeRow.fecha ? String(pendingBedtimeRow.fecha).slice(0, 10) : dateStr;
-                candidates.push({
+                candidates.push(attachMeta({
                     key: `sleep-wakeup:${dateStr}`,
                     type: 'sleep',
                     refId: pendingBedtimeRow.id || null,
-                    title: 'Finish Morning Sleep Log',
-                    message: isDesveloPending
-                        ? `You logged bedtime at ${pendingBedtimeRow.hora_dormir} (Desvelo). Tap to record when you woke up.`
-                        : `You logged bedtime at ${pendingBedtimeRow.hora_dormir}. Tap to record when you woke up.`,
+                    title: tServer(uiLang, 'sleep.wakeup_title'),
+                    message: tServer(
+                        uiLang,
+                        isDesveloPending ? 'sleep.wakeup_desvelo_message' : 'sleep.wakeup_normal_message',
+                        { bedtime: pendingBedtimeRow.hora_dormir }
+                    ),
                     targetView: 'sueno',
                     targetDate: targetDateVal,
                     canSnooze: true,
                     canComplete: false
-                });
+                }));
             } else if (todayNonNapRows.length === 0) {
-                candidates.push({
+                candidates.push(attachMeta({
                     key: `sleep:${dateStr}`,
                     type: 'sleep',
                     refId: null,
-                    title: 'Morning Sleep Log',
-                    message: 'Remember to log last night’s bedtime, wake-up time, and rest quality. You can snooze if needed.',
+                    title: tServer(uiLang, 'sleep.morning_title'),
+                    message: tServer(uiLang, 'sleep.morning_message'),
                     targetView: 'sueno',
                     targetDate: dateStr,
                     canSnooze: true,
                     canComplete: false
-                });
+                }));
             }
         }
     }
@@ -6602,24 +6655,29 @@ function computeCandidateReminders({
 
             if (minutesOfDay >= triggerMin && minutesOfDay <= windowEndMin) {
                 const catLabel = item.categoria === 'universidad'
-                    ? (item.materia_nombre ? String(item.materia_nombre).trim() : 'University')
-                    : 'Personal';
+                    ? (item.materia_nombre ? String(item.materia_nombre).trim() : tServer(uiLang, 'agenda.cat.universidad'))
+                    : tServer(uiLang, 'agenda.cat.personal');
                 const isOverdueToday = tipo === 'tarea' && minutesOfDay > itemMin + 30;
-                const typeLabel = tipo === 'tarea' ? (isOverdueToday ? 'Pending Task' : 'Task') : 'Event';
+                const typeLabel = tipo === 'tarea'
+                    ? tServer(uiLang, isOverdueToday ? 'agenda.type.pending_task' : 'agenda.type.task')
+                    : tServer(uiLang, 'agenda.type.event');
                 if (tipo === 'tarea') notifiedTaskIds.add(Number(item.id));
-                candidates.push({
+                const suffix = itemLead > 0 && minutesOfDay < itemMin
+                    ? tServer(uiLang, 'agenda.starts_at_suffix', { time: item.hora })
+                    : (isOverdueToday ? tServer(uiLang, 'agenda.overdue_suffix') : '');
+                candidates.push(attachMeta({
                     key: `agenda:${item.id}:${dateStr}`,
                     type: 'agenda',
                     refId: item.id,
-                    title: `[${catLabel} ${typeLabel}] ${item.hora}`,
-                    message: `${item.actividad}${itemLead > 0 && minutesOfDay < itemMin ? ` (starts at ${item.hora})` : (isOverdueToday ? ' — Pending completion' : '')}`,
+                    title: tServer(uiLang, 'agenda.item_title', { category: catLabel, typeLabel, time: item.hora }),
+                    message: `${item.actividad}${suffix}`,
                     targetView: 'agenda',
                     targetDate: item.fecha || dateStr,
                     targetTime: item.hora || '',
                     targetBlock: item.bloque || '',
                     canSnooze: true,
                     canComplete: true
-                });
+                }));
             }
         });
 
@@ -6636,21 +6694,21 @@ function computeCandidateReminders({
                 if (!isPastDay && minutesOfDay < taskMin) return;
 
                 const catLabel = task.categoria === 'universidad'
-                    ? (task.materia_nombre ? String(task.materia_nombre).trim() : 'University')
-                    : 'Personal';
-                candidates.push({
+                    ? (task.materia_nombre ? String(task.materia_nombre).trim() : tServer(uiLang, 'agenda.cat.universidad'))
+                    : tServer(uiLang, 'agenda.cat.personal');
+                candidates.push(attachMeta({
                     key: `task-pending:${task.id}:${dateStr}`,
                     type: 'agenda',
                     refId: task.id,
-                    title: `[Pending ${catLabel} Task] ${task.fecha === dateStr ? task.hora : task.fecha}`,
-                    message: `${task.actividad} (To Do — tap Mark Done when finished)`,
+                    title: tServer(uiLang, 'agenda.pending_title', { category: catLabel, when: task.fecha === dateStr ? task.hora : task.fecha }),
+                    message: tServer(uiLang, 'agenda.pending_message', { activity: task.actividad }),
                     targetView: 'agenda',
                     targetDate: task.fecha || dateStr,
                     targetTime: task.hora || '',
                     targetBlock: task.bloque || '',
                     canSnooze: true,
                     canComplete: true
-                });
+                }));
             });
         }
 
@@ -6677,21 +6735,21 @@ function computeCandidateReminders({
 
             const cycleSec = Math.floor(enProgresoDesdeMs / 1000);
             const followUpKey = `task-inprog:${item.id}:${cycleSec}`;
-            const actText = String(item.actividad || 'Tarea').trim();
-            candidates.push({
+            const actText = String(item.actividad || tServer(uiLang, 'agenda.default_task_name')).trim();
+            candidates.push(attachMeta({
                 key: followUpKey,
                 type: 'agenda',
                 isInProgressFollowUp: true,
                 refId: item.id,
-                title: `⏳ Llevas 1 hora en progreso: ${actText.slice(0, 95)}`,
-                message: `⏳ Llevas 1 hora en progreso: ${actText}. ¿Ya la terminaste o necesitas posponerla?`,
+                title: tServer(uiLang, 'agenda.in_progress_title', { activity: actText.slice(0, 95) }),
+                message: tServer(uiLang, 'agenda.in_progress_message', { activity: actText }),
                 targetView: 'agenda',
                 targetDate: item.fecha || dateStr,
                 targetTime: item.hora || '',
                 targetBlock: item.bloque || '',
                 canSnooze: true,
                 canComplete: true
-            });
+            }));
         }
     }
 
@@ -6733,10 +6791,14 @@ function computeCandidateReminders({
                 if (!isFirstOrAfterLongBreak && prevRoomMeta && !liveCurrCoords) {
                     originInfo = {
                         coords: { lat: prevRoomMeta.lat, lng: prevRoomMeta.lng },
-                        sourceLabel: `Aula ${prevRoomMeta.room} (${prevRoomMeta.campusName})`
+                        sourceLabel: tServer(uiLang, 'commute.origin_room', { room: prevRoomMeta.room, campus: prevRoomMeta.campusName })
                     };
                 } else {
-                    originInfo = resolveUserOriginCoords(planner, isFirstOrAfterLongBreak);
+                    const rawOrigin = resolveUserOriginCoords(planner, isFirstOrAfterLongBreak);
+                    originInfo = {
+                        coords: rawOrigin.coords,
+                        sourceLabel: localizeOriginLabel(uiLang, rawOrigin.sourceLabel)
+                    };
                 }
 
                 const commute = estimateCommuteDetails({
@@ -6758,11 +6820,18 @@ function computeCandidateReminders({
 
                 if (activeStageMin !== null) {
                     const seriesKey = `class:${activeSem.id}:${course.id}:${dateStr}`;
+                    const locTraffic = localizeTrafficLabel(uiLang, commute.trafficLabel);
+                    const locBuilding = localizeItsBuildingLabel(uiLang, roomMeta.building);
                     const routeSummary = commute.isNear
-                        ? `En el Tec / cerca (~${commute.walkMinutes} min caminando desde ${originInfo.sourceLabel})`
-                        : `Desde ${originInfo.sourceLabel}: ~${commute.driveMinutes} min en carro (${commute.trafficLabel}, ${commute.roadDistanceKm || '--'} km)`;
+                        ? tServer(uiLang, 'commute.route_near', { walkMin: commute.walkMinutes, origin: originInfo.sourceLabel })
+                        : tServer(uiLang, 'commute.route_drive', {
+                            origin: originInfo.sourceLabel,
+                            driveMin: commute.driveMinutes,
+                            traffic: locTraffic,
+                            distanceKm: commute.roadDistanceKm || '--'
+                        });
 
-                    candidates.push({
+                    candidates.push(attachMeta({
                         key: `${seriesKey}:m${activeStageMin}`,
                         seriesKey,
                         ackKey: seriesKey,
@@ -6771,15 +6840,21 @@ function computeCandidateReminders({
                         commuteZone: commute.commuteZone,
                         type: 'class',
                         refId: null,
-                        title: `[Clase ITS ${course.startTime}] ${course.name} · Aula ${roomMeta.room}`,
-                        message: `${roomMeta.campusName} (${roomMeta.plano} · ${roomMeta.building}). ${routeSummary}. Aviso ${activeStageMin} min antes.`,
+                        title: tServer(uiLang, 'commute.class_title', { time: course.startTime, course: course.name, room: roomMeta.room }),
+                        message: tServer(uiLang, 'commute.class_message', {
+                            campus: roomMeta.campusName,
+                            plano: roomMeta.plano,
+                            building: locBuilding,
+                            route: routeSummary,
+                            stageMin: activeStageMin
+                        }),
                         targetView: 'horario',
                         targetTab: 'semesters',
                         targetDate: dateStr,
                         mapsUrl: commute.mapsUrl,
                         canSnooze: true,
                         canComplete: false
-                    });
+                    }));
                 }
             });
         }
@@ -6811,13 +6886,22 @@ function computeCandidateReminders({
 
         if (activeStageMin !== null) {
             const seriesKey = `residencias:${dateStr}:${planner.residencias.startTime}`;
-            const placeLabel = planner.residencias.companyName || planner.residencias.location?.label || 'Residencias Profesionales';
+            const rawPlace = planner.residencias.companyName || planner.residencias.location?.label || '';
+            const placeLabel = rawPlace && rawPlace !== 'Empresa de Residencias'
+                ? rawPlace
+                : tServer(uiLang, 'commute.residencias_default_place');
+            const locTraffic = localizeTrafficLabel(uiLang, commute.trafficLabel);
             const transitText = isRemoteRes
-                ? 'Modalidad remota — prepárate para iniciar sesión.'
+                ? tServer(uiLang, 'commute.residencias_remote')
                 : (commute.isNear
-                    ? `Cerca de ${placeLabel} (~${commute.walkMinutes} min caminando). Aviso ${activeStageMin} min antes.`
-                    : `Traslado en carro: ~${commute.driveMinutes} min (${commute.trafficLabel}) hacia ${placeLabel}. Aviso ${activeStageMin} min antes.`);
-            candidates.push({
+                    ? tServer(uiLang, 'commute.residencias_near', { place: placeLabel, walkMin: commute.walkMinutes, stageMin: activeStageMin })
+                    : tServer(uiLang, 'commute.residencias_drive', {
+                        driveMin: commute.driveMinutes,
+                        traffic: locTraffic,
+                        place: placeLabel,
+                        stageMin: activeStageMin
+                    }));
+            candidates.push(attachMeta({
                 key: `${seriesKey}:m${activeStageMin}`,
                 seriesKey,
                 ackKey: seriesKey,
@@ -6826,7 +6910,7 @@ function computeCandidateReminders({
                 commuteZone: isRemoteRes ? 'remote' : commute.commuteZone,
                 type: 'residencias',
                 refId: null,
-                title: `[Residencias ${planner.residencias.startTime}] ${placeLabel}`,
+                title: tServer(uiLang, 'commute.residencias_title', { time: planner.residencias.startTime, place: placeLabel }),
                 message: `${planner.residencias.projectName ? `${planner.residencias.projectName}. ` : ''}${transitText}`,
                 targetView: 'horario',
                 targetTab: 'residencias',
@@ -6834,7 +6918,7 @@ function computeCandidateReminders({
                 mapsUrl: isRemoteRes ? '' : commute.mapsUrl,
                 canSnooze: true,
                 canComplete: false
-            });
+            }));
         }
     }
 
@@ -6861,14 +6945,26 @@ function computeCandidateReminders({
 
         if (activeStageMin !== null) {
             const seriesKey = `work:${dateStr}:${planner.work.startTime}`;
-            const shiftTypeLabel = planner.work.scheduleType === 'tiempo_completo' ? 'Tiempo Completo' : 'Medio Tiempo';
-            const companyLabel = planner.work.companyName || planner.work.location?.label || 'Trabajo';
+            const shiftKey = planner.work.scheduleType === 'tiempo_completo'
+                ? 'commute.work_shift_full'
+                : (planner.work.scheduleType === 'por_turnos' ? 'commute.work_shift_rot' : 'commute.work_shift_part');
+            const shiftTypeLabel = tServer(uiLang, shiftKey);
+            const rawComp = planner.work.companyName || planner.work.location?.label || '';
+            const companyLabel = rawComp && rawComp !== 'Lugar de Trabajo'
+                ? rawComp
+                : tServer(uiLang, 'commute.work_default_place');
+            const locTraffic = localizeTrafficLabel(uiLang, commute.trafficLabel);
             const transitText = isRemoteWork
-                ? 'Turno remoto por iniciar.'
+                ? tServer(uiLang, 'commute.work_remote')
                 : (commute.isNear
-                    ? `Cerca de ${companyLabel} (~${commute.walkMinutes} min caminando). Aviso ${activeStageMin} min antes.`
-                    : `Ruta en carro: ~${commute.driveMinutes} min (${commute.trafficLabel}) hacia ${companyLabel}. Aviso ${activeStageMin} min antes.`);
-            candidates.push({
+                    ? tServer(uiLang, 'commute.work_near', { company: companyLabel, walkMin: commute.walkMinutes, stageMin: activeStageMin })
+                    : tServer(uiLang, 'commute.work_drive', {
+                        driveMin: commute.driveMinutes,
+                        traffic: locTraffic,
+                        company: companyLabel,
+                        stageMin: activeStageMin
+                    }));
+            candidates.push(attachMeta({
                 key: `${seriesKey}:m${activeStageMin}`,
                 seriesKey,
                 ackKey: seriesKey,
@@ -6877,7 +6973,7 @@ function computeCandidateReminders({
                 commuteZone: isRemoteWork ? 'remote' : commute.commuteZone,
                 type: 'work',
                 refId: null,
-                title: `[Trabajo ${shiftTypeLabel} ${planner.work.startTime}] ${companyLabel}`,
+                title: tServer(uiLang, 'commute.work_title', { shiftType: shiftTypeLabel, time: planner.work.startTime, company: companyLabel }),
                 message: `${planner.work.roleTitle ? `${planner.work.roleTitle} — ` : ''}${transitText}`,
                 targetView: 'horario',
                 targetTab: 'work',
@@ -6885,7 +6981,7 @@ function computeCandidateReminders({
                 mapsUrl: isRemoteWork ? '' : commute.mapsUrl,
                 canSnooze: true,
                 canComplete: false
-            });
+            }));
         }
     }
 
@@ -6893,38 +6989,42 @@ function computeCandidateReminders({
     if (settings.wordEodReminderEnabled) {
         const wordMin = hhmmToMinutes(settings.wordEodReminderTime);
         if (minutesOfDay >= wordMin) {
-            const pendingTotal = Number(queueCounts.journal || 0) + Number(queueCounts.english || 0);
+            const jCnt = Number(queueCounts.journal || 0);
+            const eCnt = Number(queueCounts.english || 0);
+            const pendingTotal = jCnt + eCnt;
             const wordMsg = pendingTotal > 0
-                ? `You have ${queueCounts.journal || 0} Journal and ${queueCounts.english || 0} English note(s) waiting for PC Word sync.`
-                : 'End-of-day check: verify your Journal and English Word documents or add any final notes before bed.';
-            candidates.push({
+                ? tServer(uiLang, 'word.eod_pending_message', { journalCount: jCnt, englishCount: eCnt })
+                : tServer(uiLang, 'word.eod_clear_message');
+            candidates.push(attachMeta({
                 key: `word:${dateStr}`,
                 type: 'word',
                 refId: null,
-                title: 'End-of-Day Word Notes Check',
+                title: tServer(uiLang, 'word.eod_title'),
                 message: wordMsg,
                 targetView: pendingTotal > 0 ? 'journal' : 'english',
                 canSnooze: true,
                 canComplete: false
-            });
+            }));
         }
     }
 
-    // 6. Configurable English Study reminder (OFF by default!)
+    // 6. Configurable Language Study reminder (OFF by default!)
     if (settings.englishReminderEnabled) {
         const allowedDays = Array.isArray(settings.englishReminderDays) ? settings.englishReminderDays : [];
         const engMin = hhmmToMinutes(settings.englishReminderTime);
         if (allowedDays.includes(weekday) && minutesOfDay >= engMin && minutesOfDay <= Math.min(1439, engMin + 180)) {
-            candidates.push({
+            const rawTopic = String(settings.englishReminderTopic || '').trim();
+            const isDefaultEnTopic = !rawTopic || rawTopic === 'Practice vocabulary, grammar notes, and phrasal verbs' || rawTopic === 'Practice vocabulary, grammar notes, and phrasal verbs.';
+            candidates.push(attachMeta({
                 key: `english:${dateStr}:${settings.englishReminderTime}`,
                 type: 'english',
                 refId: null,
-                title: 'English Study Session',
-                message: settings.englishReminderTopic || 'Practice vocabulary, grammar notes, and phrasal verbs.',
+                title: tServer(uiLang, 'english.study_title'),
+                message: isDefaultEnTopic ? tServer(uiLang, 'english.default_topic') : rawTopic,
                 targetView: 'english',
                 canSnooze: true,
                 canComplete: false
-            });
+            }));
         }
     }
 
@@ -7011,7 +7111,7 @@ function verifyReminderActionToken(userId, reminderKey, token) {
     return false;
 }
 
-async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }) {
+async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId, lang = null }) {
     if (!settings || !settings.phoneNotificationsEnabled || !settings.ntfyTopic) {
         return { skipped: true };
     }
@@ -7020,6 +7120,7 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
         throw new Error(urlCheck.error);
     }
 
+    const uiLang = normalizeUiLang(lang || reminder?.lang || settings?.uiLanguage, 'en');
     const endpoint = `${urlCheck.url}/`;
     const tagMap = {
         mood: 'brain',
@@ -7066,9 +7167,14 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
         const targetUrl = `${baseUrl}/${qs ? `?${qs}` : ''}#${reminder.targetView || 'inicio'}`;
         jsonPayload.click = targetUrl;
         const hasValidMapsUrl = Boolean(reminder.mapsUrl && /^https:\/\/www\.google\.com\/maps\//.test(reminder.mapsUrl));
+        const openAppLabel = reminder.extraQuery?.captureGps === '1'
+            ? tServer(uiLang, 'action.update_gps')
+            : (reminder.targetView === 'agenda'
+                ? tServer(uiLang, 'action.open_agenda')
+                : tServer(uiLang, 'action.open_app'));
         const openAppAction = {
             action: 'view',
-            label: 'Open App',
+            label: openAppLabel,
             url: targetUrl
         };
         const actions = [];
@@ -7103,7 +7209,7 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
 
             actions.push({
                 action: 'http',
-                label: 'OK',
+                label: tServer(uiLang, 'action.ok'),
                 url: `${baseUrl}/api/reminders/action?${ackQs}`,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -7113,7 +7219,7 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
             if (hasValidMapsUrl) {
                 actions.push({
                     action: 'view',
-                    label: 'Google Maps Route',
+                    label: tServer(uiLang, 'action.maps_route'),
                     url: reminder.mapsUrl
                 });
             }
@@ -7154,13 +7260,13 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
             };
 
             const snoozeAction = buildNtfyHttpAction({
-                label: 'Snooze 15m',
+                label: tServer(uiLang, 'action.snooze_15m'),
                 actionName: 'snooze',
                 minutes: 15,
                 clear: true
             });
             const skipAction = buildNtfyHttpAction({
-                label: 'Skip',
+                label: tServer(uiLang, 'action.skip'),
                 actionName: 'skip',
                 minutes: 0,
                 clear: true
@@ -7169,34 +7275,25 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
             if (hasValidMapsUrl) {
                 actions.push(snoozeAction, skipAction, {
                     action: 'view',
-                    label: 'Google Maps Route',
+                    label: tServer(uiLang, 'action.maps_route'),
                     url: reminder.mapsUrl
                 });
             } else if (reminder.canComplete && reminder.refId) {
-                if (String(reminder.key || '').startsWith('task-inprog:')) {
-                    actions.push(
-                        buildNtfyHttpAction({
-                            label: 'Mark Done',
-                            actionName: 'complete_agenda',
-                            minutes: 0,
-                            clear: true
-                        }),
-                        snoozeAction,
-                        buildNtfyHttpAction({
-                            label: 'OK',
-                            actionName: 'dismiss',
-                            minutes: 0,
-                            clear: true
-                        })
-                    );
-                } else {
-                    actions.push(snoozeAction, skipAction, buildNtfyHttpAction({
-                        label: 'Mark Done',
+                actions.push(
+                    buildNtfyHttpAction({
+                        label: tServer(uiLang, 'action.mark_done'),
                         actionName: 'complete_agenda',
                         minutes: 0,
                         clear: true
-                    }));
-                }
+                    }),
+                    snoozeAction,
+                    buildNtfyHttpAction({
+                        label: tServer(uiLang, 'action.ok'),
+                        actionName: 'dismiss',
+                        minutes: 0,
+                        clear: true
+                    })
+                );
             } else {
                 actions.push(openAppAction, snoozeAction, skipAction);
             }
@@ -7205,7 +7302,7 @@ async function sendPhonePushViaNtfy({ settings, reminder, baseUrl = '', userId }
             if (hasValidMapsUrl) {
                 actions.push({
                     action: 'view',
-                    label: 'Google Maps Route',
+                    label: tServer(uiLang, 'action.maps_route'),
                     url: reminder.mapsUrl
                 });
             }
@@ -7237,8 +7334,9 @@ function getDateStrDaysAgo(dateStr, daysAgo = 7) {
     return dt.toISOString().slice(0, 10);
 }
 
-async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req = null } = {}) {
+async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req = null, langOverride = null } = {}) {
     const settings = await loadUserSettings(user.id);
+    const uiLang = resolveRequestUiLang({ settings, req, explicitLang: langOverride });
     const localNow = getLocalNowParts(settings.timezone);
     const baseUrl = buildPublicBaseUrlForUser(settings, req);
     const sevenDaysAgoStr = getDateStrDaysAgo(localNow.dateStr, 7);
@@ -7300,6 +7398,7 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
     const candidates = computeCandidateReminders({
         settings,
         localNow,
+        lang: uiLang,
         moodLogsToday: Array.isArray(moodRows) ? moodRows : [],
         sleepLogsToday: Array.isArray(sleepRows) ? sleepRows : [],
         agendaItemsToday: Array.isArray(agendaRows) ? agendaRows : [],
@@ -7358,14 +7457,16 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
 
         if (shouldMarkPush && dispatchPush && settings.phoneNotificationsEnabled && settings.ntfyTopic) {
             try {
-                await sendPhonePushViaNtfy({ settings, reminder: candidate, baseUrl, userId: user.id });
+                await sendPhonePushViaNtfy({ settings, reminder: candidate, baseUrl, userId: user.id, lang: uiLang });
                 pushSentAtSql = formatMySqlDateTime(new Date());
             } catch (pushErr) {
                 console.error('[PHONE_PUSH_ERROR]', pushErr.message);
             }
         }
 
-        if (!existing || existing.estado === 'snoozed' || pushSentAtSql !== existing.enviado_push_en) {
+        const titleChanged = existing && existing.titulo !== candidate.title.slice(0, 140);
+        const msgChanged = existing && existing.mensaje !== candidate.message.slice(0, 320);
+        if (!existing || existing.estado === 'snoozed' || pushSentAtSql !== existing.enviado_push_en || titleChanged || msgChanged) {
             await dbQueryAsync(
                 `INSERT INTO RecordatoriosEstado (usuario_id, clave_unica, tipo, ref_id, titulo, mensaje, estado, snooze_hasta, enviado_push_en)
                  VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?)
@@ -7392,6 +7493,7 @@ async function evaluateAndDispatchUserReminders(user, { dispatchPush = true, req
 
     return {
         localNow,
+        uiLanguage: uiLang,
         settings,
         active,
         snoozed
@@ -7501,6 +7603,9 @@ app.put('/api/settings', apiWriteLimiter.middleware, requireAdmin, requireNonEmp
         }
         await saveUserSettings(req.user.id, result.settings);
         bumpSyncRevision('settings');
+        if (req.body.uiLanguage !== undefined && result.settings.uiLanguage !== current.uiLanguage) {
+            recentSubmissionCache.clear();
+        }
         if (
             req.body.commuteRemindersEnabled !== undefined ||
             req.body.commuteExtraBufferMinutes !== undefined ||
@@ -7512,7 +7617,7 @@ app.put('/api/settings', apiWriteLimiter.middleware, requireAdmin, requireNonEmp
             bumpSyncRevision('planner');
         }
         res.json({
-            message: 'Settings saved successfully.',
+            message: tServer(result.settings.uiLanguage, 'response.settings_saved'),
             settings: sanitizeSettingsForClient(result.settings)
         });
     } catch (err) {
@@ -7521,7 +7626,30 @@ app.put('/api/settings', apiWriteLimiter.middleware, requireAdmin, requireNonEmp
     }
 });
 
-app.post('/api/settings/test-notification', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 3000 }), async (req, res) => {
+app.patch('/api/settings/language', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, async (req, res) => {
+    try {
+        if (!isValidStrictUiLang(req.body?.uiLanguage)) {
+            return res.status(400).send(tServer('en', 'error.invalid_ui_language'));
+        }
+        const current = await loadUserSettings(req.user.id);
+        const nextLang = normalizeUiLang(req.body.uiLanguage);
+        const updated = { ...current, uiLanguage: nextLang };
+        await saveUserSettings(req.user.id, updated);
+        bumpSyncRevision('settings');
+        recentSubmissionCache.clear();
+        res.json({
+            ok: true,
+            uiLanguage: nextLang,
+            message: tServer(nextLang, 'response.lang_saved'),
+            settings: sanitizeSettingsForClient(updated)
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error updating interface language.');
+    }
+});
+
+const handleTestPhonePush = async (req, res) => {
     try {
         const saved = await loadUserSettings(req.user.id);
         const body = req.body || {};
@@ -7531,34 +7659,45 @@ app.post('/api/settings/test-notification', apiWriteLimiter.middleware, requireA
             ntfyServerUrl: body.ntfyServerUrl !== undefined ? body.ntfyServerUrl : saved.ntfyServerUrl,
             ntfyTopic: body.ntfyTopic !== undefined ? body.ntfyTopic : saved.ntfyTopic,
             ntfyPriority: body.ntfyPriority !== undefined ? body.ntfyPriority : saved.ntfyPriority,
-            publicBaseUrl: body.publicBaseUrl !== undefined ? body.publicBaseUrl : saved.publicBaseUrl
+            publicBaseUrl: body.publicBaseUrl !== undefined ? body.publicBaseUrl : saved.publicBaseUrl,
+            ...(body.uiLanguage !== undefined ? { uiLanguage: body.uiLanguage } : {})
         };
         const validation = validateUserSettingsPayload(merged, saved);
         if (validation.error) {
             return res.status(400).send(validation.error);
         }
 
+        const uiLang = resolveRequestUiLang({ settings: validation.settings, req });
         const baseUrl = buildPublicBaseUrlForUser(validation.settings, req);
         await sendPhonePushViaNtfy({
             settings: validation.settings,
             reminder: {
                 key: `test:${Date.now()}`,
                 type: 'test',
-                title: 'Personal Daily Hub - Phone Connected',
-                message: 'Test alert delivered! Reminders for Mood, Sleep, Agenda, Word Notes, and English Study will appear here.',
+                lang: uiLang,
+                title: tServer(uiLang, 'test_push.title'),
+                message: tServer(uiLang, 'test_push.message'),
                 targetView: 'settings',
                 canSnooze: true,
                 previewActions: true
             },
             baseUrl,
-            userId: req.user.id
+            userId: req.user.id,
+            lang: uiLang
         });
-        res.json({ message: 'Test notification sent to your phone notification channel.' });
+        res.json({
+            ok: true,
+            uiLanguage: uiLang,
+            message: tServer(uiLang, 'test_push.sent_response')
+        });
     } catch (err) {
         console.error('[TEST_PUSH_ERROR]', err.message);
         res.status(502).send(err.message || 'Could not reach phone notification relay.');
     }
-});
+};
+
+app.post('/api/settings/test-notification', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 3000 }), handleTestPhonePush);
+app.post('/api/reminders/test-push', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 3000 }), handleTestPhonePush);
 
 function sanitizePlannerForClient(planner = {}) {
     if (!planner || typeof planner !== 'object') return planner;
@@ -8235,6 +8374,7 @@ app.post('/api/planner/request-phone-gps', apiWriteLimiter.middleware, requireAd
         if (!settings.phoneNotificationsEnabled || !settings.ntfyTopic) {
             return res.status(400).send('Configure Phone Notifications (ntfy topic) in Settings first so Daily Hub can ping your phone.');
         }
+        const uiLang = resolveRequestUiLang({ settings, req });
         const baseUrl = buildPublicBaseUrlForUser(settings, req);
         if (!baseUrl) {
             return res.status(400).send('Public Server URL could not be determined. Set it in Settings first.');
@@ -8245,19 +8385,21 @@ app.post('/api/planner/request-phone-gps', apiWriteLimiter.middleware, requireAd
             reminder: {
                 key: `capture-gps:${Date.now()}`,
                 type: 'class',
-                title: '📍 Send Your Phone GPS to Daily Hub',
-                message: 'Tap to capture your OPPO A79 location (or paste a Maps link) and update campus commute times.',
+                lang: uiLang,
+                title: tServer(uiLang, 'gps_ping.title'),
+                message: tServer(uiLang, 'gps_ping.message'),
                 targetView: 'horario',
                 targetTab: 'locations',
                 extraQuery: { captureGps: '1' },
                 canSnooze: false
             },
             baseUrl,
-            userId: req.user.id
+            userId: req.user.id,
+            lang: uiLang
         });
 
         res.json({
-            message: 'GPS request sent to your phone via ntfy! Tap the notification on your phone to send its location.'
+            message: tServer(uiLang, 'gps_ping.sent_response')
         });
     } catch (err) {
         console.error('[REQUEST_PHONE_GPS_ERROR]', err.message);
@@ -8950,22 +9092,29 @@ app.post('/api/planner/sync-agenda', apiWriteLimiter.middleware, requireAdmin, p
     }
 });
 
-app.get('/api/reminders/active', apiReadLimiter.middleware, requireAdmin, async (req, res) => {
+const handleGetActiveOrPendingReminders = async (req, res) => {
     try {
         const state = await evaluateAndDispatchUserReminders(req.user, {
             dispatchPush: req.query.dispatchPush === '1',
-            req
+            req,
+            langOverride: req.query?.lang || null
         });
         res.json({
             localNow: state.localNow,
+            uiLanguage: state.uiLanguage,
             active: state.active,
+            pending: state.active,
+            reminders: state.active,
             snoozed: state.snoozed
         });
     } catch (err) {
         console.error(err);
         res.status(500).send('Error checking active reminders.');
     }
-});
+};
+
+app.get('/api/reminders/active', apiReadLimiter.middleware, requireAdmin, handleGetActiveOrPendingReminders);
+app.get('/api/reminders/pending', apiReadLimiter.middleware, requireAdmin, handleGetActiveOrPendingReminders);
 
 async function rescheduleAgendaItemOnSnooze({ userId, key, type, refId, safeMins, snoozeSql, title, message }) {
     if (String(key || '').trim().startsWith('task-inprog:')) {
@@ -9089,19 +9238,23 @@ async function applyReminderSnoozeOrDismiss({ userId, key, type = 'general', ref
     };
 }
 
-app.post('/api/reminders/snooze', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
+const handleInAppReminderSnoozeOrAck = async (req, res, forcedAction = null) => {
     const key = typeof req.body.key === 'string' ? req.body.key.trim() : '';
-    const rawAction = typeof req.body.action === 'string' ? req.body.action.trim().toLowerCase() : 'snooze';
+    const rawAction = typeof forcedAction === 'string'
+        ? forcedAction
+        : (typeof req.body.action === 'string' ? req.body.action.trim().toLowerCase() : 'snooze');
     const action = rawAction === 'ack'
         ? 'ack'
         : (rawAction === 'skip' ? 'skip' : (rawAction === 'dismiss' ? 'dismiss' : 'snooze'));
     const type = typeof req.body.type === 'string' && req.body.type.trim() ? req.body.type.trim().slice(0, 30) : 'general';
-    const title = typeof req.body.title === 'string' ? req.body.title : 'Reminder';
+    const settings = await loadUserSettings(req.user.id).catch(() => getDefaultUserSettings());
+    const uiLang = resolveRequestUiLang({ settings, req });
+    const title = typeof req.body.title === 'string' ? req.body.title : tServer(uiLang, 'reminder.default_title');
     const message = typeof req.body.message === 'string' ? req.body.message : '';
     const refId = req.body.refId ? parseAgendaId(req.body.refId) : null;
 
     if (!key || key.length > 120) {
-        return res.status(400).send('Invalid reminder key.');
+        return res.status(400).send(tServer(uiLang, 'reminder.invalid_key'));
     }
     if (action === 'snooze') {
         const mins = Number(req.body.minutes ?? 15);
@@ -9130,23 +9283,31 @@ app.post('/api/reminders/snooze', apiWriteLimiter.middleware, requireAdmin, requ
                 key: result.key || key,
                 action: 'acknowledged',
                 snoozeUntil: null,
-                message: 'Entendido (OK). No se enviarán más avisos para esta clase/turno hoy.'
+                message: tServer(uiLang, 'reminder.ack_success')
             });
         }
         res.json({
             message: action === 'skip'
-                ? 'Reminder skipped.'
+                ? tServer(uiLang, 'reminder.skipped')
                 : (result.action === 'dismissed'
-                    ? 'Reminder dismissed.'
-                    : `Reminder postponed for ${result.minutes} minutes.`),
+                    ? tServer(uiLang, 'reminder.dismissed')
+                    : tServer(uiLang, 'reminder.postponed', { minutes: result.minutes })),
             key,
             ...result,
             action: action === 'skip' ? 'skipped' : result.action
         });
     } catch (err) {
         console.error(err);
-        res.status(500).send('Error updating reminder state.');
+        res.status(500).send(tServer(uiLang, 'reminder.state_error'));
     }
+};
+
+app.post('/api/reminders/snooze', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
+    return handleInAppReminderSnoozeOrAck(req, res, null);
+});
+
+app.post('/api/reminders/ack', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
+    return handleInAppReminderSnoozeOrAck(req, res, 'ack');
 });
 
 const handleReminderExternalAction = async (req, res) => {
@@ -9190,17 +9351,20 @@ const handleReminderExternalAction = async (req, res) => {
             }
         }
 
+        const settings = await loadUserSettings(effectiveUserId).catch(() => getDefaultUserSettings());
+        const uiLang = resolveRequestUiLang({ settings, req });
+
         if (!authorized) {
-            return res.status(401).send('Invalid or expired reminder action token.');
+            return res.status(401).send(tServer(uiLang, 'reminder.invalid_token'));
         }
 
         if (!key || key.length > 120) {
-            return res.status(400).send('Invalid reminder key.');
+            return res.status(400).send(tServer(uiLang, 'reminder.invalid_key'));
         }
 
         const userRows = await dbQueryAsync('SELECT id, rol, estado FROM Usuarios WHERE id = ? LIMIT 1', [effectiveUserId]);
         if (!userRows || userRows.length === 0 || (userRows[0].estado || 'activo') !== 'activo' || userRows[0].rol !== 'admin') {
-            return res.status(403).send('Account not authorized for this action.');
+            return res.status(403).send(tServer(uiLang, 'reminder.unauthorized'));
         }
 
         if (key.startsWith('test:') || type === 'test') {
@@ -9211,8 +9375,8 @@ const handleReminderExternalAction = async (req, res) => {
                 action: isSkipOrDismiss ? 'skipped' : 'snoozed',
                 minutes: isSkipOrDismiss ? 0 : minutes,
                 message: isSkipOrDismiss
-                    ? 'Test notification skipped.'
-                    : `Test notification snoozed for ${minutes} minutes.`
+                    ? tServer(uiLang, 'reminder.test_skipped')
+                    : tServer(uiLang, 'reminder.test_snoozed', { minutes })
             });
         }
 
@@ -9227,7 +9391,7 @@ const handleReminderExternalAction = async (req, res) => {
                 title,
                 message
             });
-            return res.json({ ok: true, action: 'complete_agenda', key, refId, message: 'Agenda item marked as Done.' });
+            return res.json({ ok: true, action: 'complete_agenda', key, refId, message: tServer(uiLang, 'reminder.complete_agenda') });
         }
 
         if (action === 'ack') {
@@ -9244,7 +9408,7 @@ const handleReminderExternalAction = async (req, res) => {
                 ok: true,
                 action: 'acknowledged',
                 key: ackRes.key || key,
-                message: 'Entendido (OK). No se enviarán más avisos para esta clase/turno hoy.'
+                message: tServer(uiLang, 'reminder.ack_success')
             });
         }
 
@@ -9268,16 +9432,16 @@ const handleReminderExternalAction = async (req, res) => {
             key,
             refId: refId || null,
             message: action === 'skip'
-                ? 'Reminder skipped.'
+                ? tServer(uiLang, 'reminder.skipped')
                 : (result.action === 'dismissed'
-                    ? 'Reminder dismissed.'
-                    : `Postponed for ${result.minutes} minutes.`),
+                    ? tServer(uiLang, 'reminder.dismissed')
+                    : tServer(uiLang, 'reminder.postponed_short', { minutes: result.minutes })),
             ...result,
             action: action === 'skip' ? 'skipped' : result.action
         });
     } catch (err) {
         console.error(err);
-        return res.status(500).send('Error applying reminder action.');
+        return res.status(500).send(tServer('en', 'reminder.action_error'));
     }
 };
 
@@ -13902,5 +14066,6 @@ module.exports = {
     normalizeNearAlertMinutes,
     computeCandidateReminders,
     sanitizeAcademicPlanner,
-    validateUserSettingsPayload
+    validateUserSettingsPayload,
+    sendPhonePushViaNtfy
 };

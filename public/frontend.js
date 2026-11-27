@@ -2932,7 +2932,7 @@ function cargarResumenSemanalActual() {
                         const totalH = datosDia.horas;
                         const intermitente = cantidadSesiones > 1;
                         textoHoras = datosDia.pendingCount > 0 && totalH === 0
-                            ? 'Pending'
+                            ? tUi('Pending', 'Pendiente')
                             : formatHoursMinutes(totalH, { compact: true });
 
                         if (intermitente) {
@@ -5079,7 +5079,7 @@ function initHangulPracticeStudio() {
         CHO.forEach((c, idx) => {
             const opt = document.createElement('option');
             opt.value = String(idx);
-            opt.textContent = `${c} (${CHO_ROM[idx] || 'silencio'})`;
+            opt.textContent = `${c} (${CHO_ROM[idx] || tUi('silent', 'silencio')})`;
             if (c === 'ㅎ') opt.selected = true;
             selInit.appendChild(opt);
         });
@@ -5095,7 +5095,7 @@ function initHangulPracticeStudio() {
         JONG.forEach((f, idx) => {
             const opt = document.createElement('option');
             opt.value = String(idx);
-            opt.textContent = idx === 0 ? 'Sin Batchim (abierta)' : `${f} (-${JONG_ROM[idx]})`;
+            opt.textContent = idx === 0 ? tUi('No Batchim (open)', 'Sin Batchim (abierta)') : `${f} (-${JONG_ROM[idx]})`;
             if (f === 'ㄴ') opt.selected = true;
             selFin.appendChild(opt);
         });
@@ -5417,14 +5417,19 @@ function initKoreanReadonlyNotesStudio() {
         pIntro.textContent = notes.intro;
         const pVow = document.createElement('p');
         pVow.className = 'muted-text small-note';
-        pVow.textContent = `1. Las Vocales (모음 - Moeum): ${notes.vowelsIntro}`;
+        pVow.textContent = `${tUi('1. Vowels (모음 - Moeum):', '1. Las Vocales (모음 - Moeum):')} ${notes.vowelsIntro}`;
         introCard.append(hTitle, pIntro, pVow);
         container.appendChild(introCard);
 
         const secBasicV = createSymbolTableSection(
-            'A. Vocales Básicas (10)',
+            tUi('A. Basic Vowels (10)', 'A. Vocales Básicas (10)'),
             null,
-            ['Vocal', 'Romanización', 'Sonido más parecido en español', 'Guía de pronunciación'],
+            [
+                tUi('Vowel', 'Vocal'),
+                tUi('Romanization', 'Romanización'),
+                tUi('Closest sound', 'Sonido más parecido en español'),
+                tUi('Pronunciation guide', 'Guía de pronunciación')
+            ],
             notes.basicVowels || [],
             q,
             false
@@ -5432,9 +5437,14 @@ function initKoreanReadonlyNotesStudio() {
         if (secBasicV) container.appendChild(secBasicV);
 
         const secCompV = createSymbolTableSection(
-            'B. Vocales Compuestas / Diptongos (11)',
-            'Se forman combinando dos vocales básicas:',
-            ['Vocal', 'Romanización', 'Sonido más parecido en español', 'Notas prácticas'],
+            tUi('B. Compound Vowels / Diphthongs (11)', 'B. Vocales Compuestas / Diptongos (11)'),
+            tUi('Formed by combining two basic vowels:', 'Se forman combinando dos vocales básicas:'),
+            [
+                tUi('Vowel', 'Vocal'),
+                tUi('Romanization', 'Romanización'),
+                tUi('Closest sound', 'Sonido más parecido en español'),
+                tUi('Practical notes', 'Notas prácticas')
+            ],
             notes.compoundVowels || [],
             q,
             false
@@ -5442,9 +5452,14 @@ function initKoreanReadonlyNotesStudio() {
         if (secCompV) container.appendChild(secCompV);
 
         const secBasicC = createSymbolTableSection(
-            '2A. Consonantes Básicas (14 · 자음 - Jaeum)',
+            tUi('2A. Basic Consonants (14 · 자음 - Jaeum)', '2A. Consonantes Básicas (14 · 자음 - Jaeum)'),
             notes.consonantsIntro,
-            ['Consonante', 'Nombre', 'Sonido parecido en español', 'Cómo pronunciarla correctamente'],
+            [
+                tUi('Consonant', 'Consonante'),
+                tUi('Name', 'Nombre'),
+                tUi('Closest sound', 'Sonido parecido en español'),
+                tUi('How to pronounce correctly', 'Cómo pronunciarla correctamente')
+            ],
             notes.basicConsonants || [],
             q,
             true
@@ -5452,9 +5467,14 @@ function initKoreanReadonlyNotesStudio() {
         if (secBasicC) container.appendChild(secBasicC);
 
         const secDoubleC = createSymbolTableSection(
-            '2B. Consonantes Dobles / Tensas (5 - 쌍자음)',
-            'Se pronuncian tensando la garganta y soltando el sonido de golpe, sin expulsar aire:',
-            ['Consonante', 'Nombre', 'Sonido aproximado', 'Diferencia clave'],
+            tUi('2B. Double / Tense Consonants (5 - 쌍자음)', '2B. Consonantes Dobles / Tensas (5 - 쌍자음)'),
+            tUi('Pronounced by tensing the throat and releasing sharply without a puff of air:', 'Se pronuncian tensando la garganta y soltando el sonido de golpe, sin expulsar aire:'),
+            [
+                tUi('Consonant', 'Consonante'),
+                tUi('Name', 'Nombre'),
+                tUi('Approximate sound', 'Sonido aproximado'),
+                tUi('Key difference', 'Diferencia clave')
+            ],
             notes.doubleConsonants || [],
             q,
             true
@@ -5471,7 +5491,7 @@ function initKoreanReadonlyNotesStudio() {
             const rulesCard = document.createElement('section');
             rulesCard.className = 'korean-note-section-card';
             const hRules = document.createElement('h4');
-            hRules.textContent = '3. ¿Cómo funciona la lógica para formar palabras?';
+            hRules.textContent = tUi('3. How does word formation logic work?', '3. ¿Cómo funciona la lógica para formar palabras?');
             const pRulesIntro = document.createElement('p');
             pRulesIntro.className = 'muted-text small-note';
             pRulesIntro.textContent = notes.formationIntro;
@@ -5514,7 +5534,7 @@ function initKoreanReadonlyNotesStudio() {
             const exCard = document.createElement('section');
             exCard.className = 'korean-note-section-card';
             const hEx = document.createElement('h4');
-            hEx.textContent = '4. Ejemplos Prácticos Desglosados';
+            hEx.textContent = tUi('4. Practical Decomposed Examples', '4. Ejemplos Prácticos Desglosados');
             exCard.appendChild(hEx);
 
             matchingExamples.forEach((ex) => {
@@ -5529,12 +5549,12 @@ function initKoreanReadonlyNotesStudio() {
                 const btnListen = document.createElement('button');
                 btnListen.type = 'button';
                 btnListen.className = 'btn-secondary btn-small';
-                btnListen.textContent = '🔊 Escuchar';
+                btnListen.textContent = tUi('🔊 Listen', '🔊 Escuchar');
                 btnListen.addEventListener('click', () => speakStudyText(ex.word, 'ko-KR'));
                 const btnAnalyze = document.createElement('button');
                 btnAnalyze.type = 'button';
                 btnAnalyze.className = 'btn-secondary btn-small';
-                btnAnalyze.textContent = '🔍 Desglosar';
+                btnAnalyze.textContent = tUi('🔍 Break down', '🔍 Desglosar');
                 btnAnalyze.addEventListener('click', () => openInComparator(ex.word));
                 btnsWrap.append(btnListen, btnAnalyze);
                 topRow.append(titleStrong, btnsWrap);
@@ -5556,7 +5576,10 @@ function initKoreanReadonlyNotesStudio() {
             const syncDetails = document.createElement('details');
             syncDetails.className = 'korean-keypad-details';
             const sum = document.createElement('summary');
-            sum.textContent = `☁️ Documento vivo leído desde Google Drive (${payload.fileName}) · ${payload.liveParagraphs.length} líneas (Solo lectura)`;
+            sum.textContent = tUi(
+                `☁️ Live document read from Google Drive (${payload.fileName}) · ${payload.liveParagraphs.length} lines (Read-Only)`,
+                `☁️ Documento vivo leído desde Google Drive (${payload.fileName}) · ${payload.liveParagraphs.length} líneas (Solo lectura)`
+            );
             const pre = document.createElement('pre');
             pre.className = 'study-viewer-pre';
             pre.textContent = payload.liveParagraphs.map((p) => p.text).join('\n');
@@ -5576,8 +5599,8 @@ function initKoreanReadonlyNotesStudio() {
                 cachedKoreanDrivePayload = resp.data;
                 if (statusEl) {
                     statusEl.textContent = resp.data.syncedFromDrive
-                        ? `✅ Sincronizado en vivo (Solo lectura) desde Google Drive: ${resp.data.fileName}`
-                        : `📁 Vinculado a Google Drive (Korean Practice): ${resp.data.fileName}`;
+                        ? tUi(`✅ Live synced (Read-only) from Google Drive: ${resp.data.fileName}`, `✅ Sincronizado en vivo (Solo lectura) desde Google Drive: ${resp.data.fileName}`)
+                        : tUi(`📁 Linked to Google Drive (Korean Practice): ${resp.data.fileName}`, `📁 Vinculado a Google Drive (Korean Practice): ${resp.data.fileName}`);
                 }
                 renderReadonlyNotes(resp.data);
                 if (syncDrive) {
@@ -5688,7 +5711,7 @@ function initKoreanComparatorStudio() {
         const btnListen = document.createElement('button');
         btnListen.type = 'button';
         btnListen.className = 'btn-secondary btn-small';
-        btnListen.textContent = '🔊 Escuchar';
+        btnListen.textContent = tUi('🔊 Listen', '🔊 Escuchar');
         btnListen.addEventListener('click', () => speakStudyText(sideData.input, 'ko-KR'));
         top.append(badge, btnListen);
 
@@ -5720,7 +5743,7 @@ function initKoreanComparatorStudio() {
                 const strongLine = document.createElement('strong');
                 strongLine.textContent = `${item.char} — ${item.name || item.category || ''} [${item.romanization}]`;
                 const soundLine = document.createElement('span');
-                soundLine.textContent = `🔊 Cómo suena: ${item.spanishSound || ''}`;
+                soundLine.textContent = `${tUi('🔊 Sound:', '🔊 Cómo suena:')} ${item.spanishSound || ''}`;
                 const guideLine = document.createElement('span');
                 guideLine.className = 'muted-text';
                 guideLine.textContent = item.guide || item.layoutRule || '';
@@ -5732,7 +5755,7 @@ function initKoreanComparatorStudio() {
                     simRow.className = 'korean-similar-chips';
                     const lbl = document.createElement('span');
                     lbl.className = 'muted-text small-note';
-                    lbl.textContent = 'Comparar con parecido:';
+                    lbl.textContent = tUi('Compare similar:', 'Comparar con parecido:');
                     simRow.appendChild(lbl);
                     firstSlot.similar.forEach((sim) => {
                         const sb = document.createElement('button');
@@ -5759,7 +5782,7 @@ function initKoreanComparatorStudio() {
             const exBox = document.createElement('div');
             exBox.className = 'korean-rule-card';
             const hdr = document.createElement('strong');
-            hdr.textContent = `📘 Ejemplo de tus notas de Drive: ${sideData.knownExample.word} (${sideData.knownExample.reading} — ${sideData.knownExample.meaningEs})`;
+            hdr.textContent = `${tUi('📘 Example from Drive notes:', '📘 Ejemplo de tus notas de Drive:')} ${sideData.knownExample.word} (${sideData.knownExample.reading} — ${sideData.knownExample.meaningEs})`;
             exBox.appendChild(hdr);
             (sideData.knownExample.breakdown || []).forEach((ln) => {
                 const lDiv = document.createElement('div');
@@ -5910,7 +5933,7 @@ function initAlphabetCompositionStudio() {
 
         const summary = document.createElement('div');
         summary.className = 'ai-summary-box';
-        const badge = data?.usedGemini ? `🤖 ${data.model || 'Gemini'}` : '⚡ Guía Estructurada';
+        const badge = data?.usedGemini ? `🤖 ${data.model || 'Gemini'}` : tUi('⚡ Structured Guide', '⚡ Guía Estructurada');
         summary.textContent = `${badge} · ${g.title || ''} — ${g.overview || ''}`;
         resultBox.appendChild(summary);
 
@@ -5961,7 +5984,7 @@ function initAlphabetCompositionStudio() {
 
                 const ruleP = document.createElement('div');
                 ruleP.className = 'muted-text small-note';
-                ruleP.textContent = [s.formation || s.compositionRule, s.example ? `Ej.: ${s.example}` : ''].filter(Boolean).join(' · ');
+                ruleP.textContent = [s.formation || s.compositionRule, s.example ? `${tUi('Ex.', 'Ej.')}: ${s.example}` : ''].filter(Boolean).join(' · ');
 
                 tile.append(head);
                 if (subLabel) tile.appendChild(nameP);
@@ -5983,7 +6006,7 @@ function initAlphabetCompositionStudio() {
                     hdr.textContent = [r.rule, r.pattern ? `[${r.pattern}]` : ''].filter(Boolean).join(' ');
                     const body = document.createElement('div');
                     body.className = 'muted-text small-note';
-                    body.textContent = [r.explanation, r.examples ? `Ej.: ${r.examples}` : ''].filter(Boolean).join(' · ');
+                    body.textContent = [r.explanation, r.examples ? `${tUi('Ex.', 'Ej.')}: ${r.examples}` : ''].filter(Boolean).join(' · ');
                     li.append(hdr, body);
                 } else {
                     li.textContent = String(r || '');
@@ -7064,7 +7087,7 @@ function applyTranslationToVocabularyForm(translation, { switchToEnglish = true 
     setIf('engVocabExample', draft.example || firstExText || '');
     setIf('engVocabNotes', draft.notes || translation.explanationEs || '');
     document.getElementById('englishForm')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    showToast('ok', 'Copied translation into Glossary Study Form!');
+    showToast('ok', tUi('Copied translation into Glossary Study Form!', '¡Traducción copiada al formulario de Glosario!'));
 }
 
 function openAiSettingsSection() {
@@ -15314,7 +15337,10 @@ function cargarMedicos() {
         })
         .catch(err => {
             if (isAbortError(err) || !medicosTracker.isCurrent(reqToken.seq)) return;
-            container.innerHTML = '<p class="muted-text">Error loading psychiatrist accounts.</p>';
+            const pErr = document.createElement('p');
+            pErr.className = 'muted-text';
+            pErr.textContent = tUi('Error loading psychiatrist accounts.', 'Error al cargar las cuentas médicas.');
+            container.replaceChildren(pErr);
         });
 }
 
@@ -15790,7 +15816,7 @@ function renderReminderTray(data) {
             const doneBtn = document.createElement('button');
             doneBtn.type = 'button';
             doneBtn.className = 'reminder-btn done';
-            doneBtn.textContent = tUi('✓ Mark Done', '✓ Marcar hecha');
+            doneBtn.textContent = tUi('✓ Mark done', '✓ Marcar hecha');
             doneBtn.addEventListener('click', () => completeReminderAgendaItem(reminder, doneBtn));
             actions.appendChild(doneBtn);
         }
@@ -15976,12 +16002,14 @@ function completeReminderAgendaItem(reminder, triggerBtn) {
     }, { loadingText: tUi('Completing...', 'Completando...') });
 }
 
-function cargarRecordatoriosActivos() {
+function cargarRecordatoriosActivos(langOverride = '') {
     if (!currentUser || currentUser.rol !== 'admin') return;
     const reqToken = remindersTracker.begin();
+    const activeLang = langOverride || (window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function' ? window.DailyHubI18n.getLang() : '');
+    const qs = activeLang ? `?lang=${encodeURIComponent(activeLang)}` : '';
     const fetchOpts = reqToken.signal ? { signal: reqToken.signal } : {};
 
-    fetch('/api/reminders/active', fetchOpts)
+    fetch(`/api/reminders/pending${qs}`, fetchOpts)
         .then(res => (res.ok ? res.json() : Promise.reject(new Error('Failed to load reminders'))))
         .then(data => {
             if (!remindersTracker.isCurrent(reqToken.seq)) return;
@@ -16063,11 +16091,58 @@ if (typeof window !== 'undefined') {
     window.computeSmartCommuteAlertSchedule = computeSmartCommuteAlertScheduleClient;
 }
 
-function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false } = {}) {
+function persistUiLanguageToServer(nextLang) {
+    const clean = String(nextLang || '').trim().toLowerCase() === 'es' ? 'es' : 'en';
+    try {
+        localStorage.setItem('pdh_ui_lang_updated_at', String(Date.now()));
+    } catch (_) {}
+    if (!currentUser || currentUser.rol !== 'admin') return;
+    if (currentSettings) currentSettings.uiLanguage = clean;
+    const sel = document.getElementById('setUiLanguage');
+    if (sel && sel.value !== clean) sel.value = clean;
+    fetch('/api/settings/language', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uiLanguage: clean })
+    }).catch(() => { });
+}
+
+function aplicarSettingsEnEstado(settings, { syncAgendaDefaults = false, fromRemoteSync = false } = {}) {
     if (!settings) return;
     currentSettings = settings;
     if (typeof window !== 'undefined') {
         window.userSettings = currentSettings;
+    }
+    if (settings.uiLanguage === 'en' || settings.uiLanguage === 'es') {
+        const i18nApi = window.DailyHubI18n;
+        if (i18nApi && typeof i18nApi.getLang === 'function' && typeof i18nApi.setLang === 'function') {
+            const curLang = i18nApi.getLang();
+            let hasExplicitSession = false;
+            let updatedAt = 0;
+            let hasStoredLang = false;
+            try {
+                hasStoredLang = Boolean(localStorage.getItem('pdh_ui_lang_v1'));
+                updatedAt = Number(localStorage.getItem('pdh_ui_lang_updated_at') || '0');
+                hasExplicitSession = sessionStorage.getItem('pdh_ui_lang_explicit') === '1';
+            } catch (_) {}
+            const isRecentLocal = hasStoredLang && (hasExplicitSession || (updatedAt > 0 && (Date.now() - updatedAt) < 5 * 60 * 1000));
+            if (fromRemoteSync) {
+                try { sessionStorage.removeItem('pdh_ui_lang_explicit'); } catch (_) {}
+                if (curLang !== settings.uiLanguage) {
+                    i18nApi.setLang(settings.uiLanguage, { source: 'server' });
+                }
+            } else if (!isRecentLocal) {
+                if (curLang !== settings.uiLanguage) {
+                    i18nApi.setLang(settings.uiLanguage, { source: 'server' });
+                }
+            } else if (hasExplicitSession && curLang !== settings.uiLanguage) {
+                persistUiLanguageToServer(curLang);
+            }
+        }
+        const selLangEl = document.getElementById('setUiLanguage');
+        if (selLangEl && window.DailyHubI18n) {
+            selLangEl.value = window.DailyHubI18n.getLang();
+        }
     }
     if (settings.academicPlanner && !academicPlannerState) {
         academicPlannerState = settings.academicPlanner;
@@ -16246,6 +16321,12 @@ function populateSettingsForm(settings = {}) {
     setVal('setYoutubePlatformMode', getYouTubePlatformMode());
     setVal('setTimezone', settings.timezone || 'America/Monterrey');
     setCheck('setShowWeekend', settings.agendaShowWeekend !== false);
+    if (document.getElementById('setUiLanguage')) {
+        const uiLangVal = (window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function')
+            ? window.DailyHubI18n.getLang()
+            : (settings.uiLanguage === 'es' ? 'es' : 'en');
+        setVal('setUiLanguage', uiLangVal);
+    }
 
     // Multilingual & Gemini AI preferences
     const prefLang = ['en', 'ko', 'en_ko'].includes(settings.preferredStudyLanguage)
@@ -16284,8 +16365,11 @@ function populateSettingsForm(settings = {}) {
     const keyStatusEl = document.getElementById('settingsGeminiKeyStatus');
     if (keyStatusEl) {
         keyStatusEl.textContent = settings.geminiApiKeyConfigured
-            ? `Active key: ${settings.geminiApiKeyHint || 'Configured'}`
-            : 'No Gemini key saved yet (Instant built-in 0-RAM Korean Romanization & EN/KR analyzer active).';
+            ? `${tUi('Active key:', 'Clave activa:')} ${settings.geminiApiKeyHint || tUi('Configured', 'Configurada')}`
+            : tUi(
+                'No Gemini key saved yet (Instant built-in 0-RAM Korean Romanization & EN/KR analyzer active).',
+                'Aún no hay clave de Gemini guardada (romanizador coreano instantáneo 0-RAM y analizador EN/KR activos).'
+            );
     }
 
     const dlPwdEl = document.getElementById('setJournalDownloadPassword');
@@ -16368,7 +16452,10 @@ function collectSettingsFormPayload() {
         defaultAgendaLayout: document.getElementById('setDefaultLayout')?.value || 'auto',
         youtubePlatformMode: document.getElementById('setYoutubePlatformMode')?.value || 'auto',
         timezone: String(document.getElementById('setTimezone')?.value || 'America/Monterrey').trim(),
-        agendaShowWeekend: Boolean(document.getElementById('setShowWeekend')?.checked)
+        agendaShowWeekend: Boolean(document.getElementById('setShowWeekend')?.checked),
+        uiLanguage: (window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function')
+            ? window.DailyHubI18n.getLang()
+            : (document.getElementById('setUiLanguage')?.value === 'es' ? 'es' : 'en')
     };
 
     if (pendingClearGeminiKey) {
@@ -16518,8 +16605,8 @@ function initSettingsHandlers() {
                 showToast('ok', 'Private ntfy topic copied to clipboard.');
                 setTimeout(() => { btnCopyTopic.textContent = prev; }, 1600);
             } else {
-                setSettingsBanner('info', `Tap Copy in your keyboard bar to copy: ${topic}`);
-                showToast('info', 'Select "Copy" on the highlighted topic field.');
+                setSettingsBanner('info', tUi(`Tap Copy in your keyboard bar to copy: ${topic}`, `Toca Copiar en la barra de tu teclado para copiar: ${topic}`));
+                showToast('info', tUi('Select "Copy" on the highlighted topic field.', 'Selecciona "Copiar" en el campo resaltado del tema.'));
             }
         });
     }
@@ -16530,7 +16617,10 @@ function initSettingsHandlers() {
                 Notification.requestPermission().then(perm => {
                     if (perm === 'denied') {
                         desktopCheck.checked = false;
-                        setSettingsBanner('err', 'Browser denied desktop notifications. Phone notifications remain independent via ntfy.');
+                        setSettingsBanner('err', tUi(
+                            'Browser denied desktop notifications. Phone notifications remain independent via ntfy.',
+                            'El navegador denegó las notificaciones de escritorio. Las del celular siguen independientes vía ntfy.'
+                        ));
                     }
                 }).catch(() => { });
             }
@@ -16541,7 +16631,10 @@ function initSettingsHandlers() {
         btnTestPush.addEventListener('click', () => {
             const payload = collectSettingsFormPayload();
             if (!payload.phoneNotificationsEnabled || !payload.ntfyTopic) {
-                const msg = 'Enable phone notifications and set a private ntfy topic (8+ chars) first.';
+                const msg = tUi(
+                    'Enable phone notifications and set a private ntfy topic (8+ chars) first.',
+                    'Activa primero las notificaciones al celular y configura un tema ntfy privado (8+ caracteres).'
+                );
                 setSettingsBanner('err', msg);
                 showToast('err', msg);
                 return;
@@ -19503,7 +19596,7 @@ function initLocationMapPickerModal() {
         try {
             const res = await fetch(`/api/planner/geocode-search?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
             const data = await res.json();
-            if (!res.ok) throw new Error(data?.error || 'Could not search locations.');
+            if (!res.ok) throw new Error(data?.error || tUi('Could not search locations.', 'No se pudieron buscar ubicaciones.'));
             const list = Array.isArray(data?.results) ? data.results : [];
             if (!resultsEl) return;
             resultsEl.replaceChildren();
@@ -19541,7 +19634,7 @@ function initLocationMapPickerModal() {
         } catch (err) {
             if (bannerEl) {
                 bannerEl.className = 'inline-status-banner is-error';
-                bannerEl.textContent = err.message || 'Search unavailable right now.';
+                bannerEl.textContent = err.message ? tServer(err.message) : tUi('Search unavailable right now.', 'Búsqueda no disponible por el momento.');
                 bannerEl.hidden = false;
             }
         }
@@ -19625,7 +19718,7 @@ function initLocationMapPickerModal() {
             } catch (err) {
                 if (bannerEl) {
                     bannerEl.className = 'inline-status-banner is-error';
-                    bannerEl.textContent = err.message || 'Could not save pinned location.';
+                    bannerEl.textContent = err.message ? tServer(err.message) : tUi('Could not save pinned location.', 'No se pudo guardar la ubicación fijada.');
                     bannerEl.hidden = false;
                 }
             }
@@ -19647,22 +19740,25 @@ function triggerSmartGpsCapture(target = 'current') {
             try {
                 const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                 if (!isValidNonZeroCoordPair(coords.lat, coords.lng)) {
-                    throw new Error('Browser returned empty (0, 0) coordinates.');
+                    throw new Error(tUi('Browser returned empty (0, 0) coordinates.', 'El navegador devolvió coordenadas vacías (0, 0).'));
                 }
                 await applyCapturedLocationToTarget(target, coords, 'Phone/Browser GPS', 'gps');
                 const modal = document.getElementById('quickLocationModal');
                 if (modal) modal.hidden = true;
-                showToast('ok', 'Live GPS captured & commute routes recalculated!');
+                showToast('ok', tUi('Live GPS captured & commute routes recalculated!', '¡GPS capturado en vivo y rutas recalculadas!'));
             } catch (err) {
-                showToast('err', err.message || 'Could not update location.');
+                showToast('err', err.message ? tServer(err.message) : tUi('Could not update location.', 'No se pudo actualizar la ubicación.'));
             }
         },
         (err) => {
             const msg = String(err?.message || '');
             const blockedByOrigin = /secure origin/i.test(msg);
             const friendly = blockedByOrigin
-                ? 'Browser blocked native GPS because this address uses plain HTTP.'
-                : `Browser GPS unavailable (${msg || 'permission denied'}). Choose a quick preset or paste a street address / Google Maps link below.`;
+                ? tUi('Browser blocked native GPS because this address uses plain HTTP.', 'El navegador bloqueó el GPS nativo porque esta dirección usa HTTP plano.')
+                : tUi(
+                    `Browser GPS unavailable (${msg || 'permission denied'}). Choose a quick preset or paste a street address / Google Maps link below.`,
+                    `GPS del navegador no disponible (${msg || 'permiso denegado'}). Elige un ajuste rápido o pega una dirección / enlace de Google Maps abajo.`
+                );
             openQuickLocationModal(target, {
                 showHttpNotice: blockedByOrigin,
                 errorMsg: friendly
@@ -19704,8 +19800,8 @@ function initQuickLocationModal() {
         btnCopyOrigin.addEventListener('click', async () => {
             const copied = await copyTextToClipboard(window.location.origin);
             showToast(copied ? 'ok' : 'info', copied
-                ? `Copied ${window.location.origin} for chrome://flags`
-                : `Copy manually: ${window.location.origin}`);
+                ? tUi(`Copied ${window.location.origin} for chrome://flags`, `Copiado ${window.location.origin} para chrome://flags`)
+                : tUi(`Copy manually: ${window.location.origin}`, `Copiar manualmente: ${window.location.origin}`));
         });
     }
 
@@ -19726,7 +19822,7 @@ function initQuickLocationModal() {
         btnRetryGps.addEventListener('click', () => {
             const target = document.getElementById('quickLocationTarget')?.value || 'current';
             if (!navigator.geolocation) {
-                showToast('err', 'Geolocation API not supported in this browser.');
+                showToast('err', tUi('Geolocation API not supported in this browser.', 'La API de geolocalización no está soportada en este navegador.'));
                 return;
             }
             navigator.geolocation.getCurrentPosition(
@@ -19734,9 +19830,9 @@ function initQuickLocationModal() {
                     try {
                         await applyCapturedLocationToTarget(target, { lat: pos.coords.latitude, lng: pos.coords.longitude }, 'Phone/Browser GPS', 'gps');
                         closeModal();
-                        showToast('ok', 'Browser GPS worked & routes recalculated!');
+                        showToast('ok', tUi('Browser GPS worked & routes recalculated!', '¡GPS del navegador capturado y rutas recalculadas!'));
                     } catch (err) {
-                        showToast('err', err.message);
+                        showToast('err', tServer(err.message));
                     }
                 },
                 (err) => {
@@ -19744,8 +19840,11 @@ function initQuickLocationModal() {
                     if (bannerEl) {
                         bannerEl.className = 'inline-status-banner is-error';
                         bannerEl.textContent = /secure origin/i.test(err?.message || '')
-                            ? `Still blocked on ${window.location.origin}. Use 1-Tap Presets, Ping Phone, or paste a Google Maps link / address above, or enable the insecure-origin flag.`
-                            : (err?.message || 'Could not read GPS.');
+                            ? tUi(
+                                `Still blocked on ${window.location.origin}. Use 1-Tap Presets, Ping Phone, or paste a Google Maps link / address above, or enable the insecure-origin flag.`,
+                                `Aún bloqueado en ${window.location.origin}. Usa Presets rápidos, Ping al teléfono o pega una dirección / enlace de Google Maps arriba, o activa la bandera de origen inseguro.`
+                            )
+                            : (err?.message ? tServer(err.message) : tUi('Could not read GPS.', 'No se pudo leer el GPS.'));
                         bannerEl.hidden = false;
                     }
                 },
@@ -19764,7 +19863,10 @@ function initQuickLocationModal() {
         if (!raw) {
             if (bannerEl) {
                 bannerEl.className = 'inline-status-banner is-error';
-                bannerEl.textContent = 'Paste a street address, coordinates (e.g. 25.4414, -100.9922), or a Google Maps link first.';
+                bannerEl.textContent = tUi(
+                    'Paste a street address, coordinates (e.g. 25.4414, -100.9922), or a Google Maps link first.',
+                    'Pega primero una dirección, coordenadas (ej. 25.4414, -100.9922) o un enlace de Google Maps.'
+                );
                 bannerEl.hidden = false;
             }
             return;
@@ -19791,16 +19893,16 @@ function initQuickLocationModal() {
                 if (resData?.commutePreview) renderLiveCommuteCards(resData.commutePreview);
                 closeModal();
                 showToast('ok', resData?.geocodedDisplayName
-                    ? `Found "${raw}" & recalculated commute!`
-                    : 'Location applied & traffic routes recalculated!');
+                    ? tUi(`Found "${raw}" & recalculated commute!`, `¡Encontrado "${raw}" y traslado recalculado!`)
+                    : tUi('Location applied & traffic routes recalculated!', '¡Ubicación aplicada y rutas de tráfico recalculadas!'));
             } catch (err) {
                 if (bannerEl) {
                     bannerEl.className = 'inline-status-banner is-error';
-                    bannerEl.textContent = err.message || 'Could not extract coordinates from that link.';
+                    bannerEl.textContent = err.message ? tServer(err.message) : tUi('Could not extract coordinates from that link.', 'No se pudieron extraer coordenadas de ese enlace.');
                     bannerEl.hidden = false;
                 }
             }
-        }, { loadingText: 'Applying...' });
+        }, { loadingText: tUi('Applying...', 'Aplicando...') });
     });
 }
 
@@ -20037,7 +20139,7 @@ function initAcademicPlannerHandlers() {
             }
 
             if (!name || !room || days.length === 0) {
-                showToast('err', 'Enter subject name, ITS classroom, and at least one class day.');
+                showToast('err', tUi('Enter subject name, ITS classroom, and at least one class day.', 'Ingresa nombre de materia, salón del ITS y al menos un día de clase.'));
                 return;
             }
 
@@ -20087,7 +20189,7 @@ function initAcademicPlannerHandlers() {
             const startDate = document.getElementById('vacStartDate')?.value || '';
             const endDate = document.getElementById('vacEndDate')?.value || '';
             if (!name || !startDate || !endDate) {
-                showToast('err', 'Enter vacation name, start date, and end date.');
+                showToast('err', tUi('Enter vacation name, start date, and end date.', 'Ingresa nombre del periodo vacacional, fecha de inicio y fin.'));
                 return;
             }
             academicPlannerState.vacations = academicPlannerState.vacations || [];
@@ -20508,7 +20610,7 @@ function cargarCrisisRecientes() {
         .then(r => (r.ok ? r.json() : []))
         .then(rows => {
             const list = Array.isArray(rows) ? rows : [];
-            if (countEl) countEl.textContent = `${list.length} record${list.length === 1 ? '' : 's'}`;
+            if (countEl) countEl.textContent = list.length === 1 ? tUi('1 record', '1 registro') : tUi(`${list.length} records`, `${list.length} registros`);
             renderCrisisCards(container, list, { allowDelete: true });
         })
         .catch(() => renderCrisisCards(container, [], { allowDelete: true }));
@@ -21065,12 +21167,18 @@ function initKeyboardShortcuts() {
     }
 }
 
-function refreshDynamicLanguageViews() {
+function refreshDynamicLanguageViews(forcedLang = '') {
     actualizarCabecerasDeFecha();
     updateTransportStatusBadges();
     updateE2eeKeyStatusUI();
     updateYouTubePlatformUI();
+    if (typeof updateSleepRulesTipBox === 'function') updateSleepRulesTipBox();
     if (typeof updateAiMemoryBadgeUI === 'function') updateAiMemoryBadgeUI();
+
+    const selUiLang = document.getElementById('setUiLanguage');
+    if (selUiLang && window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function') {
+        selUiLang.value = window.DailyHubI18n.getLang();
+    }
 
     const activeViewEl = document.querySelector('.app-view.active');
     if (activeViewEl && mobileViewTitle) {
@@ -21110,20 +21218,35 @@ function refreshDynamicLanguageViews() {
             if (typeof getCancionSeleccionada === 'function' && typeof actualizarPanelLetraCancion === 'function') {
                 actualizarPanelLetraCancion(getCancionSeleccionada());
             }
-        } else if (vid === 'view-agenda' && typeof renderAgendaBoard === 'function') renderAgendaBoard();
-        else if (vid === 'view-horario') {
+            if (document.getElementById('koreanReadonlySearchInput')) {
+                document.getElementById('koreanReadonlySearchInput').dispatchEvent(new Event('input'));
+            }
+        } else if (vid === 'view-agenda') {
+            if (typeof renderAgendaCourseFilterOptions === 'function') renderAgendaCourseFilterOptions();
+            if (typeof renderAgendaHeaderCalendar === 'function') renderAgendaHeaderCalendar(false);
+            if (typeof renderAgendaBoard === 'function') renderAgendaBoard();
+        } else if (vid === 'view-horario') {
             if (typeof renderPlannerSemesterUI === 'function') renderPlannerSemesterUI();
+            if (typeof renderPlannerVacationsUI === 'function') renderPlannerVacationsUI();
+            if (typeof renderPlannerCommuteRulesSummary === 'function') renderPlannerCommuteRulesSummary();
             if (typeof renderLiveCommuteCards === 'function') renderLiveCommuteCards();
-        } else if (vid === 'view-resumen' && selectSemana) {
-            selectSemana.dispatchEvent(new Event('change'));
+        } else if (vid === 'view-settings' && currentSettings) {
+            if (typeof populateSettingsForm === 'function') populateSettingsForm(currentSettings);
+        } else if (vid === 'view-resumen') {
+            if (typeof cargarResumenSemanalActual === 'function') cargarResumenSemanalActual();
+            else if (selectSemana) selectSemana.dispatchEvent(new Event('change'));
         } else if (vid === 'view-medico' && typeof cargarMedicos === 'function') {
             cargarMedicos();
         } else if (vid === 'view-guia' && window.DailyHubVisualGuide && typeof window.DailyHubVisualGuide.mount === 'function') {
             window.DailyHubVisualGuide.mount('visualGuideAppHost', { standalone: false });
         }
     }
+    const studyModalEl = document.getElementById('studyNotebookModal');
+    if (studyModalEl && !studyModalEl.hidden) {
+        document.getElementById('btnRefreshStudyViewer')?.click();
+    }
     if (currentUser && currentUser.rol === 'admin' && typeof cargarRecordatoriosActivos === 'function') {
-        cargarRecordatoriosActivos();
+        cargarRecordatoriosActivos(forcedLang);
     }
     if (cachedVersionData && typeof updateVersionUiBadges === 'function') {
         updateVersionUiBadges(cachedVersionData);
@@ -21486,7 +21609,7 @@ function applySyncScopesToActiveView(scopesToApply) {
             .then(r => (r.ok ? r.json() : null))
             .then(data => {
                 if (data && data.settings && typeof aplicarSettingsEnEstado === 'function') {
-                    aplicarSettingsEnEstado(data.settings);
+                    aplicarSettingsEnEstado(data.settings, { fromRemoteSync: true });
                 }
             })
             .catch(() => { });
@@ -21942,7 +22065,12 @@ function initApp() {
     initVersionHistoryHandlers();
     initJournalDownloadHandlers();
     if (window.DailyHubI18n && typeof window.DailyHubI18n.onChange === 'function') {
-        window.DailyHubI18n.onChange(() => refreshDynamicLanguageViews());
+        window.DailyHubI18n.onChange((nextLang, meta) => {
+            if (!meta || meta.source !== 'server') {
+                persistUiLanguageToServer(nextLang);
+            }
+            refreshDynamicLanguageViews(nextLang);
+        });
     }
 
     if (clientTransportTunnel && rawBrowserFetch) {

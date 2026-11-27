@@ -37,8 +37,10 @@ describe('Sintaxis de código (JS, HTML, CSS, Python, Bash)', () => {
             'lib/ytdlp-service.js',
             'lib/server-notes-service.js',
             'lib/server-logger.js',
+            'lib/server-i18n.js',
             'public/theme-init.js',
             'public/i18n.js',
+            'public/dashboard.js',
             'public/guia-visual.js',
             'public/transport-crypto.js',
             'public/translator-widget.js',
@@ -2449,5 +2451,38 @@ describe('Mejoras de Materias (Pausa/Promedio), En Progreso 1h y Smart Commute e
         assert.ok(serverJs.includes('function computeSmartCommuteAlertSchedule('));
         assert.ok(frontendJs.includes('function openSmartCommuteSettingsSection('));
         assert.ok(styleCss.includes('.planner-course-status-badges') && styleCss.includes('.planner-commute-summary-box'));
+    });
+
+    it('lib/server-i18n.js mantiene paridad exacta de claves en/es, interpola variables y dashboard.html incluye i18n.js', () => {
+        const serverI18n = require('../lib/server-i18n');
+        assert.ok(serverI18n && serverI18n.DICTIONARIES);
+        const enKeys = Object.keys(serverI18n.DICTIONARIES.en || {}).sort();
+        const esKeys = Object.keys(serverI18n.DICTIONARIES.es || {}).sort();
+        assert.deepStrictEqual(enKeys, esKeys, 'Diccionarios en y es en lib/server-i18n.js deben tener exactamente las mismas claves');
+
+        for (const k of enKeys) {
+            assert.strictEqual(typeof serverI18n.DICTIONARIES.en[k], 'string');
+            assert.strictEqual(typeof serverI18n.DICTIONARIES.es[k], 'string');
+            assert.ok(serverI18n.DICTIONARIES.en[k].length > 0, `Clave en vacia: ${k}`);
+            assert.ok(serverI18n.DICTIONARIES.es[k].length > 0, `Clave es vacia: ${k}`);
+            const enPlaceholders = [...serverI18n.DICTIONARIES.en[k].matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map(m => m[1]).sort();
+            const esPlaceholders = [...serverI18n.DICTIONARIES.es[k].matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map(m => m[1]).sort();
+            assert.deepStrictEqual(enPlaceholders, esPlaceholders, `Placeholders diferentes para ${k}`);
+        }
+
+        assert.strictEqual(serverI18n.isValidStrictUiLang('en'), true);
+        assert.strictEqual(serverI18n.isValidStrictUiLang('es'), true);
+        assert.strictEqual(serverI18n.isValidStrictUiLang('fr'), false);
+        assert.strictEqual(serverI18n.normalizeUiLang('ES'), 'es');
+        assert.strictEqual(serverI18n.normalizeUiLang('unknown', 'en'), 'en');
+        assert.strictEqual(serverI18n.tServer('es', 'action.mark_done'), 'Marcar hecha');
+        assert.strictEqual(serverI18n.tServer('en', 'action.mark_done'), 'Mark done');
+        assert.strictEqual(serverI18n.tServer('es', 'action.snooze_15m'), 'Posponer 15m');
+        assert.strictEqual(serverI18n.tServer('es', 'agenda.in_progress_title', { activity: 'Tesis' }), '⏳ Llevas 1 hora en progreso: Tesis');
+        assert.strictEqual(serverI18n.tServer('en', 'agenda.in_progress_title', { activity: 'Tesis' }), '⏳ 1 hour in progress: Tesis');
+
+        const dashHtml = fs.readFileSync(path.join(ROOT, 'public/dashboard.html'), 'utf8');
+        assert.ok(dashHtml.includes('<script src="i18n.js" defer></script>'));
+        assert.ok(dashHtml.includes('<script src="dashboard.js" defer></script>'));
     });
 });
