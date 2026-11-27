@@ -11748,7 +11748,8 @@ function crearElementoActividad(item) {
     const resolvedBloque = categoria === 'universidad' ? 'escuela' : resolvePersonalAgendaBlock(item);
 
     const row = document.createElement('div');
-    row.className = `agenda-item${isDone ? ' is-done' : ''}${isSkipped ? ' is-skipped' : ''}`;
+    row.className = `agenda-item agenda-task-card${isDone ? ' is-done' : ''}${isSkipped ? ' is-skipped' : ''}`;
+    row.title = tUi('Drag card to move', 'Arrastra la tarjeta para moverla');
     if (item.id !== undefined && item.id !== null) {
         row.dataset.agendaId = String(item.id);
     }
@@ -11776,10 +11777,8 @@ function crearElementoActividad(item) {
 
     const dragHandle = document.createElement('span');
     dragHandle.className = 'agenda-drag-handle';
-    dragHandle.setAttribute('role', 'button');
-    dragHandle.tabIndex = 0;
-    dragHandle.title = tUi('Drag to reorder or move to another day', 'Arrastrar para reordenar o mover a otro día');
-    dragHandle.setAttribute('aria-label', dragHandle.title);
+    dragHandle.setAttribute('aria-hidden', 'true');
+    dragHandle.title = tUi('Drag card to move', 'Arrastra la tarjeta para moverla');
     dragHandle.textContent = '⋮⋮';
 
     const checkBtn = document.createElement('button');
@@ -11829,7 +11828,7 @@ function crearElementoActividad(item) {
     jiraRow.className = 'jira-status-row';
 
     const statusSelect = document.createElement('select');
-    statusSelect.className = `jira-status-select status-${estado}`;
+    statusSelect.className = `jira-status-select agenda-status-select status-${estado}`;
     statusSelect.setAttribute('aria-label', tUi('Activity status', 'Estado de avance'));
     [
         { value: 'todo', label: tUi('To Do', 'Por hacer') },
@@ -14094,11 +14093,15 @@ const agendaDragRuntime = {
     item: null,
     sourceEl: null,
     handleEl: null,
+    captureEl: null,
     ghostEl: null,
     pointerId: null,
+    pointerType: 'mouse',
     startX: 0,
     startY: 0,
     started: false,
+    longPressArmed: false,
+    longPressTimer: null,
     hoveredZoneEl: null,
     hoveredCardEl: null,
     insertPosition: null,
@@ -14298,15 +14301,20 @@ function evaluateAgendaDropZone(item, zoneEl, todayIso = formatLocalDate(new Dat
 }
 
 function cleanupAgendaDragState() {
+    if (agendaDragRuntime.longPressTimer) {
+        clearTimeout(agendaDragRuntime.longPressTimer);
+        agendaDragRuntime.longPressTimer = null;
+    }
     if (typeof agendaDragRuntime.detachTempListeners === 'function') {
         const detach = agendaDragRuntime.detachTempListeners;
         agendaDragRuntime.detachTempListeners = null;
         try { detach(); } catch (_) { /* ignore */ }
     }
-    if (agendaDragRuntime.handleEl && agendaDragRuntime.pointerId !== null) {
+    const captureTarget = agendaDragRuntime.captureEl || agendaDragRuntime.handleEl;
+    if (captureTarget && agendaDragRuntime.pointerId !== null) {
         try {
-            if (typeof agendaDragRuntime.handleEl.releasePointerCapture === 'function') {
-                agendaDragRuntime.handleEl.releasePointerCapture(agendaDragRuntime.pointerId);
+            if (typeof captureTarget.releasePointerCapture === 'function') {
+                captureTarget.releasePointerCapture(agendaDragRuntime.pointerId);
             }
         } catch (_) { /* ignore */ }
     }
@@ -14317,7 +14325,9 @@ function cleanupAgendaDragState() {
     clearAgendaInsertIndicators();
     if (typeof document !== 'undefined') {
         document.body?.classList?.remove('agenda-dragging-active');
-        document.querySelectorAll('.agenda-item.is-dragging').forEach(el => el.classList.remove('is-dragging'));
+        document.querySelectorAll('.agenda-item.is-dragging, .agenda-item.is-drag-armed').forEach(el => {
+            el.classList.remove('is-dragging', 'is-drag-armed');
+        });
         document.querySelectorAll('.is-drop-valid, .is-drop-invalid, .is-drop-hover').forEach(el => {
             el.classList.remove('is-drop-valid', 'is-drop-invalid', 'is-drop-hover');
         });
@@ -14325,10 +14335,13 @@ function cleanupAgendaDragState() {
     agendaDragRuntime.item = null;
     agendaDragRuntime.sourceEl = null;
     agendaDragRuntime.handleEl = null;
+    agendaDragRuntime.captureEl = null;
     agendaDragRuntime.pointerId = null;
+    agendaDragRuntime.pointerType = 'mouse';
     agendaDragRuntime.startX = 0;
     agendaDragRuntime.startY = 0;
     agendaDragRuntime.started = false;
+    agendaDragRuntime.longPressArmed = false;
     agendaDragRuntime.hoveredZoneEl = null;
 }
 
@@ -14504,45 +14517,99 @@ function closeAgendaDropTimeModal() {
     if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
 }
 
+function isAgendaCardInteractiveTarget(target, cardRoot = null) {
+    if (!target) return false;
+    const selector = 'button, select, option, input, textarea, a, label, [role="button"], [contenteditable="true"], [data-no-drag], .agenda-check-circle, .agenda-status-select, .jira-status-select, .agenda-item-actions, .agenda-mini-btn, .agenda-postpone-btn, .agenda-skip-btn';
+    const el = (target.nodeType === 1 || !target.parentElement) ? target : target.parentElement;
+    if (!el) return false;
+
+    if (typeof el.closest === 'function') {
+        if (el.closest('.agenda-drag-handle')) return false;
+        const hit = el.closest(selector);
+        if (!hit) return false;
+        if (cardRoot && typeof cardRoot.contains === 'function' && !cardRoot.contains(hit)) return false;
+        return true;
+    }
+
+    const interactiveTags = new Set(['BUTTON', 'SELECT', 'OPTION', 'INPUT', 'TEXTAREA', 'A', 'LABEL']);
+    const interactiveClasses = new Set([
+        'agenda-check-circle',
+        'agenda-status-select',
+        'jira-status-select',
+        'agenda-item-actions',
+        'agenda-mini-btn',
+        'agenda-postpone-btn',
+        'agenda-skip-btn'
+    ]);
+
+    let cur = el;
+    while (cur) {
+        const clsList = String(cur.className || '').split(/\s+/).filter(Boolean);
+        if (clsList.includes('agenda-drag-handle')) return false;
+        const tag = String(cur.tagName || '').toUpperCase();
+        if (interactiveTags.has(tag)) return true;
+        if (clsList.some((c) => interactiveClasses.has(c))) return true;
+        if (typeof cur.getAttribute === 'function') {
+            if (cur.getAttribute('role') === 'button') return true;
+            if (cur.getAttribute('contenteditable') === 'true') return true;
+        }
+        if (typeof cur.hasAttribute === 'function' && cur.hasAttribute('data-no-drag')) return true;
+        if (cardRoot && cur === cardRoot) break;
+        cur = cur.parentElement || null;
+    }
+    return false;
+}
+
 function wireAgendaCardDrag(cardEl, handleEl, item) {
     if (!cardEl || !handleEl || !item || !item.id) return;
+
+    const MOUSE_DRAG_THRESHOLD_PX = 6;
+    const TOUCH_SCROLL_CANCEL_PX = 8;
+    const TOUCH_LONG_PRESS_MS = 220;
 
     cardEl.addEventListener('dragstart', (ev) => ev.preventDefault());
     handleEl.addEventListener('dragstart', (ev) => ev.preventDefault());
     handleEl.addEventListener('click', (ev) => ev.stopPropagation());
+    cardEl.addEventListener('contextmenu', (ev) => {
+        if (agendaDragRuntime.started || agendaDragRuntime.longPressArmed) {
+            ev.preventDefault();
+        }
+    });
 
-    const beginDragSession = (downEv, fromHandle) => {
+    cardEl.addEventListener('pointerdown', (downEv) => {
+        if (downEv.pointerType === 'mouse' && downEv.button !== 0) return;
         if (downEv.button !== undefined && downEv.button !== 0) return;
         if (busyActionElements.has(cardEl)) return;
-        if (fromHandle) {
-            downEv.stopPropagation();
-            if (downEv.cancelable) downEv.preventDefault();
-        } else {
-            if (downEv.pointerType !== 'mouse') return;
-            if (downEv.target && typeof downEv.target.closest === 'function') {
-                if (downEv.target.closest('button, select, input, textarea, a, label, option, .jira-status-select, .agenda-item-actions, .agenda-check-circle, .agenda-drag-handle')) {
-                    return;
-                }
-            }
+
+        const fromHandle = Boolean(
+            downEv.target && (
+                downEv.target === handleEl ||
+                (typeof handleEl.contains === 'function' && handleEl.contains(downEv.target)) ||
+                (typeof downEv.target.closest === 'function' && downEv.target.closest('.agenda-drag-handle'))
+            )
+        );
+
+        if (!fromHandle && isAgendaCardInteractiveTarget(downEv.target, cardEl)) {
+            return;
         }
 
         cleanupAgendaDragState();
 
+        const pType = downEv.pointerType || 'mouse';
+        const isTouchLike = pType === 'touch' || pType === 'pen';
         agendaDragRuntime.item = item;
         agendaDragRuntime.sourceEl = cardEl;
         agendaDragRuntime.handleEl = fromHandle ? handleEl : null;
+        agendaDragRuntime.captureEl = null;
         agendaDragRuntime.pointerId = downEv.pointerId;
+        agendaDragRuntime.pointerType = pType;
         agendaDragRuntime.startX = downEv.clientX;
         agendaDragRuntime.startY = downEv.clientY;
         agendaDragRuntime.started = false;
+        agendaDragRuntime.longPressArmed = false;
 
-        if (fromHandle) {
-            try {
-                if (typeof handleEl.setPointerCapture === 'function') {
-                    handleEl.setPointerCapture(downEv.pointerId);
-                }
-            } catch (_) { /* ignore */ }
-        }
+        let latestX = downEv.clientX;
+        let latestY = downEv.clientY;
 
         const updateGhostPosition = (cx, cy) => {
             if (!agendaDragRuntime.ghostEl) return;
@@ -14567,24 +14634,76 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
             });
         };
 
+        const engageActiveDrag = (cx, cy) => {
+            if (agendaDragRuntime.started || agendaDragRuntime.sourceEl !== cardEl) return;
+            agendaDragRuntime.started = true;
+            cardEl.classList.add('is-dragging');
+            document.body?.classList?.add('agenda-dragging-active');
+
+            const capTarget = fromHandle ? handleEl : cardEl;
+            try {
+                if (capTarget && typeof capTarget.setPointerCapture === 'function' && downEv.pointerId !== undefined) {
+                    capTarget.setPointerCapture(downEv.pointerId);
+                    agendaDragRuntime.captureEl = capTarget;
+                }
+            } catch (_) { /* ignore */ }
+
+            const ghost = document.createElement('div');
+            ghost.className = 'agenda-drag-ghost';
+            const parsed = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
+            ghost.textContent = `${item.hora || ''} · ${(parsed.titulo || item.actividad || '').slice(0, 38)}`;
+            document.body.appendChild(ghost);
+            agendaDragRuntime.ghostEl = ghost;
+            updateGhostPosition(cx, cy);
+            paintAllAgendaDropZonesForActiveDrag(item);
+        };
+
+        if (fromHandle) {
+            downEv.stopPropagation();
+            if (downEv.cancelable) downEv.preventDefault();
+            try {
+                if (typeof handleEl.setPointerCapture === 'function') {
+                    handleEl.setPointerCapture(downEv.pointerId);
+                    agendaDragRuntime.captureEl = handleEl;
+                }
+            } catch (_) { /* ignore */ }
+        } else if (isTouchLike) {
+            agendaDragRuntime.longPressTimer = setTimeout(() => {
+                agendaDragRuntime.longPressTimer = null;
+                if (agendaDragRuntime.sourceEl !== cardEl || agendaDragRuntime.started) return;
+                agendaDragRuntime.longPressArmed = true;
+                engageActiveDrag(latestX, latestY);
+                try {
+                    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+                        navigator.vibrate(15);
+                    }
+                } catch (_) { /* ignore */ }
+            }, TOUCH_LONG_PRESS_MS);
+        }
+
+        const onScrollCancelLongPress = () => {
+            if (isTouchLike && !fromHandle && !agendaDragRuntime.started) {
+                cleanupAgendaDragState();
+            }
+        };
+
         const onPointerMove = (moveEv) => {
             if (moveEv.pointerId !== agendaDragRuntime.pointerId) return;
+            latestX = moveEv.clientX;
+            latestY = moveEv.clientY;
             const dx = moveEv.clientX - agendaDragRuntime.startX;
             const dy = moveEv.clientY - agendaDragRuntime.startY;
 
             if (!agendaDragRuntime.started) {
-                if (Math.hypot(dx, dy) < 5) return;
-                agendaDragRuntime.started = true;
-                cardEl.classList.add('is-dragging');
-                document.body?.classList?.add('agenda-dragging-active');
-
-                const ghost = document.createElement('div');
-                ghost.className = 'agenda-drag-ghost';
-                const parsed = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
-                ghost.textContent = `${item.hora || ''} · ${(parsed.titulo || item.actividad || '').slice(0, 38)}`;
-                document.body.appendChild(ghost);
-                agendaDragRuntime.ghostEl = ghost;
-                paintAllAgendaDropZonesForActiveDrag(item);
+                if (isTouchLike && !fromHandle) {
+                    if (Math.hypot(dx, dy) > TOUCH_SCROLL_CANCEL_PX) {
+                        cleanupAgendaDragState();
+                    }
+                    return;
+                }
+                const threshold = fromHandle ? 4 : MOUSE_DRAG_THRESHOLD_PX;
+                if (Math.hypot(dx, dy) < threshold) return;
+                engageActiveDrag(moveEv.clientX, moveEv.clientY);
             }
 
             if (moveEv.cancelable) moveEv.preventDefault();
@@ -14690,16 +14809,17 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
         window.addEventListener('pointermove', onPointerMove, { passive: false });
         window.addEventListener('pointerup', onPointerUp);
         window.addEventListener('pointercancel', onPointerCancel);
+        if (isTouchLike && !fromHandle) {
+            window.addEventListener('scroll', onScrollCancelLongPress, { passive: true, capture: true });
+        }
 
         agendaDragRuntime.detachTempListeners = () => {
             window.removeEventListener('pointermove', onPointerMove);
             window.removeEventListener('pointerup', onPointerUp);
             window.removeEventListener('pointercancel', onPointerCancel);
+            window.removeEventListener('scroll', onScrollCancelLongPress, true);
         };
-    };
-
-    handleEl.addEventListener('pointerdown', (downEv) => beginDragSession(downEv, true));
-    cardEl.addEventListener('pointerdown', (downEv) => beginDragSession(downEv, false));
+    });
 }
 
 (function initAgendaDragDropAndModalHandlers() {

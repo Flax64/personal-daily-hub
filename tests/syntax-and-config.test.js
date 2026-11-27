@@ -2485,4 +2485,99 @@ describe('Mejoras de Materias (Pausa/Promedio), En Progreso 1h y Smart Commute e
         assert.ok(dashHtml.includes('<script src="i18n.js" defer></script>'));
         assert.ok(dashHtml.includes('<script src="dashboard.js" defer></script>'));
     });
+
+    it('elimina el bloque fijo Campus ITS (Croquis) y habilita drag & drop desde toda la tarjeta de Agenda sin afectar controles', () => {
+        const indexHtml = readText('public/index.html');
+        const frontendJs = readText('public/frontend.js');
+        const i18nJs = readText('public/i18n.js');
+        const styleCss = readText('public/style.css');
+
+        // 1. Bloque fijo de 3 botones de Campus ITS eliminado de #view-horario
+        for (const removedId of [
+            'id="btnCampusPrincipalMap"',
+            'id="btnCampusBoillotMap"',
+            'id="btnCampusMiravalleMap"',
+            'id="uniLocationSummaryText"'
+        ]) {
+            assert.strictEqual(indexHtml.includes(removedId), false, `public/index.html ya no debe incluir ${removedId}`);
+        }
+        assert.strictEqual(
+            indexHtml.includes('ITS Campuses (Instituto Tecnológico de Saltillo Croquis)'),
+            false,
+            'public/index.html ya no debe incluir el encabezado fijo de Campus ITS (Croquis)'
+        );
+        for (const keptId of [
+            'id="itsCroquisDirectoryCards"',
+            'id="btnHomeOpenMapPicker"',
+            'id="liveCommuteCardsContainer"',
+            'id="btnPingPhoneGps"',
+            'id="btnClearCurrentGps"',
+            'id="uniLocationLat"',
+            'id="uniLocationLng"'
+        ]) {
+            assert.ok(indexHtml.includes(keptId), `public/index.html debe conservar ${keptId}`);
+        }
+
+        // 2. Traducciones limpias y tooltip de tarjeta arrastrable en public/i18n.js
+        for (const oldText of [
+            '📍 Pin Campus Principal (CTO-002)',
+            '📍 Pin Campus Blvd / Glorieta (CTO-004)',
+            '📍 Pin Campus Miravalle (CTO-003)'
+        ]) {
+            assert.strictEqual(i18nJs.includes(oldText), false, `public/i18n.js no debe conservar texto obsoleto ${oldText}`);
+        }
+        assert.ok(
+            i18nJs.includes("['Drag card to move', 'Arrastra la tarjeta para moverla']"),
+            'public/i18n.js debe incluir la traducción de Drag card to move'
+        );
+
+        // 3. Helper isAgendaCardInteractiveTarget y comportamiento en tarjeta de Agenda
+        assert.ok(frontendJs.includes('function isAgendaCardInteractiveTarget('), 'public/frontend.js debe definir isAgendaCardInteractiveTarget');
+        assert.ok(frontendJs.includes('agenda-task-card'), 'public/frontend.js debe asignar clase .agenda-task-card');
+        assert.ok(frontendJs.includes('agenda-status-select'), 'public/frontend.js debe incluir .agenda-status-select');
+
+        const dragSandbox = {};
+        const fnStart = frontendJs.indexOf('function isAgendaCardInteractiveTarget(');
+        const fnEnd = frontendJs.indexOf('function wireAgendaCardDrag(', fnStart);
+        assert.ok(fnStart > 0 && fnEnd > fnStart, 'No se pudo extraer isAgendaCardInteractiveTarget');
+        vm.runInNewContext(frontendJs.slice(fnStart, fnEnd), dragSandbox);
+        assert.strictEqual(typeof dragSandbox.isAgendaCardInteractiveTarget, 'function');
+
+        const makeMockNode = (tagName, className = '', attrs = {}, parent = null) => ({
+            nodeType: 1,
+            tagName: tagName.toUpperCase(),
+            className,
+            parentElement: parent,
+            getAttribute: (k) => (Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null),
+            hasAttribute: (k) => Object.prototype.hasOwnProperty.call(attrs, k)
+        });
+        const cardEl = makeMockNode('div', 'agenda-item agenda-task-card');
+        const titleEl = makeMockNode('span', 'agenda-item-text', {}, cardEl);
+        const timeEl = makeMockNode('span', 'agenda-time-pill', {}, cardEl);
+        const catEl = makeMockNode('span', 'agenda-cat-pill', {}, cardEl);
+        const handleEl = makeMockNode('span', 'agenda-drag-handle', {}, cardEl);
+        const checkBtn = makeMockNode('button', 'agenda-check-circle status-todo', {}, cardEl);
+        const statusSel = makeMockNode('select', 'jira-status-select agenda-status-select', {}, cardEl);
+        const postponeBtn = makeMockNode('button', 'agenda-mini-btn agenda-postpone-btn', {}, cardEl);
+        const editIcon = makeMockNode('svg', '', {}, postponeBtn);
+        const roleBtn = makeMockNode('div', 'custom-ctrl', { role: 'button' }, cardEl);
+        const noDragEl = makeMockNode('span', 'badge', { 'data-no-drag': '1' }, cardEl);
+
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(cardEl, cardEl), false);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(titleEl, cardEl), false);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(timeEl, cardEl), false);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(catEl, cardEl), false);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(handleEl, cardEl), false);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(checkBtn, cardEl), true);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(statusSel, cardEl), true);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(postponeBtn, cardEl), true);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(editIcon, cardEl), true);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(roleBtn, cardEl), true);
+        assert.strictEqual(dragSandbox.isAgendaCardInteractiveTarget(noDragEl, cardEl), true);
+
+        // 4. Estilos cursor grab/grabbing en tarjetas y pointer en controles
+        assert.match(styleCss, /\.agenda-task-card[\s\S]*?cursor:\s*grab\b/);
+        assert.match(styleCss, /\.agenda-task-card\.is-dragging[\s\S]*?cursor:\s*grabbing\b/);
+        assert.match(styleCss, /\.agenda-item\s+\.agenda-status-select[\s\S]*?cursor:\s*pointer\b/);
+    });
 });
