@@ -15,6 +15,7 @@
     <script src="i18n.js" defer></script>
     <script src="guia-visual.js" defer></script>
     <script src="translator-widget.js" defer></script>
+    <script src="hangul-trace-recognizer.js" defer></script>
     <script src="frontend.js" defer></script>
 </head>
 
@@ -1555,12 +1556,88 @@
                             <div class="hangul-detail-info">
                                 <div class="hangul-detail-top">
                                     <strong id="hangulDetailName">Selecciona un símbolo coreano para practicar</strong>
-                                    <button type="button" class="btn-secondary btn-small" id="btnHangulSpeakSymbol" title="Escuchar pronunciación coreana (ko-KR)">🔊 Escuchar</button>
+                                    <div class="hangul-detail-actions">
+                                        <button type="button" class="btn-secondary btn-small" id="btnHangulSpeakSymbol" title="Escuchar pronunciación coreana (ko-KR)">🔊 Escuchar</button>
+                                        <button type="button" class="btn-secondary btn-small" id="btnHangulPracticeSelectedTrace" title="Cargar este símbolo como guía en la pizarra de trazo (sin guardar)">✍️ Practicar trazo</button>
+                                    </div>
                                 </div>
                                 <p id="hangulDetailMeta" class="muted-text"></p>
                                 <p id="hangulDetailTip" class="hangul-detail-tip"></p>
                             </div>
                         </div>
+
+                        <!-- Zero-Save Hangul Tracing Pad (Finger/Mouse Practice · Never saved to Word or DB) -->
+                        <section id="hangulTraceStudio" class="hangul-trace-studio" aria-labelledby="hangulTraceStudioTitle">
+                            <div class="hangul-trace-head">
+                                <div>
+                                    <h4 id="hangulTraceStudioTitle">✍️ Pizarra de Trazo Hangul (Sin Guardar)</h4>
+                                    <p class="muted-text small-note">Dibuja cualquier vocal o consonante coreana con tu dedo en celular/tablet o con el ratón en PC para identificar el símbolo y escuchar su pronunciación. Práctica 100% efímera: nunca se guarda en tu cuaderno Word ni en la base de datos.</p>
+                                </div>
+                                <div class="hangul-trace-head-controls">
+                                    <span class="badge-pill is-nosave-pill">🔒 Sin Guardar (0 escrituras)</span>
+                                    <label class="sr-only" for="hangulTraceGuideSelect">Símbolo guía opcional</label>
+                                    <select id="hangulTraceGuideSelect" class="select-input hangul-trace-guide-select" title="Elige trazo libre o un símbolo coreano para calcar con guía">
+                                        <option value="">✏️ Trazo libre (sin símbolo objetivo)</option>
+                                    </select>
+                                    <label class="ai-autosync-toggle hangul-trace-auto-toggle" title="Identificar automáticamente el símbolo al levantar el dedo o el ratón">
+                                        <input type="checkbox" id="chkHangulTraceAutoRecognize" checked>
+                                        <span>⚡ Auto-identificar</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="hangul-trace-body">
+                                <div class="hangul-trace-pad-col">
+                                    <div class="hangul-trace-canvas-stage">
+                                        <canvas id="hangulTraceCanvas" class="hangul-trace-canvas" width="300" height="300"
+                                            aria-label="Lienzo de práctica para dibujar símbolos coreanos Hangul"></canvas>
+                                    </div>
+                                    <div class="hangul-trace-controls">
+                                        <button type="button" class="btn-primary btn-small" id="btnHangulTraceRecognize" title="Identificar el símbolo dibujado en la pizarra">🔍 Identificar</button>
+                                        <button type="button" class="btn-secondary btn-small" id="btnHangulTraceUndo" disabled title="Borrar el último trazo dibujado">↩️ Deshacer</button>
+                                        <button type="button" class="btn-secondary btn-small" id="btnHangulTraceClear" disabled title="Limpiar toda la pizarra y reiniciar el resultado">🧹 Limpiar</button>
+                                        <button type="button" class="btn-secondary btn-small" id="btnHangulTraceToggleGuide" aria-pressed="true" title="Mostrar u ocultar la silueta guía en el lienzo">👁️ Guía</button>
+                                        <button type="button" class="btn-secondary btn-small" id="btnHangulTraceRandom" title="Elegir un símbolo Hangul al azar para practicar su trazo">🎲 Aleatorio</button>
+                                    </div>
+                                </div>
+
+                                <div id="hangulTraceResult" class="hangul-trace-result-panel" aria-live="polite">
+                                    <div id="hangulTraceEmptyState" class="hangul-trace-empty">
+                                        <span class="hangul-trace-empty-icon" aria-hidden="true">✍️</span>
+                                        <p id="hangulTraceEmptyText" data-i18n-html="hangul_trace_empty_hint">Traza cualquier símbolo Hangul en el cuadro de la izquierda y pulsa <strong>🔍 Identificar</strong> (o suelta el trazo con auto-identificar activo) para ver cuál es y cómo suena.</p>
+                                    </div>
+
+                                    <div id="hangulTraceMatchCard" class="hangul-trace-match-card" hidden>
+                                        <div class="hangul-trace-match-top">
+                                            <div class="hangul-trace-recognized-glyph" id="hangulTraceRecognizedGlyph">--</div>
+                                            <div class="hangul-trace-match-meta">
+                                                <div class="hangul-trace-match-title-row">
+                                                    <strong id="hangulTraceRecognizedName">--</strong>
+                                                    <span class="hangul-trace-cat-badge" id="hangulTraceCategoryBadge">--</span>
+                                                </div>
+                                                <div class="hangul-trace-pills-row">
+                                                    <span class="korean-drive-rom-pill" id="hangulTraceRomanization">[--]</span>
+                                                    <span class="hangul-trace-confidence-pill" id="hangulTraceConfidence">--%</span>
+                                                    <button type="button" class="btn-secondary btn-small" id="btnHangulTraceSpeak" title="Escuchar pronunciación coreana (ko-KR)">🔊 Escuchar</button>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div id="hangulTraceGuidedFeedback" class="hangul-trace-guided-feedback" hidden></div>
+
+                                        <div class="hangul-trace-pronunciation-box">
+                                            <p id="hangulTracePronunciation" class="hangul-trace-pron-main"></p>
+                                            <p id="hangulTraceBatchimNote" class="muted-text small-note hangul-trace-batchim-note"></p>
+                                        </div>
+
+                                        <div id="hangulTraceAlternativesWrap" class="hangul-trace-alternatives" hidden>
+                                            <span class="small-note muted-text" id="hangulTraceAltLabel">¿Quisiste trazar...?</span>
+                                            <div id="hangulTraceAlternativesList" class="hangul-trace-alt-chips"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
 
                         <div class="hangul-studio-split">
                             <section class="hangul-builder-card">
