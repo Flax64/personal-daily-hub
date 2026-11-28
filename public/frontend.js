@@ -2210,6 +2210,11 @@ if (appShell) {
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            const editSeriesModal = document.getElementById('agendaEditSeriesModal');
+            const delSeriesModal = document.getElementById('agendaDeleteSeriesModal');
+            if ((editSeriesModal && !editSeriesModal.hidden) || (delSeriesModal && !delSeriesModal.hidden)) {
+                return;
+            }
             setMobileMenuOpen(false);
             cerrarAgendaModal();
             if (typeof closeAgendaDropTimeModal === 'function') closeAgendaDropTimeModal();
@@ -13699,6 +13704,91 @@ function openAgendaDeleteSeriesDialog(item, followingCount) {
     });
 }
 
+function openAgendaEditSeriesDialog(item, followingCount) {
+    const modal = document.getElementById('agendaEditSeriesModal');
+    const titleEl = document.getElementById('agendaEditSeriesTitle');
+    const itemTitleEl = document.getElementById('agendaEditSeriesItemTitle');
+    const itemDateEl = document.getElementById('agendaEditSeriesItemDate');
+    const noticeEl = document.getElementById('agendaEditSeriesNotice');
+    const btnSingle = document.getElementById('btnAgendaEditScopeSingle');
+    const btnFollowing = document.getElementById('btnAgendaEditScopeFollowing');
+    const btnCancel = document.getElementById('btnAgendaEditScopeCancel');
+    const btnClose = document.getElementById('btnCloseAgendaEditSeriesModal');
+
+    if (!modal || !btnSingle || !btnFollowing || !btnCancel) {
+        return openConfirmDialog({
+            title: tUi('Edit recurring activity', 'Editar actividad repetitiva'),
+            message: tUi("Previous days' occurrences are never modified.", 'Las actividades de días anteriores nunca se modifican.'),
+            confirmText: tUi('Only this activity', 'Solo esta actividad')
+        }).then(ok => (ok ? 'single' : null));
+    }
+
+    const sourceItem = item || {};
+    const parsed = splitAgendaActividadClient(sourceItem.actividad, sourceItem.titulo, sourceItem.descripcion);
+    if (titleEl) {
+        titleEl.textContent = tUi('Edit recurring activity', 'Editar actividad repetitiva');
+    }
+    if (itemTitleEl) {
+        protectUserNode(itemTitleEl);
+        itemTitleEl.textContent = parsed.titulo || sourceItem.actividad || '--';
+    }
+    if (itemDateEl) {
+        protectUserNode(itemDateEl);
+        const datePart = typeof formatAgendaHumanDayShort === 'function'
+            ? formatAgendaHumanDayShort(sourceItem.fecha)
+            : String(sourceItem.fecha || '');
+        const timePart = String(sourceItem.hora || '').trim().slice(0, 5);
+        itemDateEl.textContent = timePart ? `${datePart} · ${timePart}` : datePart;
+    }
+    if (noticeEl) {
+        noticeEl.textContent = tUi(
+            "🛡️ Previous days' occurrences are never modified.",
+            '🛡️ Las actividades de días anteriores nunca se modifican.'
+        );
+    }
+    btnSingle.textContent = tUi('Only this activity', 'Solo esta actividad');
+    btnFollowing.textContent = tUi(
+        `This and following (+${followingCount})`,
+        `Esta y las siguientes (+${followingCount})`
+    );
+    btnCancel.textContent = tUi('Cancel', 'Cancelar');
+
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (choice) => {
+            if (settled) return;
+            settled = true;
+            modal.hidden = true;
+            document.removeEventListener('keydown', onKeyDown, true);
+            if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+            if (!choice) {
+                setTimeout(() => document.getElementById('btnSaveAgenda')?.focus(), 20);
+            }
+            resolve(choice);
+        };
+        const onKeyDown = (ev) => {
+            if (ev.key === 'Escape' && !modal.hidden) {
+                ev.preventDefault();
+                ev.stopImmediatePropagation();
+                finish(null);
+            }
+        };
+
+        btnSingle.onclick = () => finish('single');
+        btnFollowing.onclick = () => finish('following');
+        btnCancel.onclick = () => finish(null);
+        if (btnClose) btnClose.onclick = () => finish(null);
+        modal.onclick = (ev) => {
+            if (ev.target === modal) finish(null);
+        };
+        document.addEventListener('keydown', onKeyDown, true);
+
+        modal.hidden = false;
+        if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+        setTimeout(() => btnCancel.focus(), 20);
+    });
+}
+
 const agendaModal = document.getElementById('agendaModal');
 const agendaForm = document.getElementById('agendaForm');
 
@@ -14286,6 +14376,7 @@ function abrirAgendaModal(prefill = {}) {
 
     agendaOriginalSnapshot = isEdit
         ? {
+            id: Number(prefill.id) || String(prefill.id),
             fecha: resolvedFecha,
             bloque: resolvedBloque,
             hora: resolvedHora,
@@ -14294,7 +14385,11 @@ function abrirAgendaModal(prefill = {}) {
             categoria: resolvedCategoria,
             materia_id: currentMateriaVal,
             estado: resolvedEstado,
-            recordatorio_min: resolvedRemMin
+            recordatorio_min: resolvedRemMin,
+            serie_id: prefill.serie_id ? String(prefill.serie_id).trim() : null,
+            followingCount: Number.isInteger(Number(prefill.followingCount)) && Number(prefill.followingCount) >= 0
+                ? Number(prefill.followingCount)
+                : 0
         }
         : null;
 
@@ -14682,7 +14777,7 @@ if (agendaForm) {
         }
     }
 
-    agendaForm.addEventListener('submit', (e) => {
+    agendaForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const btnSave = document.getElementById('btnSaveAgenda');
         if (!btnSave || busyActionElements.has(btnSave) || btnSave.disabled) return;
@@ -14757,16 +14852,48 @@ if (agendaForm) {
             return;
         }
 
-        const duplicateExists = agendaState.items.some(item =>
-            String(item.id) !== String(editId || '') &&
-            item.fecha === payload.fecha &&
-            item.bloque === payload.bloque &&
-            String(item.hora || '').slice(0, 5) === payload.hora &&
-            (item.tipo || 'evento') === payload.tipo &&
-            (item.categoria || 'personal') === payload.categoria &&
-            String(item.materia_id || '') === (materiaVal || '') &&
-            String(item.actividad || '').trim().toLowerCase().replace(/\s+/g, ' ') === payload.actividad.toLowerCase()
-        );
+        const existingItemInState = editId
+            ? ((Array.isArray(agendaState.items) ? agendaState.items : []).find(i => String(i.id) === String(editId)) || null)
+            : null;
+        const seriesTargetItem = editId
+            ? (existingItemInState || (agendaOriginalSnapshot ? { ...agendaOriginalSnapshot, id: editId } : null))
+            : null;
+        const editSerieId = seriesTargetItem?.serie_id ? String(seriesTargetItem.serie_id).trim() : '';
+        const followingCount = (editId && editSerieId) ? computeClientFollowingSeriesCount(seriesTargetItem) : 0;
+
+        let editScope = 'single';
+        if (editId && editSerieId && followingCount > 0) {
+            const chosenScope = await openAgendaEditSeriesDialog(seriesTargetItem, followingCount);
+            if (!chosenScope) {
+                return;
+            }
+            editScope = chosenScope;
+            payload.scope = editScope;
+        } else if (editId) {
+            payload.scope = 'single';
+        }
+
+        const duplicateExists = agendaState.items.some(item => {
+            if (String(item.id) === String(editId || '')) return false;
+            if (editId && editScope === 'following' && editSerieId && String(item.serie_id || '').trim() === editSerieId) {
+                const origFecha = String(seriesTargetItem?.fecha || '').slice(0, 10);
+                const origHora = String(seriesTargetItem?.hora || '').trim().slice(0, 5);
+                const iFecha = String(item.fecha || '').slice(0, 10);
+                const iHora = String(item.hora || '').trim().slice(0, 5);
+                if (iFecha > origFecha || (iFecha === origFecha && iHora > origHora)) {
+                    return false;
+                }
+            }
+            return (
+                item.fecha === payload.fecha &&
+                item.bloque === payload.bloque &&
+                String(item.hora || '').slice(0, 5) === payload.hora &&
+                (item.tipo || 'evento') === payload.tipo &&
+                (item.categoria || 'personal') === payload.categoria &&
+                String(item.materia_id || '') === (materiaVal || '') &&
+                String(item.actividad || '').trim().toLowerCase().replace(/\s+/g, ' ') === payload.actividad.toLowerCase()
+            );
+        });
         if (duplicateExists) {
             showToast('err', tUi(
                 'This exact activity is already scheduled for that date, category, block, and time.',
@@ -14775,13 +14902,16 @@ if (agendaForm) {
             return;
         }
 
-        const url = editId ? `/api/update-agenda/${editId}` : '/api/insert-agenda';
+        const url = editId
+            ? `/api/update-agenda/${editId}?scope=${encodeURIComponent(editScope)}`
+            : '/api/insert-agenda';
         const method = editId ? 'PUT' : 'POST';
-        const scopeKey = editId ? `agenda-edit:${editId}` : 'agenda-create';
+        const scopeKey = editId ? `agenda-edit:${editId}:${editScope}` : 'agenda-create';
+        const scrollSnap = captureAgendaScrollSnapshot();
 
         runWithButtonLock(btnSave, async () => {
             try {
-                await submitMutationRequest({
+                const respData = await submitMutationRequest({
                     url,
                     method,
                     scopeKey,
@@ -14789,16 +14919,28 @@ if (agendaForm) {
                     buildBody: () => payload,
                     parseJson: true
                 });
-                agendaState.selectedDate = payload.fecha;
+                if (!editId) {
+                    agendaState.selectedDate = payload.fecha;
+                }
                 cerrarAgendaModal();
-                cargarAgendaSemana();
+                cargarAgendaSemana({ preserveScroll: Boolean(editId) });
+                if (editId) restoreAgendaScrollSnapshot(scrollSnap);
                 refreshOpenAgendaHeaderCalendar();
                 cargarRecordatoriosActivos();
-                showToast('ok', editId
-                    ? tUi('Activity updated!', '¡Actividad actualizada!')
-                    : (repeatDates.length > 1
-                        ? tUi(`Activity scheduled for ${repeatDates.length} dates!`, `¡Actividad programada para ${repeatDates.length} fechas!`)
-                        : tUi('Activity added to your week!', '¡Actividad agregada a tu semana!')));
+                const updatedCount = Number(respData?.updatedCount) || 1;
+                if (editId && editScope === 'following' && updatedCount > 1) {
+                    const extraCount = updatedCount - 1;
+                    showToast('ok', tUi(
+                        `Updated this activity and ${extraCount} following.`,
+                        `Actividad y ${extraCount} ${extraCount === 1 ? 'siguiente actualizada' : 'siguientes actualizadas'}.`
+                    ));
+                } else {
+                    showToast('ok', editId
+                        ? tUi('Activity updated!', '¡Actividad actualizada!')
+                        : (repeatDates.length > 1
+                            ? tUi(`Activity scheduled for ${repeatDates.length} dates!`, `¡Actividad programada para ${repeatDates.length} fechas!`)
+                            : tUi('Activity added to your week!', '¡Actividad agregada a tu semana!')));
+                }
             } catch (err) {
                 showToast('err', `${tUi('Error', 'Error')}: ${tServer(err.message)}`);
             }

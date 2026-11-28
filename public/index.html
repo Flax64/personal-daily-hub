@@ -3836,6 +3836,29 @@
         </div>
     </div>
 
+    <!-- Modal to edit Google Calendar-style recurring Agenda activity (never modifies previous days) -->
+    <div class="modal-overlay" id="agendaEditSeriesModal" hidden aria-modal="true" role="dialog"
+        aria-labelledby="agendaEditSeriesTitle">
+        <div class="modal-card modal-card-compact agenda-delete-series-modal-card agenda-edit-series-modal-card">
+            <div class="modal-header">
+                <h3 id="agendaEditSeriesTitle">Edit recurring activity</h3>
+                <button type="button" class="modal-close-btn" id="btnCloseAgendaEditSeriesModal" aria-label="Close dialog">✕</button>
+            </div>
+            <div class="agenda-drop-summary-box" id="agendaEditSeriesSummary">
+                <strong class="agenda-drop-item-title" id="agendaEditSeriesItemTitle">--</strong>
+                <span class="agenda-drop-date-change" id="agendaEditSeriesItemDate">--</span>
+            </div>
+            <p class="agenda-delete-series-notice agenda-edit-series-notice" id="agendaEditSeriesNotice">
+                🛡️ Previous days' occurrences are never modified.
+            </p>
+            <div class="agenda-delete-series-actions">
+                <button type="button" class="btn-secondary agenda-delete-series-btn" id="btnAgendaEditScopeSingle">Only this activity</button>
+                <button type="button" class="btn-submit btn-modal-save agenda-delete-series-btn" id="btnAgendaEditScopeFollowing">This and following (+1)</button>
+                <button type="button" class="btn-cancel agenda-delete-series-btn" id="btnAgendaEditScopeCancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Floating Postpone Popover Menu for Weekly Agenda Cards -->
     <div class="agenda-postpone-popover" id="agendaPostponePopover" hidden role="dialog" aria-label="Posponer actividad">
         <div class="agenda-postpone-head">

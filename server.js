@@ -3890,7 +3890,11 @@ function normalizeAgendaItemFields(body = {}) {
         ? 'personal'
         : String(body.categoria).trim().toLowerCase();
     const normalizedEstado = normalizeAgendaStatusInput(body.estado);
-    const estado = normalizedEstado || 'todo';
+    const estado = normalizedEstado || (
+        (body.completada === 1 || body.completada === true || body.completada === '1' || body.completada === 'true')
+            ? 'done'
+            : 'todo'
+    );
     let recordatorioMin = null;
     if (body.recordatorio_min !== undefined && body.recordatorio_min !== null && body.recordatorio_min !== '') {
         recordatorioMin = Number(body.recordatorio_min);
@@ -4295,9 +4299,37 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
     }
 });
 
+function parseAgendaYmdUtcMs(ymdStr) {
+    const clean = String(ymdStr || '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) return NaN;
+    const [y, m, d] = clean.split('-').map(Number);
+    const ms = Date.UTC(y, m - 1, d);
+    return new Date(ms).toISOString().slice(0, 10) === clean ? ms : NaN;
+}
+
+function shiftAgendaYmdDaysServer(ymdStr, deltaDays) {
+    const ms = parseAgendaYmdUtcMs(ymdStr);
+    const step = Number.parseInt(deltaDays, 10);
+    if (!Number.isFinite(ms) || !Number.isInteger(step)) return String(ymdStr || '').slice(0, 10);
+    if (step === 0) return String(ymdStr || '').slice(0, 10);
+    return new Date(ms + step * 86400000).toISOString().slice(0, 10);
+}
+
 app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requireNonEmptyBody, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const id = parseAgendaId(req.params.id);
     if (!id) return res.status(400).send('Invalid activity ID.');
+
+    const rawScope = req.body?.scope !== undefined ? req.body.scope : req.query?.scope;
+    const scope = (rawScope === undefined || rawScope === null || String(rawScope).trim() === '')
+        ? 'single'
+        : String(rawScope).trim().toLowerCase();
+
+    if (scope === 'all' || scope === 'previous') {
+        return res.status(400).send('Past recurring occurrences cannot be edited.');
+    }
+    if (scope !== 'single' && scope !== 'following') {
+        return res.status(400).send('Invalid edit scope (allowed: single, following).');
+    }
 
     const errorValidacion = validarDatosAgenda(req.body);
     if (errorValidacion) {
@@ -4309,6 +4341,7 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
         const { tipo, categoria, estado, recordatorioMin } = normalizeAgendaItemFields(req.body);
         const enforcePreventBackdate = req.body.preventBackdate === true || req.body.preventBackdate === 'true';
         let cachedSettings = null;
+        let todayIso = '';
 
         const existingRows = await dbQueryAsync(
             `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora,
@@ -4328,10 +4361,11 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
             ? existingRow.fecha.toISOString().slice(0, 10)
             : String(existingRow.fecha || '').slice(0, 10);
         const existingHora = String(existingRow.hora || '').trim().slice(0, 5);
+        const serieId = existingRow.serie_id ? String(existingRow.serie_id).trim() : '';
 
         if (enforcePreventBackdate) {
             cachedSettings = await loadUserSettings(req.user.id);
-            const todayIso = getLocalNowParts(cachedSettings?.timezone).dateStr;
+            todayIso = getLocalNowParts(cachedSettings?.timezone).dateStr;
             if (
                 (/^\d{4}-\d{2}-\d{2}$/.test(sourceFecha) && fecha < sourceFecha) ||
                 (/^\d{4}-\d{2}-\d{2}$/.test(todayIso) && fecha < todayIso && fecha !== sourceFecha)
@@ -4377,50 +4411,190 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
                 : formatMySqlDateTime(new Date()))
             : null;
 
-        const sql = `
+        if (scope === 'single' || !serieId) {
+            const sql = `
+                UPDATE RegistrosAgenda
+                SET fecha = ?, bloque = ?, hora = ?, actividad = ?, tipo = ?, categoria = ?, estado = ?, completada = ?, recordatorio_min = ?, en_progreso_desde = ?, materia_id = ?, materia_nombre = ?
+                WHERE id = ?
+            `;
+            const result = await dbQueryAsync(sql, [
+                fecha,
+                bloque,
+                horaNormalizada,
+                actividad,
+                tipo,
+                categoria,
+                estado,
+                completada,
+                recordatorioMin,
+                nextEnProgresoDesde,
+                courseLink.materia_id,
+                courseLink.materia_nombre,
+                id
+            ]);
+            if (result.affectedRows === 0) {
+                return res.status(404).send('Activity not found.');
+            }
+            if (estado === 'done' || estado === 'skipped') {
+                await dbQueryAsync("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+            } else if (
+                estado === 'in_progress' && prevEstado !== 'in_progress'
+            ) {
+                await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+            } else if (
+                prevEstado !== estado ||
+                sourceFecha !== fecha ||
+                existingHora !== horaNormalizada ||
+                Number(existingRow.recordatorio_min ?? -999) !== Number(recordatorioMin ?? -999)
+            ) {
+                await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+            }
+            bumpSyncRevision('agenda');
+            return res.json({
+                ok: true,
+                scope,
+                updatedCount: 1,
+                updatedIds: [id],
+                message: 'Activity updated successfully.',
+                item: {
+                    id,
+                    fecha,
+                    bloque,
+                    hora: horaNormalizada,
+                    actividad,
+                    titulo,
+                    descripcion,
+                    tipo,
+                    categoria,
+                    materia_id: courseLink.materia_id,
+                    materia_nombre: courseLink.materia_nombre,
+                    estado,
+                    completada,
+                    recordatorio_min: recordatorioMin,
+                    en_progreso_desde: nextEnProgresoDesde,
+                    serie_id: serieId || null
+                }
+            });
+        }
+
+        // Edición hacia adelante (scope === 'following'): nunca altera ocurrencias anteriores
+        const candidateRows = await dbQueryAsync(
+            `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora,
+                    bloque, recordatorio_min, materia_id, materia_nombre,
+                    COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
+                    completada, en_progreso_desde, serie_id
+             FROM RegistrosAgenda
+             WHERE serie_id = ?
+               AND (id = ? OR fecha > ? OR (fecha = ? AND TIME_FORMAT(hora, '%H:%i') > ?))
+             ORDER BY fecha ASC, hora ASC, id ASC`,
+            [serieId, id, sourceFecha, sourceFecha, existingHora]
+        );
+
+        const futureRows = (Array.isArray(candidateRows) ? candidateRows : [])
+            .filter(r => {
+                const rId = Number(r.id);
+                const rFecha = r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha || '').slice(0, 10);
+                const rHora = String(r.hora || '').trim().slice(0, 5);
+                if (rId === id) return true;
+                if (rFecha < sourceFecha) return false;
+                if (rFecha === sourceFecha && rHora <= existingHora) return false;
+                return rFecha > sourceFecha || (rFecha === sourceFecha && rHora > existingHora);
+            });
+
+        if (!futureRows.some(r => Number(r.id) === id)) {
+            futureRows.unshift(existingRow);
+        }
+
+        const sourceMs = parseAgendaYmdUtcMs(sourceFecha);
+        const newFechaMs = parseAgendaYmdUtcMs(fecha);
+        const deltaDays = (Number.isFinite(sourceMs) && Number.isFinite(newFechaMs))
+            ? (Math.round((newFechaMs - sourceMs) / 86400000) || 0)
+            : 0;
+
+        if (enforcePreventBackdate && deltaDays !== 0) {
+            for (const row of futureRows) {
+                const rFecha = row.fecha instanceof Date ? row.fecha.toISOString().slice(0, 10) : String(row.fecha || '').slice(0, 10);
+                const nextRowFecha = shiftAgendaYmdDaysServer(rFecha, deltaDays);
+                if (
+                    (/^\d{4}-\d{2}-\d{2}$/.test(rFecha) && nextRowFecha < rFecha) ||
+                    (/^\d{4}-\d{2}-\d{2}$/.test(todayIso) && nextRowFecha < todayIso && nextRowFecha !== rFecha)
+                ) {
+                    return res.status(400).send('Cannot move an activity to an earlier date.');
+                }
+            }
+        }
+
+        const propagatedBloque = categoria === 'universidad'
+            ? 'escuela'
+            : inferAgendaBlockFromTimeServer(horaNormalizada, 'personal');
+
+        const updateSql = `
             UPDATE RegistrosAgenda
             SET fecha = ?, bloque = ?, hora = ?, actividad = ?, tipo = ?, categoria = ?, estado = ?, completada = ?, recordatorio_min = ?, en_progreso_desde = ?, materia_id = ?, materia_nombre = ?
             WHERE id = ?
         `;
-        const result = await dbQueryAsync(sql, [
-            fecha,
-            bloque,
-            horaNormalizada,
-            actividad,
-            tipo,
-            categoria,
-            estado,
-            completada,
-            recordatorioMin,
-            nextEnProgresoDesde,
-            courseLink.materia_id,
-            courseLink.materia_nombre,
-            id
-        ]);
-        if (result.affectedRows === 0) {
-            return res.status(404).send('Activity not found.');
+        const updatedIds = [];
+
+        for (const row of futureRows) {
+            const rId = Number(row.id);
+            const rFecha = row.fecha instanceof Date ? row.fecha.toISOString().slice(0, 10) : String(row.fecha || '').slice(0, 10);
+            const isTarget = rId === id;
+            const targetFecha = isTarget
+                ? fecha
+                : (deltaDays === 0 ? rFecha : shiftAgendaYmdDaysServer(rFecha, deltaDays));
+
+            const rowPrevEstado = normalizeAgendaStatusInput(row.estado) || (Number(row.completada) === 1 ? 'done' : 'todo');
+            const targetEstado = isTarget ? estado : rowPrevEstado;
+            const targetCompletada = isTarget ? completada : (targetEstado === 'done' ? 1 : 0);
+            const targetEnProgreso = isTarget
+                ? nextEnProgresoDesde
+                : serializeAgendaDateTime(row.en_progreso_desde);
+
+            const updRes = await dbQueryAsync(updateSql, [
+                targetFecha,
+                propagatedBloque,
+                horaNormalizada,
+                actividad,
+                tipo,
+                categoria,
+                targetEstado,
+                targetCompletada,
+                recordatorioMin,
+                targetEnProgreso,
+                courseLink.materia_id,
+                courseLink.materia_nombre,
+                rId
+            ]);
+
+            if (updRes && Number(updRes.affectedRows) > 0) {
+                updatedIds.push(rId);
+            } else if (isTarget) {
+                return res.status(404).send('Activity not found.');
+            }
+
+            if (targetEstado === 'done' || targetEstado === 'skipped') {
+                await dbQueryAsync("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [rId]);
+            } else {
+                await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [rId]);
+            }
         }
-        if (estado === 'done' || estado === 'skipped') {
-            await dbQueryAsync("UPDATE RecordatoriosEstado SET estado = 'dismissed' WHERE ref_id = ? AND tipo = 'agenda'", [id]);
-        } else if (
-            estado === 'in_progress' && prevEstado !== 'in_progress'
-        ) {
-            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
-        } else if (
-            prevEstado !== estado ||
-            sourceFecha !== fecha ||
-            existingHora !== horaNormalizada ||
-            Number(existingRow.recordatorio_min ?? -999) !== Number(recordatorioMin ?? -999)
-        ) {
-            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+
+        if (!updatedIds.includes(id)) {
+            updatedIds.unshift(id);
         }
+
         bumpSyncRevision('agenda');
-        res.json({
-            message: 'Activity updated successfully.',
+        return res.json({
+            ok: true,
+            scope: 'following',
+            serie_id: serieId,
+            updatedCount: updatedIds.length,
+            updatedIds,
+            message: 'Recurring activities updated successfully.',
             item: {
                 id,
                 fecha,
-                bloque,
+                bloque: propagatedBloque,
                 hora: horaNormalizada,
                 actividad,
                 titulo,
@@ -4433,7 +4607,7 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
                 completada,
                 recordatorio_min: recordatorioMin,
                 en_progreso_desde: nextEnProgresoDesde,
-                serie_id: existingRow.serie_id ? String(existingRow.serie_id).trim() : null
+                serie_id: serieId
             }
         });
     } catch (err) {

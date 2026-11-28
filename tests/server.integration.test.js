@@ -349,10 +349,19 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
 
                 if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE serie_id = ?')) {
                     const [sid, tid, tFecha, , tHora] = params;
-                    return finish(null, agendaInserts.filter(a =>
-                        String(a.serie_id || '').trim() === String(sid || '').trim() &&
-                        (a.id === Number(tid) || a.fecha > tFecha || (a.fecha === tFecha && String(a.hora || '').slice(0, 5) > String(tHora || '').slice(0, 5)))
-                    ));
+                    return finish(
+                        null,
+                        agendaInserts
+                            .filter(a =>
+                                String(a.serie_id || '').trim() === String(sid || '').trim() &&
+                                (a.id === Number(tid) || a.fecha > tFecha || (a.fecha === tFecha && String(a.hora || '').slice(0, 5) > String(tHora || '').slice(0, 5)))
+                            )
+                            .sort((a, b) =>
+                                String(a.fecha || '').localeCompare(String(b.fecha || '')) ||
+                                String(a.hora || '').slice(0, 5).localeCompare(String(b.hora || '').slice(0, 5)) ||
+                                Number(a.id) - Number(b.id)
+                            )
+                    );
                 }
 
                 if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE fecha BETWEEN ? AND ?')) {
@@ -8090,6 +8099,209 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
             remainingSeries2.map((r) => r.fecha),
             ['2026-12-10', '2026-12-12']
         );
+    });
+
+    it('permite editar serie repetitiva estilo Google Calendar (single vs following, nunca anteriores) conservando fechas y estados futuros', async () => {
+        // 1. Crear actividad repetitiva de 4 días (2026-12-15 .. 2026-12-18)
+        const createSeriesRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-gcal-edit-series-4days' },
+            body: {
+                fecha: '2026-12-15',
+                bloque: 'manana',
+                hora: '09:00',
+                titulo: 'Rutina de Mañana',
+                descripcion: 'Lectura técnica',
+                tipo: 'tarea',
+                categoria: 'personal',
+                repeatMode: 'days_daily',
+                repeatDays: 4,
+                recordatorio_min: 15
+            }
+        });
+        assert.strictEqual(createSeriesRes.status, 201);
+        const createdSeries = JSON.parse(createSeriesRes.body);
+        assert.strictEqual(createdSeries.createdCount, 4);
+
+        const rows = agendaInserts
+            .filter((a) => a.serie_id === createdSeries.serie_id)
+            .sort((a, b) => a.fecha.localeCompare(b.fecha));
+        assert.strictEqual(rows.length, 4);
+        const [day1, day2, day3, day4] = rows;
+
+        // Sembrar estado previo en RecordatoriosEstado para el día 3 y verificar limpieza al editar following
+        const seededRemKey = `1:agenda:${day3.id}:2026-12-17`;
+        reminderStatesMap.set(seededRemKey, {
+            usuario_id: 1,
+            clave_unica: `agenda:${day3.id}:2026-12-17`,
+            tipo: 'agenda',
+            ref_id: day3.id,
+            titulo: 'Rutina de Mañana',
+            mensaje: '',
+            estado: 'active',
+            snooze_hasta: null,
+            enviado_push_en: null
+        });
+
+        // 2. Editar día 2 con scope='following' cambiando título, descripción, hora y marcando día 2 como completada
+        const editFollowingRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: `/api/update-agenda/${day2.id}`,
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: '2026-12-16',
+                bloque: 'manana',
+                hora: '17:30',
+                titulo: 'Rutina Actualizada',
+                descripcion: 'Enfoque profundo',
+                tipo: 'tarea',
+                categoria: 'personal',
+                estado: 'completada',
+                recordatorio_min: 30,
+                scope: 'following'
+            }
+        });
+        assert.strictEqual(editFollowingRes.status, 200);
+        const editFollowingJson = JSON.parse(editFollowingRes.body);
+        assert.strictEqual(editFollowingJson.ok, true);
+        assert.strictEqual(editFollowingJson.scope, 'following');
+        assert.strictEqual(editFollowingJson.updatedCount, 3);
+        assert.deepStrictEqual(editFollowingJson.updatedIds, [day2.id, day3.id, day4.id]);
+
+        const afterFollowing = agendaInserts
+            .filter((a) => a.serie_id === createdSeries.serie_id)
+            .sort((a, b) => a.id - b.id);
+        const [after1, after2, after3, after4] = afterFollowing;
+
+        // Día 1 (anterior) 100% intacto
+        assert.strictEqual(after1.fecha, '2026-12-15');
+        assert.strictEqual(after1.hora, '09:00');
+        assert.strictEqual(after1.bloque, 'manana');
+        assert.strictEqual(after1.actividad, 'Rutina de Mañana — Lectura técnica');
+        assert.strictEqual(after1.estado, 'todo');
+        assert.strictEqual(Number(after1.completada), 0);
+
+        // Días 2, 3 y 4 propagan título, descripción, hora y bloque ('tarde'), conservando sus fechas propias
+        assert.deepStrictEqual([after2.fecha, after3.fecha, after4.fecha], ['2026-12-16', '2026-12-17', '2026-12-18']);
+        for (const futureRow of [after2, after3, after4]) {
+            assert.strictEqual(futureRow.actividad, 'Rutina Actualizada — Enfoque profundo');
+            assert.strictEqual(futureRow.hora, '17:30');
+            assert.strictEqual(futureRow.bloque, 'tarde');
+            assert.strictEqual(Number(futureRow.recordatorio_min), 30);
+        }
+        // Solo día 2 quedó completada; días 3 y 4 conservan su propio estado ('todo')
+        assert.strictEqual(after2.estado, 'done');
+        assert.strictEqual(Number(after2.completada), 1);
+        assert.strictEqual(after3.estado, 'todo');
+        assert.strictEqual(Number(after3.completada), 0);
+        assert.strictEqual(after4.estado, 'todo');
+        assert.strictEqual(Number(after4.completada), 0);
+        assert.strictEqual(reminderStatesMap.has(seededRemKey), false, 'El recordatorio del día 3 debe limpiarse al cambiar la serie');
+
+        // 3. Desplazar fecha del día 2 (+1 día) con scope='following': días 2, 3 y 4 se recorren +1 día; día 1 intacto
+        const shiftFollowingRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: `/api/update-agenda/${day2.id}?scope=following`,
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: '2026-12-17',
+                bloque: 'tarde',
+                hora: '17:30',
+                titulo: 'Rutina Actualizada',
+                descripcion: 'Enfoque profundo',
+                tipo: 'tarea',
+                categoria: 'personal',
+                estado: 'todo',
+                recordatorio_min: 30
+            }
+        });
+        assert.strictEqual(shiftFollowingRes.status, 200);
+        const shiftJson = JSON.parse(shiftFollowingRes.body);
+        assert.strictEqual(shiftJson.updatedCount, 3);
+        const afterShift = agendaInserts
+            .filter((a) => a.serie_id === createdSeries.serie_id)
+            .sort((a, b) => a.id - b.id);
+        assert.deepStrictEqual(
+            afterShift.map((r) => r.fecha),
+            ['2026-12-15', '2026-12-17', '2026-12-18', '2026-12-19']
+        );
+
+        // 4. scope='previous' y scope='all' devuelven HTTP 400 sin alterar nada
+        for (const forbiddenScope of ['previous', 'all']) {
+            const badQueryRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: `/api/update-agenda/${day2.id}?scope=${forbiddenScope}`,
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-12-17',
+                    bloque: 'tarde',
+                    hora: '17:30',
+                    titulo: 'Intento Prohibido',
+                    tipo: 'tarea',
+                    categoria: 'personal'
+                }
+            });
+            assert.strictEqual(badQueryRes.status, 400);
+            assert.match(badQueryRes.body, /Past recurring occurrences cannot be edited/i);
+
+            const badBodyRes = await request({
+                port,
+                method: 'PUT',
+                reqPath: `/api/update-agenda/${day2.id}`,
+                headers: { Cookie: adminCookie },
+                body: {
+                    fecha: '2026-12-17',
+                    bloque: 'tarde',
+                    hora: '17:30',
+                    titulo: 'Intento Prohibido',
+                    tipo: 'tarea',
+                    categoria: 'personal',
+                    scope: forbiddenScope
+                }
+            });
+            assert.strictEqual(badBodyRes.status, 400);
+        }
+        assert.strictEqual(afterShift[0].actividad, 'Rutina de Mañana — Lectura técnica');
+
+        // 5. Editar día 2 con scope='single': solo modifica el día 2; días 1, 3 y 4 permanecen intactos
+        const editSingleRes = await request({
+            port,
+            method: 'PUT',
+            reqPath: `/api/update-agenda/${day2.id}`,
+            headers: { Cookie: adminCookie },
+            body: {
+                fecha: '2026-12-17',
+                bloque: 'noche',
+                hora: '20:15',
+                titulo: 'Solo Día 2',
+                descripcion: 'Ajuste puntual',
+                tipo: 'tarea',
+                categoria: 'personal',
+                estado: 'todo',
+                recordatorio_min: 10,
+                scope: 'single'
+            }
+        });
+        assert.strictEqual(editSingleRes.status, 200);
+        const editSingleJson = JSON.parse(editSingleRes.body);
+        assert.strictEqual(editSingleJson.scope, 'single');
+        assert.strictEqual(editSingleJson.updatedCount, 1);
+
+        const afterSingle = agendaInserts
+            .filter((a) => a.serie_id === createdSeries.serie_id)
+            .sort((a, b) => a.id - b.id);
+        assert.strictEqual(afterSingle[0].actividad, 'Rutina de Mañana — Lectura técnica');
+        assert.strictEqual(afterSingle[1].actividad, 'Solo Día 2 — Ajuste puntual');
+        assert.strictEqual(afterSingle[1].hora, '20:15');
+        assert.strictEqual(afterSingle[2].actividad, 'Rutina Actualizada — Enfoque profundo');
+        assert.strictEqual(afterSingle[2].hora, '17:30');
+        assert.strictEqual(afterSingle[3].actividad, 'Rutina Actualizada — Enfoque profundo');
+        assert.strictEqual(afterSingle[3].hora, '17:30');
     });
 
     it('aplica rate limit contra fuerza bruta en login y saturación DoS en endpoints API', async () => {
