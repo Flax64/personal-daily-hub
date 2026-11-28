@@ -2721,7 +2721,7 @@ describe('Agenda V4: Swipe Táctil en Vista Día, Repetición Google Calendar y 
             true
         );
 
-        // Umbrales limpios: >= 60px, |deltaX| > |deltaY| * 1.6, <= 600ms
+        // Umbrales calibrados para pulgar: >= 35px (|dx| >= |dy|*1.15, <= 900ms) o flick >= 24px (>= 0.22 px/ms)
         assert.deepEqual(
             JSON.parse(JSON.stringify(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -85, deltaY: 12, durationMs: 240 }))),
             { triggered: true, direction: 'next' }
@@ -2730,9 +2730,9 @@ describe('Agenda V4: Swipe Táctil en Vista Día, Repetición Google Calendar y 
             JSON.parse(JSON.stringify(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: 90, deltaY: -10, durationMs: 220 }))),
             { triggered: true, direction: 'prev' }
         );
-        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -45, deltaY: 0, durationMs: 180 }).triggered, false);
-        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -80, deltaY: 70, durationMs: 200 }).triggered, false);
-        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -90, deltaY: 0, durationMs: 750 }).triggered, false);
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -20, deltaY: 0, durationMs: 180 }).triggered, false);
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -40, deltaY: 55, durationMs: 200 }).triggered, false);
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -90, deltaY: 0, durationMs: 1050 }).triggered, false);
 
         // Ignorar objetivos interactivos, pestañas, rejilla y Drag & Drop activo
         const mkEl = (id = '', tagName = 'DIV', className = '', parentElement = null) => ({
@@ -2848,5 +2848,79 @@ describe('Pizarra de Trazo Hangul (Sin Guardar, Offline & Touch-Safe)', () => {
         }
         assert.ok(tracingFnBody.includes('HangulTraceRecognizer'), 'initHangulTracingPad debe invocar HangulTraceRecognizer');
         assert.ok(tracingFnBody.includes('speakStudyText('), 'initHangulTracingPad debe reutilizar speakStudyText para ko-KR');
+    });
+});
+
+describe('Agenda V5: Sensibilidad y Confiabilidad del Swipe Táctil en Vista Día', () => {
+    it('implementa evaluateAgendaDaySwipe sensible para pulgar, eventos táctiles nativos (sin PC/ratón) y CSS touch-action: pan-y en móvil/tablet', () => {
+        const frontendJs = readText('public/frontend.js');
+        const styleCss = readText('public/style.css');
+
+        // 1. Contrato en frontend.js
+        assert.ok(frontendJs.includes('function evaluateAgendaDaySwipe('), 'public/frontend.js debe definir evaluateAgendaDaySwipe');
+        assert.ok(frontendJs.includes('window.evaluateAgendaDaySwipe = evaluateAgendaDaySwipe;'), 'evaluateAgendaDaySwipe debe exponerse en window');
+
+        const initStart = frontendJs.indexOf('function initAgendaDaySwipeNavigation(');
+        const initEnd = frontendJs.indexOf('initAgendaDaySwipeNavigation();', initStart);
+        assert.ok(initStart > 0 && initEnd > initStart, 'Debe existir initAgendaDaySwipeNavigation');
+        const initBody = frontendJs.slice(initStart, initEnd);
+
+        for (const requiredToken of [
+            "addEventListener('touchstart'",
+            "addEventListener('touchmove'",
+            "addEventListener('touchend'",
+            "addEventListener('touchcancel'",
+            "lastPointerType === 'mouse'",
+            'EDGE_GUARD_PX = 16',
+            'MAX_FEEDBACK_PX = 28',
+            'SWIPE_COOLDOWN_MS = 180',
+            'hasDraggingCard()',
+            'cleanupAgendaDragState()'
+        ]) {
+            assert.ok(initBody.includes(requiredToken), `initAgendaDaySwipeNavigation debe incluir ${requiredToken}`);
+        }
+        assert.equal(initBody.includes("addEventListener('pointercancel'"), false, 'No debe depender de pointercancel móvil');
+
+        // 2. Evaluación aislada en VM de evaluateAgendaDaySwipe y compatibilidad con tarjetas/handles
+        const swipeStartIdx = frontendJs.indexOf('function isAgendaDaySwipeAllowedEvent(');
+        const swipeEndIdx = frontendJs.indexOf('function scrollActiveAgendaDayTabIntoView(');
+        assert.ok(swipeStartIdx > 0 && swipeEndIdx > swipeStartIdx);
+
+        const sandbox = { agendaDragRuntime: { started: false, longPressArmed: false, handleEl: null } };
+        vm.runInNewContext(frontendJs.slice(swipeStartIdx, swipeEndIdx), sandbox);
+
+        // Casos obligatorios pedidos para pulgar y flick
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipe({ deltaX: -38, deltaY: 20, durationMs: 250 }), 'next');
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipe({ deltaX: 26, deltaY: 10, durationMs: 90 }), 'prev');
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipe({ deltaX: 18, deltaY: 95 }), null);
+
+        // Casos adicionales de frontera
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipe({ deltaX: 42, deltaY: -24, durationMs: 820 }), 'prev');
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipe({ deltaX: -28, deltaY: 4, durationMs: 250 }), null);
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipe({ deltaX: -95, deltaY: 0, durationMs: 1050 }), null);
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipe({ deltaX: -40, deltaY: 40, durationMs: 150 }), null);
+
+        // Tarjeta .agenda-item permite iniciar swipe antes del long-press; handle .agenda-drag-handle lo bloquea
+        const mkEl = (id = '', tagName = 'DIV', className = '', parentElement = null) => ({
+            nodeType: 1,
+            id,
+            tagName,
+            className,
+            parentElement,
+            getAttribute: () => null
+        });
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('', 'DIV', 'agenda-item')), false);
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('', 'SPAN', 'agenda-drag-handle')), true);
+        sandbox.agendaDragRuntime.started = true;
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('', 'DIV', 'agenda-item')), true);
+        sandbox.agendaDragRuntime.started = false;
+
+        // 3. Reglas CSS en móvil/tablet vs PC, tabs, rejilla y drag handle
+        assert.match(
+            styleCss,
+            /@media\s*\(\s*pointer:\s*coarse\s*\)\s*,\s*\(\s*max-width:\s*1024px\s*\)\s*\{[\s\S]*?#agendaDayBoard\s*\{[\s\S]*?touch-action:\s*pan-y;[\s\S]*?overscroll-behavior-x:\s*contain;/
+        );
+        assert.match(styleCss, /#agendaDayTabs,[\s\S]*?#agendaTableScroll[\s\S]*?\{[\s\S]*?touch-action:\s*pan-x pan-y;/);
+        assert.match(styleCss, /\.agenda-drag-handle\s*\{[\s\S]*?touch-action:\s*none;/);
     });
 });

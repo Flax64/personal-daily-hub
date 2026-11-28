@@ -15732,7 +15732,7 @@ function isAgendaSwipeIgnoredTarget(target) {
         if (document.body?.classList?.contains('agenda-dragging-active')) return true;
         if (document.querySelector?.('.agenda-item.is-dragging, .agenda-item.is-drag-armed')) return true;
     }
-    if (typeof agendaDragRuntime !== 'undefined' && (agendaDragRuntime.started || agendaDragRuntime.longPressArmed)) {
+    if (typeof agendaDragRuntime !== 'undefined' && (agendaDragRuntime.started || agendaDragRuntime.longPressArmed || agendaDragRuntime.handleEl)) {
         return true;
     }
 
@@ -15762,22 +15762,39 @@ function isAgendaSwipeIgnoredTarget(target) {
     return false;
 }
 
-function evaluateAgendaDaySwipeGesture({ deltaX = 0, deltaY = 0, durationMs = 0 } = {}) {
-    const dx = Number(deltaX) || 0;
+function evaluateAgendaDaySwipe({ deltaX = 0, deltaY = 0, durationMs = 250 } = {}) {
+    const dx = Number(deltaX);
     const dy = Number(deltaY) || 0;
-    const dur = Number(durationMs);
-    if (!Number.isFinite(dur) || dur < 0 || dur > 600) {
-        return { triggered: false, direction: null };
+    const dur = durationMs === undefined ? 250 : Number(durationMs);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dur) || dur < 0) {
+        return null;
     }
-    if (Math.abs(dx) < 60) {
-        return { triggered: false, direction: null };
+
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    if (absX < 24 || absY >= absX) {
+        return null;
     }
-    if (Math.abs(dx) <= Math.abs(dy) * 1.6) {
-        return { triggered: false, direction: null };
+
+    const isNormalSwipe = absX >= 35 && absX >= absY * 1.15 && dur <= 900;
+    const velocityX = absX / Math.max(dur, 1);
+    const isQuickFlick = absX >= 24 && velocityX >= 0.22 && absX > absY && dur <= 900;
+    if (!isNormalSwipe && !isQuickFlick) {
+        return null;
     }
+
+    return dx < 0 ? 'next' : 'prev';
+}
+
+if (typeof window !== 'undefined') {
+    window.evaluateAgendaDaySwipe = evaluateAgendaDaySwipe;
+}
+
+function evaluateAgendaDaySwipeGesture(opts = {}) {
+    const direction = evaluateAgendaDaySwipe(opts);
     return {
-        triggered: true,
-        direction: dx < 0 ? 'next' : 'prev'
+        triggered: Boolean(direction),
+        direction
     };
 }
 
@@ -15924,124 +15941,161 @@ function initAgendaDaySwipeNavigation() {
     if (!dayBoard || dayBoard.dataset.daySwipeWired === '1') return;
     dayBoard.dataset.daySwipeWired = '1';
 
+    const EDGE_GUARD_PX = 16;
+    const MAX_FEEDBACK_PX = 28;
+    const SWIPE_COOLDOWN_MS = 180;
+
     let swipeSession = null;
     let lastPointerType = '';
+    let swipeCooldownUntil = 0;
+
+    const prefersReducedMotion = () => Boolean(
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+
+    const clearSwipeVisualFeedback = () => {
+        if (dayBoard.style) {
+            dayBoard.style.transform = '';
+            dayBoard.style.transition = '';
+        }
+    };
 
     const resetSession = () => {
         swipeSession = null;
+        clearSwipeVisualFeedback();
     };
 
     const isDayViewSwipeActive = () => {
         const agendaView = document.getElementById('view-agenda');
+        const appShellEl = document.getElementById('appShell');
+        if (appShellEl?.classList?.contains('mobile-menu-open')) return false;
         return Boolean(agendaView && agendaView.classList.contains('active') && agendaState.layoutMode === 'day' && !dayBoard.hidden);
     };
 
     const hasDraggingCard = () => Boolean(
         agendaDragRuntime.started ||
         agendaDragRuntime.longPressArmed ||
+        agendaDragRuntime.handleEl ||
         document.body?.classList?.contains('agenda-dragging-active') ||
         document.querySelector('.agenda-item.is-dragging, .agenda-item.is-drag-armed')
     );
 
-    const startSwipe = (ev, x, y, sourceKind) => {
-        if (!isDayViewSwipeActive()) return;
-        if (!isAgendaDaySwipeAllowedEvent(ev, { lastPointerType })) return;
-        if (isAgendaSwipeIgnoredTarget(ev.target)) return;
-        swipeSession = {
-            sourceKind,
-            pointerId: ev.pointerId ?? null,
-            startX: x,
-            startY: y,
-            lastX: x,
-            lastY: y,
-            startTime: Date.now(),
-            aborted: false
-        };
-    };
-
-    const moveSwipe = (x, y, multiTouch = false) => {
-        if (!swipeSession || swipeSession.aborted) return;
-        if (multiTouch || !isDayViewSwipeActive() || hasDraggingCard()) {
-            swipeSession.aborted = true;
-            return;
-        }
-        swipeSession.lastX = x;
-        swipeSession.lastY = y;
-    };
-
-    const endSwipe = (endX, endY) => {
-        if (!swipeSession) return;
-        const sess = swipeSession;
-        swipeSession = null;
-        if (sess.aborted || !isDayViewSwipeActive() || hasDraggingCard()) return;
-        if (document.querySelector('.modal-overlay:not([hidden])')) return;
-
-        const res = evaluateAgendaDaySwipeGesture({
-            deltaX: endX - sess.startX,
-            deltaY: endY - sess.startY,
-            durationMs: Date.now() - sess.startTime
-        });
-        if (res.triggered && res.direction) {
-            stepAgendaDayBySwipe(res.direction);
-        }
-    };
-
+    // PC/ratón nunca debe activar cambio de día ni retener sesiones previas
     dayBoard.addEventListener('pointerdown', (ev) => {
         lastPointerType = typeof ev.pointerType === 'string' ? ev.pointerType.toLowerCase() : '';
         if (lastPointerType === 'mouse') {
             resetSession();
-            return;
         }
-        if (lastPointerType === 'touch' && !swipeSession) {
-            startSwipe(ev, ev.clientX, ev.clientY, 'pointer');
-        }
-    }, { passive: true });
-
-    dayBoard.addEventListener('pointermove', (ev) => {
-        if (!swipeSession || swipeSession.sourceKind !== 'pointer' || ev.pointerId !== swipeSession.pointerId) return;
-        moveSwipe(ev.clientX, ev.clientY, false);
-    }, { passive: true });
-
-    dayBoard.addEventListener('pointerup', (ev) => {
-        if (!swipeSession || swipeSession.sourceKind !== 'pointer' || ev.pointerId !== swipeSession.pointerId) return;
-        endSwipe(ev.clientX, ev.clientY);
-    }, { passive: true });
-
-    dayBoard.addEventListener('pointercancel', (ev) => {
-        if (swipeSession && swipeSession.sourceKind === 'pointer' && ev.pointerId === swipeSession.pointerId) {
-            resetSession();
-        }
-    }, { passive: true });
+    }, { passive: true, capture: true });
 
     dayBoard.addEventListener('touchstart', (ev) => {
         if (!ev.touches || ev.touches.length !== 1) {
             resetSession();
             return;
         }
-        if (lastPointerType === 'mouse') return;
+        if (Date.now() < swipeCooldownUntil || !isDayViewSwipeActive()) return;
+        if (!isAgendaDaySwipeAllowedEvent(ev, { lastPointerType })) return;
+        if (isAgendaSwipeIgnoredTarget(ev.target)) return;
+
         const touch = ev.touches[0];
-        if (swipeSession && swipeSession.sourceKind === 'pointer') {
-            swipeSession.sourceKind = 'touch';
-            swipeSession.startX = touch.clientX;
-            swipeSession.startY = touch.clientY;
-            swipeSession.lastX = touch.clientX;
-            swipeSession.lastY = touch.clientY;
+        const startX = touch.clientX;
+        const startY = touch.clientY;
+        const viewportWidth = Number.isFinite(window.innerWidth) ? window.innerWidth : 0;
+        if (startX < EDGE_GUARD_PX || (viewportWidth > 0 && startX > viewportWidth - EDGE_GUARD_PX)) {
+            resetSession();
             return;
         }
-        startSwipe(ev, touch.clientX, touch.clientY, 'touch');
+
+        swipeSession = {
+            startX,
+            startY,
+            lastX: startX,
+            lastY: startY,
+            startTime: Date.now(),
+            intent: null,
+            aborted: false
+        };
     }, { passive: true });
 
     dayBoard.addEventListener('touchmove', (ev) => {
-        if (!swipeSession || swipeSession.sourceKind !== 'touch') return;
-        const multi = !ev.touches || ev.touches.length !== 1;
-        const touch = ev.touches && ev.touches[0];
-        moveSwipe(touch ? touch.clientX : swipeSession.lastX, touch ? touch.clientY : swipeSession.lastY, multi);
+        if (!swipeSession || swipeSession.aborted) return;
+        if (!ev.touches || ev.touches.length !== 1 || !isDayViewSwipeActive() || hasDraggingCard()) {
+            resetSession();
+            return;
+        }
+
+        const touch = ev.touches[0];
+        swipeSession.lastX = touch.clientX;
+        swipeSession.lastY = touch.clientY;
+
+        const dx = touch.clientX - swipeSession.startX;
+        const dy = touch.clientY - swipeSession.startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+
+        // Si el usuario inicia un swipe horizontal rápido encima de una tarjeta, cancelar el long-press antes de 220ms
+        if (
+            typeof agendaDragRuntime !== 'undefined' &&
+            agendaDragRuntime.longPressTimer &&
+            !agendaDragRuntime.started &&
+            !agendaDragRuntime.longPressArmed &&
+            !agendaDragRuntime.handleEl &&
+            Math.hypot(dx, dy) > 8 &&
+            typeof cleanupAgendaDragState === 'function'
+        ) {
+            cleanupAgendaDragState();
+        }
+
+        if (!swipeSession.intent) {
+            if (absY > absX && absY >= 8) {
+                swipeSession.intent = 'vertical';
+                clearSwipeVisualFeedback();
+                return;
+            }
+            if (absX >= 8 && absX >= absY) {
+                swipeSession.intent = 'horizontal';
+            } else {
+                return;
+            }
+        }
+
+        if (swipeSession.intent === 'vertical') return;
+        if (absY > absX) {
+            swipeSession.intent = 'vertical';
+            clearSwipeVisualFeedback();
+            return;
+        }
+
+        if (!prefersReducedMotion() && dayBoard.style) {
+            dayBoard.classList?.remove('is-swipe-anim-next', 'is-swipe-anim-prev');
+            const clampedPx = Math.max(-MAX_FEEDBACK_PX, Math.min(MAX_FEEDBACK_PX, Math.round(dx * 0.35)));
+            dayBoard.style.transition = 'none';
+            dayBoard.style.transform = `translateX(${clampedPx}px)`;
+        }
     }, { passive: true });
 
     dayBoard.addEventListener('touchend', (ev) => {
-        if (!swipeSession || swipeSession.sourceKind !== 'touch') return;
-        const changed = ev.changedTouches && ev.changedTouches[0];
-        endSwipe(changed ? changed.clientX : swipeSession.lastX, changed ? changed.clientY : swipeSession.lastY);
+        if (!swipeSession) return;
+        const sess = swipeSession;
+        resetSession();
+
+        if (!ev.changedTouches || ev.changedTouches.length !== 1) return;
+        if (ev.touches && ev.touches.length > 0) return;
+        if (sess.aborted || sess.intent === 'vertical') return;
+        if (Date.now() < swipeCooldownUntil || !isDayViewSwipeActive() || hasDraggingCard()) return;
+        if (document.querySelector('.modal-overlay:not([hidden])')) return;
+
+        const changed = ev.changedTouches[0];
+        const direction = evaluateAgendaDaySwipe({
+            deltaX: changed.clientX - sess.startX,
+            deltaY: changed.clientY - sess.startY,
+            durationMs: Date.now() - sess.startTime
+        });
+        if (direction === 'next' || direction === 'prev') {
+            swipeCooldownUntil = Date.now() + SWIPE_COOLDOWN_MS;
+            stepAgendaDayBySwipe(direction);
+        }
     }, { passive: true });
 
     dayBoard.addEventListener('touchcancel', () => {
@@ -16052,7 +16106,7 @@ function initAgendaDaySwipeNavigation() {
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             resetSession();
-            dayBoard.classList.remove('is-swipe-anim-next', 'is-swipe-anim-prev');
+            dayBoard.classList?.remove('is-swipe-anim-next', 'is-swipe-anim-prev');
         }
     });
 }
