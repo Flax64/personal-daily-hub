@@ -12470,8 +12470,18 @@ body.agenda-dragging-active {
     background: #b91c1c;
 }
 
-#agendaDayBoard {
-    touch-action: pan-y;
+#agendaDayTabs,
+#agendaTableScroll,
+#agendaSchoolTableScroll,
+.agenda-table-scroll {
+    touch-action: pan-x pan-y;
+}
+
+@media (pointer: coarse), (max-width: 1024px) {
+    #agendaDayBoard {
+        touch-action: pan-y;
+        overscroll-behavior-x: contain;
+    }
 }
 
 @keyframes agendaDaySwipeNext {
