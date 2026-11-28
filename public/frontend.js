@@ -5056,6 +5056,17 @@ function initHangulPracticeStudio() {
 
     renderSymbolGrid('all');
     showSymbolDetail(HANGUL_SYMBOLS[0]);
+    const tracingController = initHangulTracingPad(() => selectedSymbol);
+
+    document.getElementById('btnHangulPracticeSelectedTrace')?.addEventListener('click', () => {
+        if (!selectedSymbol || !tracingController) return;
+        const rawChar = String(selectedSymbol.char || '').trim();
+        const jamoMatch = rawChar.match(/[ㄱ-ㅎㅏ-ㅣ]/);
+        const targetGlyph = jamoMatch ? jamoMatch[0] : '';
+        if (targetGlyph) {
+            tracingController.loadGuideGlyph(targetGlyph, { scrollIntoView: true });
+        }
+    });
 
     // Syllable block builder (Unicode AC00..D7A3)
     const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
@@ -5282,6 +5293,490 @@ function initHangulPracticeStudio() {
             document.getElementById('btnOpenStudyViewer')?.click();
         }
     });
+}
+
+function initHangulTracingPad(getSelectedSymbolFn = null) {
+    const studio = document.getElementById('hangulTraceStudio');
+    const canvas = document.getElementById('hangulTraceCanvas');
+    const recognizer = typeof window !== 'undefined' ? window.HangulTraceRecognizer : null;
+    if (!studio || !canvas || typeof canvas.getContext !== 'function' || !recognizer) {
+        return null;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const guideSelect = document.getElementById('hangulTraceGuideSelect');
+    const autoCheck = document.getElementById('chkHangulTraceAutoRecognize');
+    const btnRecognize = document.getElementById('btnHangulTraceRecognize');
+    const btnUndo = document.getElementById('btnHangulTraceUndo');
+    const btnClear = document.getElementById('btnHangulTraceClear');
+    const btnToggleGuide = document.getElementById('btnHangulTraceToggleGuide');
+    const btnRandom = document.getElementById('btnHangulTraceRandom');
+    const btnSpeak = document.getElementById('btnHangulTraceSpeak');
+
+    const emptyState = document.getElementById('hangulTraceEmptyState');
+    const emptyText = document.getElementById('hangulTraceEmptyText');
+    const matchCard = document.getElementById('hangulTraceMatchCard');
+    const recGlyphEl = document.getElementById('hangulTraceRecognizedGlyph');
+    const recNameEl = document.getElementById('hangulTraceRecognizedName');
+    const catBadgeEl = document.getElementById('hangulTraceCategoryBadge');
+    const romEl = document.getElementById('hangulTraceRomanization');
+    const confEl = document.getElementById('hangulTraceConfidence');
+    const guidedFeedbackEl = document.getElementById('hangulTraceGuidedFeedback');
+    const pronEl = document.getElementById('hangulTracePronunciation');
+    const batchimEl = document.getElementById('hangulTraceBatchimNote');
+    const altWrapEl = document.getElementById('hangulTraceAlternativesWrap');
+    const altListEl = document.getElementById('hangulTraceAlternativesList');
+
+    const catalog = Array.isArray(recognizer.HANGUL_JAMO_CATALOG) ? recognizer.HANGUL_JAMO_CATALOG : [];
+
+    // 100% ephemeral in-memory state — never persisted to browser storage, DB, or Word
+    const traceState = {
+        strokes: [],
+        activeStroke: null,
+        activePointerId: null,
+        guideGlyph: '',
+        showGuide: true,
+        autoRecognizeTimer: null,
+        lastRecognition: null,
+        inspectedCandidate: null,
+        logicalSize: 300
+    };
+
+    const getIsEs = () => {
+        if (window.DailyHubI18n && typeof window.DailyHubI18n.getLang === 'function') {
+            return window.DailyHubI18n.getLang() === 'es';
+        }
+        return false;
+    };
+
+    function syncGuideSelectOptions() {
+        if (!guideSelect) return;
+        const prevVal = traceState.guideGlyph || guideSelect.value || '';
+        const isEs = getIsEs();
+        guideSelect.replaceChildren();
+
+        const freeOpt = document.createElement('option');
+        freeOpt.value = '';
+        freeOpt.textContent = isEs
+            ? '✏️ Trazo libre (sin símbolo objetivo)'
+            : '✏️ Free trace (no target symbol)';
+        guideSelect.appendChild(freeOpt);
+
+        catalog.forEach((item) => {
+            const opt = document.createElement('option');
+            opt.value = item.glyph;
+            opt.textContent = `${item.glyph}  [${item.romanization}] — ${isEs ? item.nameEs : item.nameEn}`;
+            guideSelect.appendChild(opt);
+        });
+        guideSelect.value = prevVal;
+    }
+
+    function syncButtonStates() {
+        const hasStrokes = traceState.strokes.length > 0;
+        if (btnUndo) btnUndo.disabled = !hasStrokes;
+        if (btnClear) btnClear.disabled = !hasStrokes;
+        if (btnToggleGuide) {
+            btnToggleGuide.setAttribute('aria-pressed', traceState.showGuide ? 'true' : 'false');
+            btnToggleGuide.classList.toggle('active', Boolean(traceState.showGuide && traceState.guideGlyph));
+        }
+    }
+
+    function syncCanvasResolution() {
+        const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+        const rawW = rect && Number.isFinite(rect.width) && rect.width > 40 ? rect.width : 300;
+        const nextSize = Math.max(200, Math.min(340, Math.round(rawW)));
+        const prevSize = traceState.logicalSize || 300;
+        if (nextSize !== prevSize && prevSize > 0 && traceState.strokes.length > 0) {
+            const scale = nextSize / prevSize;
+            traceState.strokes = traceState.strokes.map(st => st.map(pt => ({ x: pt.x * scale, y: pt.y * scale })));
+        }
+        traceState.logicalSize = nextSize;
+        const dpr = Math.min(window.devicePixelRatio || 1, 3);
+        if (canvas.width !== Math.round(nextSize * dpr) || canvas.height !== Math.round(nextSize * dpr)) {
+            canvas.width = Math.round(nextSize * dpr);
+            canvas.height = Math.round(nextSize * dpr);
+        }
+        if (typeof ctx.setTransform === 'function') {
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        return nextSize;
+    }
+
+    function redrawTraceCanvas() {
+        const size = syncCanvasResolution();
+        const isDark = document.documentElement?.getAttribute('data-theme') !== 'light';
+        ctx.clearRect(0, 0, size, size);
+
+        // Wongoji-style notebook guide (subtle inner frame + center crosshairs)
+        ctx.save();
+        ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.24)' : 'rgba(100, 116, 139, 0.24)';
+        ctx.lineWidth = 1;
+        const inset = Math.round(size * 0.06);
+        ctx.strokeRect(inset, inset, size - inset * 2, size - inset * 2);
+
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(size * 0.5, inset);
+        ctx.lineTo(size * 0.5, size - inset);
+        ctx.moveTo(inset, size * 0.5);
+        ctx.lineTo(size - inset, size * 0.5);
+        ctx.stroke();
+        ctx.restore();
+
+        // Optional ghost character guide
+        if (traceState.guideGlyph && traceState.showGuide) {
+            ctx.save();
+            ctx.globalAlpha = 0.18;
+            ctx.fillStyle = isDark ? '#93c5fd' : '#1d4ed8';
+            ctx.font = `600 ${Math.round(size * 0.66)}px "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(traceState.guideGlyph, size * 0.5, size * 0.53);
+            ctx.restore();
+        }
+
+        // Committed strokes + active stroke
+        const drawStrokeList = traceState.activeStroke
+            ? [...traceState.strokes, traceState.activeStroke]
+            : traceState.strokes;
+        if (drawStrokeList.length > 0) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = Math.max(7, Math.round(size * 0.032));
+            ctx.strokeStyle = isDark ? '#60a5fa' : '#2563eb';
+            ctx.fillStyle = isDark ? '#60a5fa' : '#2563eb';
+            drawStrokeList.forEach((stroke) => {
+                if (!Array.isArray(stroke) || stroke.length === 0) return;
+                if (stroke.length === 1) {
+                    ctx.beginPath();
+                    ctx.arc(stroke[0].x, stroke[0].y, ctx.lineWidth * 0.45, 0, Math.PI * 2);
+                    ctx.fill();
+                    return;
+                }
+                ctx.beginPath();
+                ctx.moveTo(stroke[0].x, stroke[0].y);
+                for (let i = 1; i < stroke.length; i++) {
+                    ctx.lineTo(stroke[i].x, stroke[i].y);
+                }
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+        syncButtonStates();
+    }
+
+    function showTraceEmptyMessage(needTraceWarning = false) {
+        if (matchCard) matchCard.hidden = true;
+        if (emptyState) emptyState.hidden = false;
+        if (!emptyText) return;
+        if (needTraceWarning) {
+            emptyText.textContent = tUi(
+                'Draw a Hangul symbol on the pad first to identify it.',
+                'Traza primero un símbolo Hangul en el lienzo para identificarlo.'
+            );
+        } else if (window.DailyHubI18n && typeof window.DailyHubI18n.HTML_BLOCKS === 'object' && window.DailyHubI18n.HTML_BLOCKS.hangul_trace_empty_hint) {
+            const lang = getIsEs() ? 'es' : 'en';
+            emptyText.innerHTML = window.DailyHubI18n.HTML_BLOCKS.hangul_trace_empty_hint[lang];
+        }
+    }
+
+    function renderTraceRecognitionResult() {
+        const res = traceState.lastRecognition;
+        if (!res || res.empty || !res.topMatch) {
+            showTraceEmptyMessage(false);
+            return;
+        }
+        const activeCand = traceState.inspectedCandidate || res.topMatch;
+        const isEs = getIsEs();
+
+        if (emptyState) emptyState.hidden = true;
+        if (matchCard) matchCard.hidden = false;
+
+        if (recGlyphEl) recGlyphEl.textContent = activeCand.glyph;
+        if (recNameEl) recNameEl.textContent = activeCand.name || activeCand.glyph;
+        if (catBadgeEl) {
+            catBadgeEl.textContent = isEs ? activeCand.categoryLabelEs : activeCand.categoryLabelEn;
+        }
+        if (romEl) romEl.textContent = `[${activeCand.romanization}]`;
+        if (confEl) {
+            confEl.textContent = tUi(
+                `Match: ${activeCand.matchPercent}%`,
+                `Coincidencia: ${activeCand.matchPercent}%`
+            );
+        }
+        if (pronEl) {
+            pronEl.textContent = `🔊 ${isEs ? activeCand.pronunciationEs : activeCand.pronunciationEn}`;
+        }
+        if (batchimEl) {
+            batchimEl.textContent = `📌 ${isEs ? activeCand.batchimNoteEs : activeCand.batchimNoteEn}`;
+        }
+
+        if (guidedFeedbackEl) {
+            if (traceState.guideGlyph) {
+                const top = res.topMatch;
+                const targetItem = catalog.find(c => c.glyph === traceState.guideGlyph);
+                const matchesGuide = top.glyph === traceState.guideGlyph;
+                const closeInTop3 = !matchesGuide && res.candidates.some(c => c.glyph === traceState.guideGlyph);
+                guidedFeedbackEl.hidden = false;
+                guidedFeedbackEl.classList.remove('is-match', 'is-close', 'is-retry');
+                if (matchesGuide) {
+                    guidedFeedbackEl.classList.add('is-match');
+                    guidedFeedbackEl.textContent = tUi(
+                        `✅ Great! Matches ${traceState.guideGlyph} [${targetItem ? targetItem.romanization : ''}]`,
+                        `✅ ¡Excelente! Coincide con ${traceState.guideGlyph} [${targetItem ? targetItem.romanization : ''}]`
+                    );
+                } else if (closeInTop3) {
+                    guidedFeedbackEl.classList.add('is-close');
+                    guidedFeedbackEl.textContent = tUi(
+                        `🟡 Close! Looks a bit like ${top.glyph}, and ${traceState.guideGlyph} is also near. Try another clean stroke.`,
+                        `🟡 ¡Casi! Se parece un poco a ${top.glyph}, aunque ${traceState.guideGlyph} está cerca. Intenta otro trazo limpio.`
+                    );
+                } else {
+                    guidedFeedbackEl.classList.add('is-retry');
+                    guidedFeedbackEl.textContent = tUi(
+                        `Looks more like ${top.glyph} [${top.romanization}] than ${traceState.guideGlyph} — try tracing over the guide again.`,
+                        `Se parece más a ${top.glyph} [${top.romanization}] que a ${traceState.guideGlyph} — intenta de nuevo siguiendo la guía.`
+                    );
+                }
+            } else {
+                guidedFeedbackEl.hidden = true;
+                guidedFeedbackEl.textContent = '';
+            }
+        }
+
+        if (altWrapEl && altListEl) {
+            const alts = (Array.isArray(res.candidates) ? res.candidates : []).filter(c => c.glyph !== activeCand.glyph);
+            if (alts.length > 0) {
+                altWrapEl.hidden = false;
+                altListEl.replaceChildren();
+                alts.forEach((cand) => {
+                    const chip = document.createElement('button');
+                    chip.type = 'button';
+                    chip.className = 'hangul-trace-alt-chip';
+                    chip.textContent = `${cand.glyph} [${cand.romanization}] · ${cand.matchPercent}%`;
+                    chip.title = tUi(
+                        `Inspect ${cand.glyph} (${cand.name}) and hear pronunciation`,
+                        `Ver ${cand.glyph} (${cand.name}) y escuchar su pronunciación`
+                    );
+                    chip.addEventListener('click', () => {
+                        traceState.inspectedCandidate = cand;
+                        renderTraceRecognitionResult();
+                        speakStudyText(cand.speak || cand.glyph, 'ko-KR');
+                    });
+                    altListEl.appendChild(chip);
+                });
+            } else {
+                altWrapEl.hidden = true;
+                altListEl.replaceChildren();
+            }
+        }
+    }
+
+    function runTraceRecognition({ auto = false } = {}) {
+        if (traceState.autoRecognizeTimer) {
+            clearTimeout(traceState.autoRecognizeTimer);
+            traceState.autoRecognizeTimer = null;
+        }
+        const res = recognizer.recognizeHangulStrokes(traceState.strokes, { topK: 3 });
+        if (!res || res.empty) {
+            traceState.lastRecognition = null;
+            traceState.inspectedCandidate = null;
+            if (!auto) showTraceEmptyMessage(true);
+            else showTraceEmptyMessage(false);
+            return null;
+        }
+        traceState.lastRecognition = res;
+        traceState.inspectedCandidate = res.topMatch;
+        renderTraceRecognitionResult();
+        return res;
+    }
+
+    function getCanvasPoint(ev) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = rect.width > 0 ? traceState.logicalSize / rect.width : 1;
+        const scaleY = rect.height > 0 ? traceState.logicalSize / rect.height : 1;
+        return {
+            x: (ev.clientX - rect.left) * scaleX,
+            y: (ev.clientY - rect.top) * scaleY
+        };
+    }
+
+    function finishActiveStroke({ commit = true } = {}) {
+        if (traceState.activePointerId !== null && typeof canvas.releasePointerCapture === 'function') {
+            try { canvas.releasePointerCapture(traceState.activePointerId); } catch (_) { /* ignore */ }
+        }
+        const finished = traceState.activeStroke;
+        traceState.activeStroke = null;
+        traceState.activePointerId = null;
+
+        if (commit && Array.isArray(finished) && finished.length > 0) {
+            const committed = finished.length === 1
+                ? [finished[0], { x: finished[0].x + 0.8, y: finished[0].y + 0.8 }]
+                : finished;
+            traceState.strokes.push(committed);
+            redrawTraceCanvas();
+            if (autoCheck && autoCheck.checked) {
+                if (traceState.autoRecognizeTimer) clearTimeout(traceState.autoRecognizeTimer);
+                traceState.autoRecognizeTimer = setTimeout(() => {
+                    traceState.autoRecognizeTimer = null;
+                    runTraceRecognition({ auto: true });
+                }, 680);
+            }
+        } else {
+            redrawTraceCanvas();
+        }
+    }
+
+    canvas.addEventListener('pointerdown', (ev) => {
+        if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+        if (ev.cancelable) ev.preventDefault();
+        if (traceState.autoRecognizeTimer) {
+            clearTimeout(traceState.autoRecognizeTimer);
+            traceState.autoRecognizeTimer = null;
+        }
+        traceState.activePointerId = ev.pointerId;
+        try {
+            if (typeof canvas.setPointerCapture === 'function' && ev.pointerId !== undefined) {
+                canvas.setPointerCapture(ev.pointerId);
+            }
+        } catch (_) { /* ignore */ }
+        const pt = getCanvasPoint(ev);
+        traceState.activeStroke = [pt];
+        redrawTraceCanvas();
+    }, { passive: false });
+
+    canvas.addEventListener('pointermove', (ev) => {
+        if (ev.pointerId !== traceState.activePointerId || !traceState.activeStroke) return;
+        if (ev.cancelable) ev.preventDefault();
+        const pt = getCanvasPoint(ev);
+        const last = traceState.activeStroke[traceState.activeStroke.length - 1];
+        if (!last || Math.hypot(pt.x - last.x, pt.y - last.y) >= 1.5) {
+            traceState.activeStroke.push(pt);
+            redrawTraceCanvas();
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('pointerup', (ev) => {
+        if (ev.pointerId !== traceState.activePointerId) return;
+        finishActiveStroke({ commit: true });
+    });
+
+    canvas.addEventListener('pointercancel', (ev) => {
+        if (ev.pointerId !== traceState.activePointerId) return;
+        finishActiveStroke({ commit: false });
+    });
+
+    window.addEventListener('blur', () => {
+        if (traceState.activeStroke) finishActiveStroke({ commit: false });
+    });
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden && traceState.activeStroke) finishActiveStroke({ commit: false });
+    });
+
+    const loadGuideGlyph = (glyph, { scrollIntoView = false } = {}) => {
+        traceState.guideGlyph = String(glyph || '').trim();
+        if (traceState.guideGlyph) traceState.showGuide = true;
+        if (guideSelect) guideSelect.value = traceState.guideGlyph;
+        traceState.strokes = [];
+        traceState.activeStroke = null;
+        traceState.lastRecognition = null;
+        traceState.inspectedCandidate = null;
+        showTraceEmptyMessage(false);
+        redrawTraceCanvas();
+        if (scrollIntoView && typeof studio.scrollIntoView === 'function') {
+            try { studio.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) {}
+        }
+    };
+
+    btnRecognize?.addEventListener('click', () => {
+        runTraceRecognition({ auto: false });
+    });
+
+    btnUndo?.addEventListener('click', () => {
+        if (traceState.autoRecognizeTimer) {
+            clearTimeout(traceState.autoRecognizeTimer);
+            traceState.autoRecognizeTimer = null;
+        }
+        if (traceState.strokes.length === 0) return;
+        traceState.strokes.pop();
+        redrawTraceCanvas();
+        if (traceState.strokes.length > 0) {
+            runTraceRecognition({ auto: true });
+        } else {
+            traceState.lastRecognition = null;
+            traceState.inspectedCandidate = null;
+            showTraceEmptyMessage(false);
+        }
+    });
+
+    btnClear?.addEventListener('click', () => {
+        if (traceState.autoRecognizeTimer) {
+            clearTimeout(traceState.autoRecognizeTimer);
+            traceState.autoRecognizeTimer = null;
+        }
+        traceState.strokes = [];
+        traceState.activeStroke = null;
+        traceState.lastRecognition = null;
+        traceState.inspectedCandidate = null;
+        showTraceEmptyMessage(false);
+        redrawTraceCanvas();
+    });
+
+    btnToggleGuide?.addEventListener('click', () => {
+        if (!traceState.guideGlyph) {
+            const curSel = typeof getSelectedSymbolFn === 'function' ? getSelectedSymbolFn() : null;
+            const fallbackMatch = String(curSel?.char || '').match(/[ㄱ-ㅎㅏ-ㅣ]/);
+            traceState.guideGlyph = fallbackMatch ? fallbackMatch[0] : 'ㅎ';
+            traceState.showGuide = true;
+            if (guideSelect) guideSelect.value = traceState.guideGlyph;
+        } else {
+            traceState.showGuide = !traceState.showGuide;
+        }
+        redrawTraceCanvas();
+    });
+
+    btnRandom?.addEventListener('click', () => {
+        if (!catalog.length) return;
+        const pool = catalog.filter(c => c.glyph !== traceState.guideGlyph);
+        const pickItem = (pool.length ? pool : catalog)[Math.floor(Math.random() * (pool.length ? pool.length : catalog.length))];
+        loadGuideGlyph(pickItem.glyph);
+    });
+
+    guideSelect?.addEventListener('change', () => {
+        loadGuideGlyph(guideSelect.value || '');
+    });
+
+    btnSpeak?.addEventListener('click', () => {
+        const activeCand = traceState.inspectedCandidate || traceState.lastRecognition?.topMatch;
+        if (activeCand) {
+            speakStudyText(activeCand.speak || activeCand.glyph, 'ko-KR');
+        }
+    });
+
+    if (window.DailyHubI18n && typeof window.DailyHubI18n.onChange === 'function') {
+        window.DailyHubI18n.onChange(() => {
+            syncGuideSelectOptions();
+            if (traceState.lastRecognition) {
+                renderTraceRecognitionResult();
+            } else {
+                showTraceEmptyMessage(false);
+            }
+        });
+    }
+
+    window.addEventListener('resize', redrawTraceCanvas);
+    window.addEventListener('orientationchange', () => setTimeout(redrawTraceCanvas, 80));
+
+    syncGuideSelectOptions();
+    showTraceEmptyMessage(false);
+    redrawTraceCanvas();
+
+    return {
+        loadGuideGlyph,
+        redrawTraceCanvas
+    };
 }
 
 var koreanReadonlyNotesInitialized = false;

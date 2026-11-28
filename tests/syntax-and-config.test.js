@@ -45,6 +45,7 @@ describe('Sintaxis de código (JS, HTML, CSS, Python, Bash)', () => {
             'public/transport-crypto.js',
             'public/translator-widget.js',
             'public/translator-popup.js',
+            'public/hangul-trace-recognizer.js',
             'public/frontend.js',
             'scripts/release-version.js',
             'tests/ci-summary.js'
@@ -2789,5 +2790,63 @@ describe('Agenda V4: Swipe Táctil en Vista Día, Repetición Google Calendar y 
             Array.from(sandbox.computeAgendaRepeatDates({ startDate: '2026-11-27', mode: 'days_weekdays', repeatDays: 4 })),
             ['2026-11-27', '2026-11-30', '2026-12-01', '2026-12-02']
         );
+    });
+});
+
+describe('Pizarra de Trazo Hangul (Sin Guardar, Offline & Touch-Safe)', () => {
+    it('integra #hangulTraceStudio dentro de #englishHangulPracticeStudio con touch-action: none, CSP local y cero guardado en Word/BD', () => {
+        const indexHtml = readText('public/index.html');
+        const styleCss = readText('public/style.css');
+        const frontendJs = readText('public/frontend.js');
+        const i18nJs = readText('public/i18n.js');
+        const recognizerJs = readText('public/hangul-trace-recognizer.js');
+
+        // 1. Carga local compatible con script-src 'self' y ubicación dentro de #englishHangulPracticeStudio
+        assert.match(indexHtml, /<script[^>]+src=["']hangul-trace-recognizer\.js["']/i);
+        assert.equal(/https?:\/\/.*hangul-trace-recognizer/i.test(indexHtml), false);
+
+        const studioStart = indexHtml.indexOf('id="englishHangulPracticeStudio"');
+        const studioEnd = indexHtml.indexOf('id="englishAlphabetStudio"', studioStart);
+        assert.ok(studioStart > 0 && studioEnd > studioStart, 'Debe existir #englishHangulPracticeStudio antes de #englishAlphabetStudio');
+        const hangulStudioHtml = indexHtml.slice(studioStart, studioEnd);
+
+        for (const requiredId of [
+            'id="hangulTraceStudio"',
+            'id="hangulTraceCanvas"',
+            'id="hangulTraceGuideSelect"',
+            'id="chkHangulTraceAutoRecognize"',
+            'id="btnHangulTraceRecognize"',
+            'id="btnHangulTraceUndo"',
+            'id="btnHangulTraceClear"',
+            'id="btnHangulTraceToggleGuide"',
+            'id="btnHangulTraceRandom"',
+            'id="btnHangulTraceSpeak"',
+            'id="btnHangulPracticeSelectedTrace"',
+            'id="hangulTraceResult"'
+        ]) {
+            assert.ok(hangulStudioHtml.includes(requiredId), `#englishHangulPracticeStudio debe incluir ${requiredId}`);
+        }
+
+        // 2. Reglas CSS de touch-action: none y layout responsivo
+        assert.match(styleCss, /#hangulTraceCanvas,\s*\.hangul-trace-canvas\s*\{[\s\S]*?touch-action:\s*none;[\s\S]*?user-select:\s*none;/);
+        assert.match(styleCss, /\.hangul-trace-body\s*\{[\s\S]*?grid-template-columns:/);
+        assert.match(styleCss, /@media\s*\(\s*max-width:\s*640px\s*\)\s*\{[\s\S]*?\.hangul-trace-body\s*\{\s*grid-template-columns:\s*1fr;/);
+
+        // 3. Traducciones bilingües EN/ES
+        assert.ok(i18nJs.includes("['✍️ Hangul Tracing Pad (No Save)', '✍️ Pizarra de Trazo Hangul (Sin Guardar)']"));
+        assert.ok(i18nJs.includes('hangul_trace_empty_hint'));
+
+        // 4. Verificación estricta de cero persistencia en frontend.js (initHangulTracingPad) y hangul-trace-recognizer.js
+        const fnStart = frontendJs.indexOf('function initHangulTracingPad(');
+        const fnEnd = frontendJs.indexOf('var koreanReadonlyNotesInitialized', fnStart);
+        assert.ok(fnStart > 0 && fnEnd > fnStart, 'Debe existir function initHangulTracingPad en public/frontend.js');
+        const tracingFnBody = frontendJs.slice(fnStart, fnEnd);
+
+        for (const forbidden of ['/api/send-english', '/api/send-to-pc', 'submitMutationRequest', 'resilientFetchJson', 'localStorage', 'sessionStorage', 'fetch(']) {
+            assert.equal(tracingFnBody.includes(forbidden), false, `initHangulTracingPad no debe usar ${forbidden}`);
+            assert.equal(recognizerJs.includes(forbidden), false, `hangul-trace-recognizer.js no debe usar ${forbidden}`);
+        }
+        assert.ok(tracingFnBody.includes('HangulTraceRecognizer'), 'initHangulTracingPad debe invocar HangulTraceRecognizer');
+        assert.ok(tracingFnBody.includes('speakStudyText('), 'initHangulTracingPad debe reutilizar speakStudyText para ko-KR');
     });
 });

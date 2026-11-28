@@ -2040,6 +2040,27 @@
         ['Batchim Rules (7 finals)', 'Reglas Batchim (7 finales)'],
         ['Select a Korean symbol to practice', 'Selecciona un símbolo coreano para practicar'],
         ['🔊 Listen', '🔊 Escuchar'],
+        ['✍️ Practice trace', '✍️ Practicar trazo'],
+        ['Load this symbol as a guide on the tracing pad (no save)', 'Cargar este símbolo como guía en la pizarra de trazo (sin guardar)'],
+        ['✍️ Hangul Tracing Pad (No Save)', '✍️ Pizarra de Trazo Hangul (Sin Guardar)'],
+        ['Draw any Korean vowel or consonant with your finger on phone/tablet or with your mouse on PC to identify the symbol and hear its pronunciation. 100% ephemeral practice: never saved to your Word notebook or database.', 'Dibuja cualquier vocal o consonante coreana con tu dedo en celular/tablet o con el ratón en PC para identificar el símbolo y escuchar su pronunciación. Práctica 100% efímera: nunca se guarda en tu cuaderno Word ni en la base de datos.'],
+        ['Optional guide symbol', 'Símbolo guía opcional'],
+        ['Choose free tracing or a Korean symbol to trace over a guide', 'Elige trazo libre o un símbolo coreano para calcar con guía'],
+        ['✏️ Free trace (no target symbol)', '✏️ Trazo libre (sin símbolo objetivo)'],
+        ['Automatically identify the symbol after lifting your finger or mouse', 'Identificar automáticamente el símbolo al levantar el dedo o el ratón'],
+        ['⚡ Auto-identify', '⚡ Auto-identificar'],
+        ['Practice canvas for drawing Korean Hangul symbols', 'Lienzo de práctica para dibujar símbolos coreanos Hangul'],
+        ['🔍 Identify', '🔍 Identificar'],
+        ['Identify the symbol drawn on the pad', 'Identificar el símbolo dibujado en la pizarra'],
+        ['↩️ Undo', '↩️ Deshacer'],
+        ['Undo the last drawn stroke', 'Borrar el último trazo dibujado'],
+        ['Clear the entire pad and reset the result', 'Limpiar toda la pizarra y reiniciar el resultado'],
+        ['👁️ Guide', '👁️ Guía'],
+        ['Show or hide the guide silhouette on the canvas', 'Mostrar u ocultar la silueta guía en el lienzo'],
+        ['🎲 Random', '🎲 Aleatorio'],
+        ['Pick a random Hangul symbol to practice tracing', 'Elegir un símbolo Hangul al azar para practicar su trazo'],
+        ['Did you mean to trace...?', '¿Quisiste trazar...?'],
+        ['Draw a Hangul symbol on the pad first to identify it.', 'Traza primero un símbolo Hangul en el lienzo para identificarlo.'],
         ['🧱 Korean Syllable Builder (초성 + 중성 + 종성)', '🧱 Constructor de Sílabas Coreanas (초성 + 중성 + 종성)'],
         ['Vertical vowels (ㅏ, ㅓ, ㅣ) go to the right of the consonant; horizontal vowels (ㅗ, ㅜ, ㅡ) go underneath. Final Batchim (종성) always closes the block at the bottom.', 'Las vocales verticales (ㅏ, ㅓ, ㅣ) se colocan a la derecha de la consonante; las horizontales (ㅗ, ㅜ, ㅡ) van debajo. El Batchim (종성) siempre cierra el bloque abajo.'],
         ['1. Initial Consonant (초성)', '1. Consonante Inicial (초성)'],
@@ -2141,6 +2162,10 @@
         commute_rules_hint: {
             en: 'Smart Maps-based alerts by zone: <strong>At Home or Away</strong> (starts at <strong>Google Maps drive time + extra buffer</strong> and repeats every few minutes, e.g. 11 min drive + 30 min → <strong>41, 36, 31, ... 1 min before</strong>), and <strong>Near class/campus</strong> (at <strong>20, 15, 10 min before</strong>). Tap <strong>OK</strong> in ntfy or in the app to stop remaining alerts for that class/shift.',
             es: 'Avisos inteligentes basados en Maps por zona: <strong>En Casa o Lejos</strong> (inicia en <strong>tiempo de Google Maps + minutos extra</strong> y se repite cada cierto tiempo, ej. 11 min + 30 min → <strong>41, 36, 31, ... 1 min antes</strong>) y <strong>Cerca del lugar</strong> (a los <strong>20, 15, 10 min antes</strong>). Pulsa <strong>OK</strong> en ntfy o en la app para detener los avisos restantes de esa clase/turno.'
+        },
+        hangul_trace_empty_hint: {
+            en: 'Trace any Hangul symbol on the pad on the left and press <strong>🔍 Identify</strong> (or lift your stroke with Auto-identify enabled) to see what symbol it is and hear how it sounds.',
+            es: 'Traza cualquier símbolo Hangul en el cuadro de la izquierda y pulsa <strong>🔍 Identificar</strong> (o suelta el trazo con auto-identificar activo) para ver cuál es y cómo suena.'
         },
         home_loc_hint: {
             en: 'Pick your Home on the interactive map or enter your Saltillo street address, then click <strong>Save &amp; Find Home Location</strong>.',
@@ -2656,6 +2681,9 @@
         }
         if ((m = trim.match(/^(?:Active key|Clave activa):\s*(.+)$/i))) {
             return pick('Active key: ', 'Clave activa: ') + m[1];
+        }
+        if ((m = trim.match(/^(?:Match|Coincidencia):\s*(\d+)%$/i))) {
+            return pick('Match: ' + m[1] + '%', 'Coincidencia: ' + m[1] + '%');
         }
         if ((m = trim.match(/^(?:This and following|Esta y las siguientes)\s*\(\+(\d+)\)$/i))) {
             return pick('This and following (+' + m[1] + ')', 'Esta y las siguientes (+' + m[1] + ')');
