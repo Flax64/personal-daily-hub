@@ -12423,6 +12423,11 @@ body.agenda-dragging-active {
     border-color: rgba(129, 140, 248, 0.38);
 }
 
+#agendaDeleteSeriesModal,
+#agendaEditSeriesModal {
+    z-index: 1260;
+}
+
 .agenda-delete-series-modal-card {
     max-width: 440px;
 }
@@ -12439,10 +12444,22 @@ body.agenda-dragging-active {
     color: #92400e;
 }
 
+.agenda-edit-series-notice {
+    background: var(--brand-primary-soft, rgba(59, 130, 246, 0.12));
+    border-color: var(--brand-primary-border, rgba(59, 130, 246, 0.36));
+    color: var(--brand-primary, #1d4ed8);
+}
+
 :root[data-theme="dark"] .agenda-delete-series-notice {
     background: rgba(245, 158, 11, 0.16);
     border-color: rgba(251, 191, 36, 0.38);
     color: #fde68a;
+}
+
+:root[data-theme="dark"] .agenda-edit-series-notice {
+    background: rgba(59, 130, 246, 0.18);
+    border-color: rgba(96, 165, 250, 0.42);
+    color: #bfdbfe;
 }
 
 .agenda-delete-series-actions {

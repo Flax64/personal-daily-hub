@@ -739,6 +739,12 @@
         ['Invalid delete scope (allowed: single, following).', 'Alcance de eliminación inválido (permitidos: single, following).'],
         ['repeatDays must be between 2 and 90.', 'La cantidad de días de repetición debe estar entre 2 y 90.'],
         ['Recurring activities deleted successfully.', 'Actividades repetitivas eliminadas correctamente.'],
+        ['Edit recurring activity', 'Editar actividad repetitiva'],
+        ["🛡️ Previous days' occurrences are never modified.", '🛡️ Las actividades de días anteriores nunca se modifican.'],
+        ["Previous days' occurrences are never modified.", 'Las actividades de días anteriores nunca se modifican.'],
+        ['Past recurring occurrences cannot be edited.', 'Las actividades repetitivas de días anteriores no se pueden editar.'],
+        ['Invalid edit scope (allowed: single, following).', 'Alcance de edición inválido (permitidos: single, following).'],
+        ['Recurring activities updated successfully.', 'Actividades repetitivas actualizadas correctamente.'],
         ['Recurring activity series', 'Serie de actividad repetitiva'],
         ['Repeat every how many days:', 'Cada cuántos días repetir:'],
         ['Every', 'Cada'],
@@ -2700,6 +2706,14 @@
             return pick(
                 'Removed ' + m[1] + ' occurrences from this recurring series.',
                 'Se eliminaron ' + m[1] + ' ocurrencias de la serie repetitiva.'
+            );
+        }
+        if ((m = trim.match(/^Updated this activity and (\d+) following\.?$/i))
+            || (m = trim.match(/^Actividad y (\d+) siguientes? actualizadas?\.?$/i))) {
+            var updN = Number(m[1]);
+            return pick(
+                'Updated this activity and ' + updN + ' following.',
+                'Actividad y ' + updN + ' ' + (updN === 1 ? 'siguiente actualizada' : 'siguientes actualizadas') + '.'
             );
         }
         if ((m = trim.match(/^(?:Smart commute alerts|Alertas inteligentes de traslado)\s+(active|paused|activas|pausadas)\s*·\s*\+(\d+)\s*min\s*(?:buffer|margen)\s*·\s*(?:repeat every|repetir cada)\s*(\d+)\s*min\s*·\s*(?:Near|Cerca):\s*([0-9,\s]+)\s*min\s*·\s*(?:Radius|Radio):\s*([0-9.]+)\s*km$/i))) {

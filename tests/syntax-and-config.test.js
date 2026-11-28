@@ -2924,3 +2924,54 @@ describe('Agenda V5: Sensibilidad y Confiabilidad del Swipe Táctil en Vista Dí
         assert.match(styleCss, /\.agenda-drag-handle\s*\{[\s\S]*?touch-action:\s*none;/);
     });
 });
+
+describe('Agenda V6: Modal y Alcance al Editar Actividades Repetitivas (Google Calendar)', () => {
+    it('incluye #agendaEditSeriesModal, botones EN/ES y lógica frontend de scope single vs following sin cerrar #agendaModal al cancelar', () => {
+        const indexHtml = readText('public/index.html');
+        const styleCss = readText('public/style.css');
+        const frontendJs = readText('public/frontend.js');
+        const i18nJs = readText('public/i18n.js');
+
+        // 1. HTML del modal #agendaEditSeriesModal y controles sin IDs duplicados
+        for (const requiredId of [
+            'id="agendaEditSeriesModal"',
+            'id="btnCloseAgendaEditSeriesModal"',
+            'id="agendaEditSeriesTitle"',
+            'id="agendaEditSeriesItemTitle"',
+            'id="agendaEditSeriesItemDate"',
+            'id="agendaEditSeriesNotice"',
+            'id="btnAgendaEditScopeSingle"',
+            'id="btnAgendaEditScopeFollowing"',
+            'id="btnAgendaEditScopeCancel"'
+        ]) {
+            assert.ok(indexHtml.includes(requiredId), `public/index.html debe contener ${requiredId}`);
+        }
+
+        // 2. CSS apilado sobre #agendaModal y estilos responsivos/oscuros
+        assert.match(styleCss, /#agendaDeleteSeriesModal,\s*#agendaEditSeriesModal\s*\{[\s\S]*?z-index:\s*1260;/);
+        assert.ok(styleCss.includes('.agenda-edit-series-notice'));
+
+        // 3. Traducciones bilingües EN/ES completas
+        for (const expectedI18n of [
+            "['Edit recurring activity', 'Editar actividad repetitiva']",
+            "['Past recurring occurrences cannot be edited.', 'Las actividades repetitivas de días anteriores no se pueden editar.']",
+            "['Invalid edit scope (allowed: single, following).', 'Alcance de edición inválido (permitidos: single, following).']",
+            "['Recurring activities updated successfully.', 'Actividades repetitivas actualizadas correctamente.']",
+            'Updated this activity and'
+        ]) {
+            assert.ok(i18nJs.includes(expectedI18n), `public/i18n.js debe incluir ${expectedI18n}`);
+        }
+
+        // 4. Frontend: diálogo openAgendaEditSeriesDialog, protección de Escape y envío con scope
+        assert.ok(frontendJs.includes('function openAgendaEditSeriesDialog('), 'public/frontend.js debe definir openAgendaEditSeriesDialog');
+        const dialogStart = frontendJs.indexOf('function openAgendaEditSeriesDialog(');
+        const dialogEnd = frontendJs.indexOf('const agendaModal = document.getElementById', dialogStart);
+        assert.ok(dialogStart > 0 && dialogEnd > dialogStart);
+        const dialogBody = frontendJs.slice(dialogStart, dialogEnd);
+        assert.ok(dialogBody.includes("finish('single')") && dialogBody.includes("finish('following')") && dialogBody.includes('finish(null)'));
+        assert.equal(dialogBody.includes('cerrarAgendaModal'), false, 'Cancelar #agendaEditSeriesModal nunca debe cerrar #agendaModal');
+
+        assert.ok(frontendJs.includes('/api/update-agenda/${editId}?scope=${encodeURIComponent(editScope)}'));
+        assert.ok(frontendJs.includes('payload.scope = editScope'));
+    });
+});
