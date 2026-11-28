@@ -434,10 +434,12 @@ function inicializarTablasSeguridad() {
             completada TINYINT(1) NOT NULL DEFAULT 0,
             recordatorio_min SMALLINT NULL DEFAULT NULL,
             en_progreso_desde DATETIME NULL DEFAULT NULL,
+            serie_id VARCHAR(64) NULL DEFAULT NULL,
             fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_agenda_fecha (fecha),
             INDEX idx_agenda_categoria_estado (categoria, estado),
-            INDEX idx_agenda_materia (materia_id)
+            INDEX idx_agenda_materia (materia_id),
+            INDEX idx_agenda_serie_fecha (serie_id, fecha)
         )`,
         `CREATE TABLE IF NOT EXISTS Usuarios (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -664,6 +666,11 @@ function inicializarTablasSeguridad() {
         {
             name: 'en_progreso_desde',
             sql: 'ALTER TABLE RegistrosAgenda ADD COLUMN en_progreso_desde DATETIME NULL DEFAULT NULL AFTER recordatorio_min'
+        },
+        {
+            name: 'serie_id',
+            sql: 'ALTER TABLE RegistrosAgenda ADD COLUMN serie_id VARCHAR(64) NULL DEFAULT NULL AFTER en_progreso_desde',
+            afterMigrate: 'CREATE INDEX idx_agenda_serie_fecha ON RegistrosAgenda (serie_id, fecha)'
         }
     ];
     agendaCols.forEach(col => {
@@ -674,6 +681,16 @@ function inicializarTablasSeguridad() {
                         console.error(`Error migrando columna ${col.name} en RegistrosAgenda:`, errAlt.message);
                     } else if (!errAlt && col.afterMigrate) {
                         db.query(col.afterMigrate, () => {});
+                    }
+                });
+            } else if (!errCol && col.name === 'serie_id') {
+                db.query("SHOW INDEX FROM RegistrosAgenda WHERE Key_name = 'idx_agenda_serie_fecha'", (errIdx, idxRows) => {
+                    if (!errIdx && Array.isArray(idxRows) && idxRows.length === 0) {
+                        db.query('CREATE INDEX idx_agenda_serie_fecha ON RegistrosAgenda (serie_id, fecha)', (errCreateIdx) => {
+                            if (errCreateIdx && !/Duplicate key name/i.test(errCreateIdx.message || '')) {
+                                console.error('Error migrando índice idx_agenda_serie_fecha en RegistrosAgenda:', errCreateIdx.message);
+                            }
+                        });
                     }
                 });
             } else if (!errCol && col.name === 'estado' && Array.isArray(cols) && cols[0] && cols[0].Type && !String(cols[0].Type).includes('skipped')) {
@@ -3854,6 +3871,10 @@ function enrichAgendaRow(row) {
     return {
         ...row,
         en_progreso_desde: serializeAgendaDateTime(row.en_progreso_desde),
+        serie_id: row.serie_id ? String(row.serie_id).trim() : null,
+        followingCount: Number.isInteger(Number(row.followingCount)) && Number(row.followingCount) >= 0
+            ? Number(row.followingCount)
+            : 0,
         materia_id: isUni && row.materia_id ? String(row.materia_id).trim() : null,
         materia_nombre: isUni && row.materia_nombre ? String(row.materia_nombre).trim() : null,
         titulo,
@@ -4022,7 +4043,8 @@ app.get('/api/get-agenda', apiReadLimiter.middleware, requireAdmin, (req, res) =
                COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
                completada,
                recordatorio_min,
-               en_progreso_desde
+               en_progreso_desde,
+               serie_id
         FROM RegistrosAgenda
         WHERE fecha BETWEEN ? AND ?
         ORDER BY fecha ASC, hora ASC, id ASC
@@ -4041,7 +4063,57 @@ app.get('/api/get-agenda', apiReadLimiter.middleware, requireAdmin, (req, res) =
             end,
             req.query.includeDrive === '1'
         );
-        res.json(merged.map(enrichAgendaRow));
+
+        const serieIds = [...new Set(
+            merged.map(r => (r && r.serie_id ? String(r.serie_id).trim() : '')).filter(Boolean)
+        )];
+        const seriesPeersMap = new Map();
+        if (serieIds.length > 0) {
+            try {
+                const placeholders = serieIds.map(() => '?').join(', ');
+                const seriesRows = await dbQueryAsync(
+                    `SELECT id, serie_id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora
+                     FROM RegistrosAgenda
+                     WHERE serie_id IN (${placeholders})`,
+                    serieIds
+                );
+                if (Array.isArray(seriesRows)) {
+                    seriesRows.forEach(sr => {
+                        const sid = sr && sr.serie_id ? String(sr.serie_id).trim() : '';
+                        if (!sid) return;
+                        if (!seriesPeersMap.has(sid)) seriesPeersMap.set(sid, []);
+                        seriesPeersMap.get(sid).push({
+                            id: Number(sr.id),
+                            fecha: sr.fecha instanceof Date ? sr.fecha.toISOString().slice(0, 10) : String(sr.fecha || '').slice(0, 10),
+                            hora: String(sr.hora || '').trim().slice(0, 5)
+                        });
+                    });
+                }
+            } catch (_) {
+                // Fallback a los registros ya cargados en merged
+            }
+        }
+
+        const enriched = merged.map(row => {
+            const sid = row && row.serie_id ? String(row.serie_id).trim() : '';
+            if (!sid) return enrichAgendaRow({ ...row, followingCount: 0 });
+            const peers = seriesPeersMap.get(sid) || merged.filter(m => String(m?.serie_id || '').trim() === sid);
+            const itemFecha = row.fecha instanceof Date ? row.fecha.toISOString().slice(0, 10) : String(row.fecha || '').slice(0, 10);
+            const itemHora = String(row.hora || '').trim().slice(0, 5);
+            const itemId = Number(row.id);
+            const followingCount = peers.reduce((acc, peer) => {
+                if (!peer || Number(peer.id) === itemId) return acc;
+                const pFecha = peer.fecha instanceof Date ? peer.fecha.toISOString().slice(0, 10) : String(peer.fecha || '').slice(0, 10);
+                const pHora = String(peer.hora || '').trim().slice(0, 5);
+                if (pFecha > itemFecha || (pFecha === itemFecha && pHora > itemHora)) {
+                    return acc + 1;
+                }
+                return acc;
+            }, 0);
+            return enrichAgendaRow({ ...row, followingCount });
+        });
+
+        res.json(enriched);
     });
 });
 
@@ -4064,6 +4136,15 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
     const errorValidacion = validarDatosAgenda(req.body);
     if (errorValidacion) {
         return res.status(400).send(errorValidacion);
+    }
+
+    const rawRepeatDaysInput = req.body.repeatDays !== undefined ? req.body.repeatDays : req.body.repetir_dias;
+    let parsedRepeatDays = null;
+    if (rawRepeatDaysInput !== undefined && rawRepeatDaysInput !== null && rawRepeatDaysInput !== '') {
+        parsedRepeatDays = Number.parseInt(rawRepeatDaysInput, 10);
+        if (!Number.isInteger(parsedRepeatDays) || (parsedRepeatDays !== 1 && (parsedRepeatDays < 2 || parsedRepeatDays > 90))) {
+            return res.status(400).send('repeatDays must be between 2 and 90.');
+        }
     }
 
     try {
@@ -4093,9 +4174,10 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
         const completada = estado === 'done' ? 1 : 0;
         const enProgresoDesde = estado === 'in_progress' ? formatMySqlDateTime(new Date()) : null;
 
+        const repeatMode = String(req.body.repeatMode || req.body.modo_repeticion || '').trim().toLowerCase();
         const repetirCadaDias = Math.max(0, Math.min(90, Number.parseInt(req.body.repetir_cada_dias, 10) || 0));
         const repetirVeces = repetirCadaDias > 0
-            ? Math.max(1, Math.min(30, Number.parseInt(req.body.repetir_veces, 10) || 1))
+            ? Math.max(1, Math.min(90, Number.parseInt(req.body.repetir_veces, 10) || 1))
             : 1;
 
         const targetDates = [];
@@ -4111,27 +4193,49 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
                     seenDates.add(candidateDate);
                     targetDates.push(candidateDate);
                 }
-                if (targetDates.length >= 30) break;
+                if (targetDates.length >= 90) break;
             }
         }
         if (targetDates.length === 0) {
             const [y, m, d] = fecha.split('-').map(Number);
-            for (let occ = 0; occ < repetirVeces; occ += 1) {
-                const occDateObj = new Date(Date.UTC(y, m - 1, d + (occ * repetirCadaDias)));
-                targetDates.push(occDateObj.toISOString().slice(0, 10));
+            if (parsedRepeatDays !== null && parsedRepeatDays >= 2) {
+                if (repeatMode === 'days_weekdays' || repeatMode === 'weekdays_only') {
+                    for (let offset = 0; offset <= 366 && targetDates.length < parsedRepeatDays; offset += 1) {
+                        const probe = new Date(Date.UTC(y, m - 1, d + offset));
+                        const dow = probe.getUTCDay();
+                        if (dow >= 1 && dow <= 5) {
+                            targetDates.push(probe.toISOString().slice(0, 10));
+                        }
+                    }
+                } else {
+                    for (let occ = 0; occ < parsedRepeatDays; occ += 1) {
+                        const occDateObj = new Date(Date.UTC(y, m - 1, d + occ));
+                        targetDates.push(occDateObj.toISOString().slice(0, 10));
+                    }
+                }
+            } else {
+                for (let occ = 0; occ < repetirVeces; occ += 1) {
+                    const occDateObj = new Date(Date.UTC(y, m - 1, d + (occ * repetirCadaDias)));
+                    targetDates.push(occDateObj.toISOString().slice(0, 10));
+                }
             }
         } else {
             targetDates.sort();
         }
 
+        const serieId = targetDates.length >= 2 ? crypto.randomUUID() : null;
         const sql = `
-            INSERT INTO RegistrosAgenda (fecha, bloque, hora, actividad, tipo, categoria, estado, completada, recordatorio_min, en_progreso_desde, materia_id, materia_nombre)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO RegistrosAgenda (fecha, bloque, hora, actividad, tipo, categoria, estado, completada, recordatorio_min, en_progreso_desde, materia_id, materia_nombre, serie_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         let firstInsertId = null;
+        const createdIds = [];
         for (let occ = 0; occ < targetDates.length; occ += 1) {
             const occFecha = targetDates[occ];
+            const occEstado = occ === 0 ? estado : 'todo';
+            const occCompletada = occ === 0 ? completada : 0;
+            const occEnProgreso = occ === 0 ? enProgresoDesde : null;
             const result = await dbQueryAsync(sql, [
                 occFecha,
                 bloque,
@@ -4139,13 +4243,15 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
                 actividad,
                 tipo,
                 categoria,
-                estado,
-                completada,
+                occEstado,
+                occCompletada,
                 recordatorioMin,
-                enProgresoDesde,
+                occEnProgreso,
                 courseLink.materia_id,
-                courseLink.materia_nombre
+                courseLink.materia_nombre,
+                serieId
             ]);
+            createdIds.push(result.insertId);
             if (occ === 0 || occFecha === fecha) {
                 if (firstInsertId === null || occFecha === fecha) firstInsertId = result.insertId;
             }
@@ -4153,14 +4259,19 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
 
         bumpSyncRevision('agenda');
         res.status(201).json({
+            ok: true,
             message: targetDates.length > 1
                 ? `Activity saved and scheduled for ${targetDates.length} dates.`
                 : 'Activity saved successfully.',
+            serie_id: serieId,
+            serieId,
+            createdCount: targetDates.length,
             repeatedCount: targetDates.length,
             createdDates: targetDates,
+            createdIds,
             item: {
                 id: firstInsertId,
-                fecha,
+                fecha: targetDates[0] || fecha,
                 bloque,
                 hora: horaNormalizada,
                 actividad,
@@ -4173,7 +4284,9 @@ app.post('/api/insert-agenda', apiWriteLimiter.middleware, requireAdmin, require
                 estado,
                 completada,
                 recordatorio_min: recordatorioMin,
-                en_progreso_desde: enProgresoDesde
+                en_progreso_desde: enProgresoDesde,
+                serie_id: serieId,
+                followingCount: Math.max(0, targetDates.length - 1)
             }
         });
     } catch (err) {
@@ -4201,7 +4314,7 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
             `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora,
                     bloque, recordatorio_min, materia_id, materia_nombre,
                     COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
-                    completada, en_progreso_desde
+                    completada, en_progreso_desde, serie_id
              FROM RegistrosAgenda
              WHERE id = ?
              LIMIT 1`,
@@ -4319,7 +4432,8 @@ app.put('/api/update-agenda/:id', apiWriteLimiter.middleware, requireAdmin, requ
                 estado,
                 completada,
                 recordatorio_min: recordatorioMin,
-                en_progreso_desde: nextEnProgresoDesde
+                en_progreso_desde: nextEnProgresoDesde,
+                serie_id: existingRow.serie_id ? String(existingRow.serie_id).trim() : null
             }
         });
     } catch (err) {
@@ -4440,7 +4554,7 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
                     COALESCE(categoria, 'personal') AS categoria,
                     materia_id, materia_nombre,
                     COALESCE(estado, CASE WHEN completada = 1 THEN 'done' ELSE 'todo' END) AS estado,
-                    completada, recordatorio_min, en_progreso_desde
+                    completada, recordatorio_min, en_progreso_desde, serie_id
              FROM RegistrosAgenda
              WHERE id = ?
              LIMIT 1`,
@@ -4542,23 +4656,126 @@ app.patch('/api/postpone-agenda/:id', apiWriteLimiter.middleware, requireAdmin, 
     }
 });
 
-app.delete('/api/delete-agenda/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), (req, res) => {
+app.delete('/api/delete-agenda/:id', apiWriteLimiter.middleware, requireAdmin, preventDuplicateSubmit({ dedupeWindowMs: 0 }), async (req, res) => {
     const id = parseAgendaId(req.params.id);
     if (!id) return res.status(400).send('Invalid activity ID.');
 
-    const sql = 'DELETE FROM RegistrosAgenda WHERE id = ?';
-    db.query(sql, [id], (err, result) => {
-        if (err) {
-            console.error(err);
-            return res.status(500).send('Error deleting activity.');
+    const rawScope = req.query?.scope !== undefined ? req.query.scope : req.body?.scope;
+    const scope = (rawScope === undefined || rawScope === null || String(rawScope).trim() === '')
+        ? 'single'
+        : String(rawScope).trim().toLowerCase();
+
+    if (scope === 'all' || scope === 'previous') {
+        return res.status(400).send('Past recurring occurrences cannot be deleted.');
+    }
+    if (scope !== 'single' && scope !== 'following') {
+        return res.status(400).send('Invalid delete scope (allowed: single, following).');
+    }
+
+    try {
+        if (scope === 'single') {
+            const result = await dbQueryAsync('DELETE FROM RegistrosAgenda WHERE id = ?', [id]);
+            if (!result || result.affectedRows === 0) {
+                return res.status(404).send('Activity not found.');
+            }
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+            bumpSyncRevision('agenda');
+            return res.json({
+                ok: true,
+                scope: 'single',
+                deletedCount: 1,
+                deletedIds: [id],
+                id,
+                message: 'Activity deleted successfully.'
+            });
         }
-        if (result.affectedRows === 0) {
+
+        const rows = await dbQueryAsync(
+            `SELECT id, serie_id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora
+             FROM RegistrosAgenda
+             WHERE id = ?
+             LIMIT 1`,
+            [id]
+        );
+        if (!Array.isArray(rows) || rows.length === 0) {
             return res.status(404).send('Activity not found.');
         }
-        db.query("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id], () => {});
+
+        const target = rows[0];
+        const targetFecha = target.fecha instanceof Date
+            ? target.fecha.toISOString().slice(0, 10)
+            : String(target.fecha || '').slice(0, 10);
+        const targetHora = String(target.hora || '').trim().slice(0, 5);
+        const serieId = target.serie_id ? String(target.serie_id).trim() : '';
+
+        if (!serieId) {
+            const singleResult = await dbQueryAsync('DELETE FROM RegistrosAgenda WHERE id = ?', [id]);
+            if (!singleResult || singleResult.affectedRows === 0) {
+                return res.status(404).send('Activity not found.');
+            }
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [id]);
+            bumpSyncRevision('agenda');
+            return res.json({
+                ok: true,
+                scope: 'following',
+                deletedCount: 1,
+                deletedIds: [id],
+                id,
+                message: 'Activity deleted successfully.'
+            });
+        }
+
+        const candidateRows = await dbQueryAsync(
+            `SELECT id, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, TIME_FORMAT(hora, '%H:%i') AS hora
+             FROM RegistrosAgenda
+             WHERE serie_id = ?
+               AND (id = ? OR fecha > ? OR (fecha = ? AND TIME_FORMAT(hora, '%H:%i') > ?))
+             ORDER BY fecha ASC, hora ASC, id ASC`,
+            [serieId, id, targetFecha, targetFecha, targetHora]
+        );
+
+        const deletedIds = (Array.isArray(candidateRows) ? candidateRows : [])
+            .filter(r => {
+                const rId = Number(r.id);
+                const rFecha = r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha || '').slice(0, 10);
+                const rHora = String(r.hora || '').trim().slice(0, 5);
+                if (rId === id) return true;
+                if (rFecha < targetFecha) return false;
+                if (rFecha === targetFecha && rHora <= targetHora) return false;
+                return rFecha > targetFecha || (rFecha === targetFecha && rHora > targetHora);
+            })
+            .map(r => Number(r.id))
+            .filter(n => Number.isInteger(n) && n > 0);
+
+        if (!deletedIds.includes(id)) {
+            deletedIds.unshift(id);
+        }
+
+        const delResult = await dbQueryAsync(
+            `DELETE FROM RegistrosAgenda
+             WHERE serie_id = ?
+               AND (id = ? OR fecha > ? OR (fecha = ? AND TIME_FORMAT(hora, '%H:%i') > ?))`,
+            [serieId, id, targetFecha, targetFecha, targetHora]
+        );
+        const deletedCount = Number(delResult?.affectedRows) > 0 ? Number(delResult.affectedRows) : deletedIds.length;
+
+        for (const delId of deletedIds) {
+            await dbQueryAsync("DELETE FROM RecordatoriosEstado WHERE ref_id = ? AND tipo = 'agenda'", [delId]);
+        }
         bumpSyncRevision('agenda');
-        res.json({ message: 'Activity deleted successfully.', id });
-    });
+        return res.json({
+            ok: true,
+            scope: 'following',
+            serie_id: serieId,
+            deletedCount,
+            deletedIds,
+            id,
+            message: 'Recurring activities deleted successfully.'
+        });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).send('Error deleting activity.');
+    }
 });
 
 // ==========================================

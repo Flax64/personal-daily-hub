@@ -723,10 +723,23 @@
         ['No reminder', 'Sin recordatorio'],
         ['🔁 Repeat frequency:', '🔁 Frecuencia de repetición:'],
         ['Do not repeat (Once only)', 'No repetir (Solo una vez)'],
+        ['Repeat for X days (every day)', 'Repetir por X días (todos los días)'],
+        ['Repeat for X days (Mon–Fri)', 'Repetir por X días (Lun–Vie)'],
+        ['Repeat for (days):', 'Repetir durante (días):'],
+        ['How many days this activity will repeat (2 to 90)', 'Durante cuántos días se repetirá esta actividad (2 a 90)'],
         ['Every day (Daily)', 'Todos los días (Diario)'],
         ['Every X days', 'Cada X días'],
         ['Specific days of week', 'Días específicos de la semana'],
         ['Weekly (same day every week)', 'Semanal (mismo día cada semana)'],
+        ['Delete recurring activity', 'Eliminar actividad repetitiva'],
+        ["🛡️ Previous days' occurrences are never deleted.", '🛡️ Las actividades de días anteriores nunca se eliminan.'],
+        ["Previous days' occurrences are never deleted.", 'Las actividades de días anteriores nunca se eliminan.'],
+        ['Only this activity', 'Solo esta actividad'],
+        ['Past recurring occurrences cannot be deleted.', 'Las actividades repetitivas de días anteriores no se pueden eliminar.'],
+        ['Invalid delete scope (allowed: single, following).', 'Alcance de eliminación inválido (permitidos: single, following).'],
+        ['repeatDays must be between 2 and 90.', 'La cantidad de días de repetición debe estar entre 2 y 90.'],
+        ['Recurring activities deleted successfully.', 'Actividades repetitivas eliminadas correctamente.'],
+        ['Recurring activity series', 'Serie de actividad repetitiva'],
         ['Repeat every how many days:', 'Cada cuántos días repetir:'],
         ['Every', 'Cada'],
         ['days', 'días'],
@@ -2643,6 +2656,23 @@
         }
         if ((m = trim.match(/^(?:Active key|Clave activa):\s*(.+)$/i))) {
             return pick('Active key: ', 'Clave activa: ') + m[1];
+        }
+        if ((m = trim.match(/^(?:This and following|Esta y las siguientes)\s*\(\+(\d+)\)$/i))) {
+            return pick('This and following (+' + m[1] + ')', 'Esta y las siguientes (+' + m[1] + ')');
+        }
+        if ((m = trim.match(/^📅\s*Will be created across (\d+) days:\s*(.+?)\s*[–-]\s*(.+)$/i))
+            || (m = trim.match(/^📅\s*Se creará en (\d+) días:\s*del\s+(.+?)\s+al\s+(.+)$/i))) {
+            return pick(
+                '📅 Will be created across ' + m[1] + ' days: ' + m[2] + ' – ' + m[3],
+                '📅 Se creará en ' + m[1] + ' días: del ' + m[2] + ' al ' + m[3]
+            );
+        }
+        if ((m = trim.match(/^Removed (\d+) occurrences from this recurring series\.?$/i))
+            || (m = trim.match(/^Se eliminaron (\d+) ocurrencias de la serie repetitiva\.?$/i))) {
+            return pick(
+                'Removed ' + m[1] + ' occurrences from this recurring series.',
+                'Se eliminaron ' + m[1] + ' ocurrencias de la serie repetitiva.'
+            );
         }
         if ((m = trim.match(/^(?:Smart commute alerts|Alertas inteligentes de traslado)\s+(active|paused|activas|pausadas)\s*·\s*\+(\d+)\s*min\s*(?:buffer|margen)\s*·\s*(?:repeat every|repetir cada)\s*(\d+)\s*min\s*·\s*(?:Near|Cerca):\s*([0-9,\s]+)\s*min\s*·\s*(?:Radius|Radio):\s*([0-9.]+)\s*km$/i))) {
             var isActiveComm = m[1].toLowerCase() === 'active' || m[1].toLowerCase() === 'activas';
