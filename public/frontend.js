@@ -11757,6 +11757,9 @@ function crearElementoActividad(item) {
     row.dataset.categoria = categoria;
     row.dataset.bloque = resolvedBloque;
     row.dataset.hora = String(item.hora || '').trim().slice(0, 5);
+    if (item.serie_id) {
+        row.dataset.serieId = String(item.serie_id);
+    }
 
     if (
         agendaRecentlyMovedFlash.id !== null &&
@@ -11870,6 +11873,13 @@ function crearElementoActividad(item) {
     typePill.textContent = tipo === 'tarea' ? tUi('Task', 'Tarea') : tUi('Event', 'Evento');
 
     metaRow.append(catPill, typePill);
+    if (item.serie_id) {
+        const seriesPill = document.createElement('span');
+        seriesPill.className = 'agenda-series-pill';
+        seriesPill.title = tUi('Recurring activity series', 'Serie de actividad repetitiva');
+        seriesPill.textContent = '🔁';
+        metaRow.appendChild(seriesPill);
+    }
     footerEl.append(jiraRow, metaRow);
 
     if (descEl) {
@@ -11922,7 +11932,7 @@ function crearElementoActividad(item) {
     checkBtn.addEventListener('click', () => toggleAgendaItem(item, uiRefs, nextAgendaStatus(getAgendaItemStatus(item))));
     statusSelect.addEventListener('change', () => toggleAgendaItem(item, uiRefs, statusSelect.value));
     skipBtn.addEventListener('click', () => toggleAgendaItem(item, uiRefs, isSkipped ? 'todo' : 'skipped'));
-    delBtn.addEventListener('click', () => eliminarAgendaItem(item.id, uiRefs));
+    delBtn.addEventListener('click', () => eliminarAgendaItem(item, uiRefs));
 
     actions.append(postponeBtn, skipBtn, editBtn, delBtn);
     topLeft.append(dragHandle, checkBtn, timePill);
@@ -12081,6 +12091,9 @@ function renderAgendaBoard() {
             tab.addEventListener('click', () => {
                 agendaState.selectedDate = dia.fecha;
                 renderAgendaBoard();
+                if (typeof scrollActiveAgendaDayTabIntoView === 'function') {
+                    scrollActiveAgendaDayTabIntoView({ smooth: true });
+                }
             });
             dayTabs.appendChild(tab);
         });
@@ -12463,7 +12476,11 @@ function cargarAgendaSemana({ preserveScroll = false } = {}) {
             if (typeof renderAgendaHeaderCalendar === 'function') {
                 renderAgendaHeaderCalendar(true);
             }
-            if (scrollSnap) restoreAgendaScrollSnapshot(scrollSnap);
+            if (scrollSnap) {
+                restoreAgendaScrollSnapshot(scrollSnap);
+            } else if (agendaState.layoutMode === 'day' && typeof scrollActiveAgendaDayTabIntoView === 'function') {
+                scrollActiveAgendaDayTabIntoView({ smooth: false });
+            }
         })
         .catch(err => {
             if (isAbortError(err) || !agendaLoadTracker.isCurrent(reqToken.seq)) return;
@@ -12623,6 +12640,7 @@ function buildMonthCalendarMatrix(year, monthIndex) {
 function computeAgendaRepeatDates({
     startDate = '',
     mode = 'none',
+    repeatDays = 5,
     intervalDays = 2,
     weekdays = [],
     endMode = 'count',
@@ -12634,10 +12652,31 @@ function computeAgendaRepeatDates({
     const normalizedMode = String(mode || 'none').trim().toLowerCase();
     if (normalizedMode === 'none') return [cleanStart];
 
+    if (normalizedMode === 'days_daily' || normalizedMode === 'days_weekdays') {
+        const safeRepeatDays = Math.max(2, Math.min(90, Number.parseInt(repeatDays, 10) || 2));
+        const [sy, sm, sd] = cleanStart.split('-').map(Number);
+        const outDates = [];
+        if (normalizedMode === 'days_weekdays') {
+            for (let offset = 0; offset <= 366 && outDates.length < safeRepeatDays; offset += 1) {
+                const probe = new Date(Date.UTC(sy, sm - 1, sd + offset));
+                const dow = probe.getUTCDay();
+                if (dow >= 1 && dow <= 5) {
+                    outDates.push(probe.toISOString().slice(0, 10));
+                }
+            }
+        } else {
+            for (let offset = 0; offset < safeRepeatDays; offset += 1) {
+                const probe = new Date(Date.UTC(sy, sm - 1, sd + offset));
+                outDates.push(probe.toISOString().slice(0, 10));
+            }
+        }
+        return outDates;
+    }
+
     const dates = [cleanStart];
     const seen = new Set(dates);
-    const maxTotal = 30;
-    const safeExtra = Math.max(1, Math.min(29, Number.parseInt(countExtra, 10) || 1));
+    const maxTotal = 90;
+    const safeExtra = Math.max(1, Math.min(89, Number.parseInt(countExtra, 10) || 1));
     const safeUntil = /^\d{4}-\d{2}-\d{2}$/.test(String(untilDate || '').trim())
         ? String(untilDate).trim()
         : '';
@@ -12983,34 +13022,186 @@ function posponerAgendaItem(item, { days = null, targetDate = '', offsetMinutes 
     });
 }
 
-async function eliminarAgendaItem(id, ui = {}) {
-    const ok = await openConfirmDialog({
-        title: tUi('Delete Activity?', '¿Eliminar actividad?'),
-        message: tUi('Remove this activity permanently from your Weekly Agenda?', '¿Quitar esta actividad permanentemente de tu Agenda Semanal?'),
-        confirmText: tUi('Delete', 'Eliminar'),
-        danger: true
-    });
-    if (!ok) return;
+async function eliminarAgendaItem(itemOrId, ui = {}) {
+    const targetItem = (itemOrId && typeof itemOrId === 'object')
+        ? itemOrId
+        : (Array.isArray(agendaState.items)
+            ? agendaState.items.find(i => Number(i.id) === Number(itemOrId))
+            : null);
+    const id = targetItem ? targetItem.id : itemOrId;
+    if (!id) return;
 
+    const serieId = targetItem?.serie_id ? String(targetItem.serie_id).trim() : '';
+    const followingCount = serieId ? computeClientFollowingSeriesCount(targetItem) : 0;
+
+    let scope = 'single';
+    if (serieId && followingCount > 0) {
+        const chosenScope = await openAgendaDeleteSeriesDialog(targetItem, followingCount);
+        if (!chosenScope) return;
+        scope = chosenScope;
+    } else {
+        const ok = await openConfirmDialog({
+            title: tUi('Delete Activity?', '¿Eliminar actividad?'),
+            message: tUi('Remove this activity permanently from your Weekly Agenda?', '¿Quitar esta actividad permanentemente de tu Agenda Semanal?'),
+            confirmText: tUi('Delete', 'Eliminar'),
+            danger: true
+        });
+        if (!ok) return;
+    }
+
+    const scrollSnap = captureAgendaScrollSnapshot();
     const lockBtn = ui.delBtn || ui.row || document.createElement('button');
     runWithButtonLock(lockBtn, async () => {
         try {
-            await submitMutationRequest({
-                url: `/api/delete-agenda/${id}`,
+            const respData = await submitMutationRequest({
+                url: `/api/delete-agenda/${id}?scope=${encodeURIComponent(scope)}`,
                 method: 'DELETE',
-                scopeKey: `agenda-delete:${id}`,
-                signature: String(id),
+                scopeKey: `agenda-delete:${id}:${scope}`,
+                signature: `${id}:${scope}`,
                 parseJson: true
             });
-            agendaState.items = agendaState.items.filter(i => i.id !== id);
+            const deletedIdSet = new Set(
+                Array.isArray(respData?.deletedIds) && respData.deletedIds.length > 0
+                    ? respData.deletedIds.map(Number)
+                    : [Number(id)]
+            );
+            agendaState.items = agendaState.items.filter(i => !deletedIdSet.has(Number(i.id)));
+            if (serieId && deletedIdSet.size > 0) {
+                const targetFecha = String(targetItem?.fecha || '').slice(0, 10);
+                const targetHora = String(targetItem?.hora || '').trim().slice(0, 5);
+                agendaState.items.forEach(item => {
+                    if (String(item?.serie_id || '').trim() !== serieId) return;
+                    const iFecha = String(item.fecha || '').slice(0, 10);
+                    const iHora = String(item.hora || '').trim().slice(0, 5);
+                    if (scope === 'following') {
+                        item.followingCount = agendaState.items.filter(peer =>
+                            String(peer?.serie_id || '').trim() === serieId &&
+                            Number(peer.id) !== Number(item.id) &&
+                            (String(peer.fecha || '') > iFecha || (String(peer.fecha || '') === iFecha && String(peer.hora || '').slice(0, 5) > iHora))
+                        ).length;
+                    } else if (iFecha < targetFecha || (iFecha === targetFecha && iHora < targetHora)) {
+                        item.followingCount = Math.max(0, (Number(item.followingCount) || 0) - 1);
+                    }
+                });
+            }
             renderAgendaBoard();
+            restoreAgendaScrollSnapshot(scrollSnap);
+            cargarAgendaSemana({ preserveScroll: true });
             if (typeof refreshOpenAgendaHeaderCalendar === 'function') refreshOpenAgendaHeaderCalendar();
             cargarRecordatoriosActivos();
-            showToast('ok', tUi('Activity removed from Weekly Agenda.', 'Actividad eliminada de tu Agenda Semanal.'));
+            if (scope === 'following' && deletedIdSet.size > 1) {
+                showToast('ok', tUi(
+                    `Removed ${deletedIdSet.size} occurrences from this recurring series.`,
+                    `Se eliminaron ${deletedIdSet.size} ocurrencias de la serie repetitiva.`
+                ));
+            } else {
+                showToast('ok', tUi('Activity removed from Weekly Agenda.', 'Actividad eliminada de tu Agenda Semanal.'));
+            }
         } catch (err) {
             showToast('err', `${tUi('Failed to delete activity', 'Error al eliminar la actividad')}: ${tServer(err.message)}`);
         }
     }, { extraDisable: [ui.row, ui.checkBtn, ui.statusSelect, ui.postponeBtn, ui.skipBtn, ui.editBtn] });
+}
+
+function computeClientFollowingSeriesCount(targetItem, allItems = agendaState.items) {
+    if (!targetItem || !targetItem.serie_id) return 0;
+    const serieId = String(targetItem.serie_id).trim();
+    if (!serieId) return 0;
+    const serverCount = Number(targetItem.followingCount);
+    const targetId = Number(targetItem.id);
+    const targetFecha = String(targetItem.fecha || '').slice(0, 10);
+    const targetHora = String(targetItem.hora || '').trim().slice(0, 5);
+    const localFollowing = (Array.isArray(allItems) ? allItems : []).reduce((acc, peer) => {
+        if (!peer || String(peer.serie_id || '').trim() !== serieId) return acc;
+        if (Number(peer.id) === targetId) return acc;
+        const pFecha = String(peer.fecha || '').slice(0, 10);
+        const pHora = String(peer.hora || '').trim().slice(0, 5);
+        if (pFecha > targetFecha || (pFecha === targetFecha && pHora > targetHora)) {
+            return acc + 1;
+        }
+        return acc;
+    }, 0);
+    return Number.isInteger(serverCount) && serverCount > 0 ? serverCount : localFollowing;
+}
+
+function openAgendaDeleteSeriesDialog(item, followingCount) {
+    const modal = document.getElementById('agendaDeleteSeriesModal');
+    const titleEl = document.getElementById('agendaDeleteSeriesTitle');
+    const itemTitleEl = document.getElementById('agendaDeleteSeriesItemTitle');
+    const itemDateEl = document.getElementById('agendaDeleteSeriesItemDate');
+    const noticeEl = document.getElementById('agendaDeleteSeriesNotice');
+    const btnSingle = document.getElementById('btnDeleteAgendaSeriesSingle');
+    const btnFollowing = document.getElementById('btnDeleteAgendaSeriesFollowing');
+    const btnCancel = document.getElementById('btnCancelAgendaDeleteSeries');
+    const btnClose = document.getElementById('btnCloseAgendaDeleteSeriesModal');
+
+    if (!modal || !btnSingle || !btnFollowing || !btnCancel) {
+        return openConfirmDialog({
+            title: tUi('Delete recurring activity', 'Eliminar actividad repetitiva'),
+            message: tUi("Previous days' occurrences are never deleted.", 'Las actividades de días anteriores nunca se eliminan.'),
+            confirmText: tUi('Only this activity', 'Solo esta actividad'),
+            danger: true
+        }).then(ok => (ok ? 'single' : null));
+    }
+
+    const parsed = splitAgendaActividadClient(item.actividad, item.titulo, item.descripcion);
+    if (titleEl) {
+        titleEl.textContent = tUi('Delete recurring activity', 'Eliminar actividad repetitiva');
+    }
+    if (itemTitleEl) {
+        protectUserNode(itemTitleEl);
+        itemTitleEl.textContent = parsed.titulo || item.actividad || '--';
+    }
+    if (itemDateEl) {
+        protectUserNode(itemDateEl);
+        const datePart = typeof formatAgendaHumanDayShort === 'function'
+            ? formatAgendaHumanDayShort(item.fecha)
+            : String(item.fecha || '');
+        const timePart = String(item.hora || '').trim().slice(0, 5);
+        itemDateEl.textContent = timePart ? `${datePart} · ${timePart}` : datePart;
+    }
+    if (noticeEl) {
+        noticeEl.textContent = tUi(
+            "🛡️ Previous days' occurrences are never deleted.",
+            '🛡️ Las actividades de días anteriores nunca se eliminan.'
+        );
+    }
+    btnSingle.textContent = tUi('Only this activity', 'Solo esta actividad');
+    btnFollowing.textContent = tUi(
+        `This and following (+${followingCount})`,
+        `Esta y las siguientes (+${followingCount})`
+    );
+    btnCancel.textContent = tUi('Cancel', 'Cancelar');
+
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (choice) => {
+            if (settled) return;
+            settled = true;
+            modal.hidden = true;
+            document.removeEventListener('keydown', onKeyDown);
+            if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+            resolve(choice);
+        };
+        const onKeyDown = (ev) => {
+            if (ev.key === 'Escape' && !modal.hidden) {
+                finish(null);
+            }
+        };
+
+        btnSingle.onclick = () => finish('single');
+        btnFollowing.onclick = () => finish('following');
+        btnCancel.onclick = () => finish(null);
+        if (btnClose) btnClose.onclick = () => finish(null);
+        modal.onclick = (ev) => {
+            if (ev.target === modal) finish(null);
+        };
+        document.addEventListener('keydown', onKeyDown);
+
+        modal.hidden = false;
+        if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
+        setTimeout(() => btnCancel.focus(), 20);
+    });
 }
 
 const agendaModal = document.getElementById('agendaModal');
@@ -13239,12 +13430,14 @@ function getSelectedModalWeekdays() {
 function getCurrentModalRepeatConfig() {
     const startDate = document.getElementById('agendaFecha')?.value || formatLocalDate(new Date());
     const mode = document.getElementById('agendaRepeatMode')?.value || 'none';
+    const rawDays = Number.parseInt(document.getElementById('agendaRepeatDays')?.value || '5', 10);
+    const repeatDays = Number.isInteger(rawDays) ? Math.max(2, Math.min(90, rawDays)) : 5;
     const intervalDays = Number.parseInt(document.getElementById('agendaRepetirCadaDias')?.value || '0', 10) || 1;
     const endMode = document.getElementById('agendaRepeatEndMode')?.value || 'count';
     const countExtra = Number.parseInt(document.getElementById('agendaRepetirVeces')?.value || '3', 10) || 1;
     const untilDate = document.getElementById('agendaRepeatUntilDate')?.value || '';
     const weekdays = getSelectedModalWeekdays();
-    return { startDate, mode, intervalDays, weekdays, endMode, countExtra, untilDate };
+    return { startDate, mode, repeatDays, intervalDays, weekdays, endMode, countExtra, untilDate };
 }
 
 function renderAgendaModalCalendar() {
@@ -13287,11 +13480,14 @@ function renderAgendaModalCalendar() {
 function updateAgendaRepeatPreviewUI() {
     const editId = document.getElementById('agendaEditId')?.value || '';
     const repeatSection = document.getElementById('agendaRepeatSection');
+    const topRowEl = document.getElementById('agendaRepeatTopRow');
     const modeSel = document.getElementById('agendaRepeatMode');
+    const daysGroupEl = document.getElementById('agendaRepeatDaysGroup');
     const bodyEl = document.getElementById('agendaRepeatConfigBody');
     const intervalGroup = document.getElementById('agendaRepeatIntervalGroup');
     const intervalInput = document.getElementById('agendaRepetirCadaDias');
     const weekdaysGroup = document.getElementById('agendaRepeatWeekdaysGroup');
+    const legacyRangeRow = document.getElementById('agendaRepeatLegacyRangeRow');
     const endModeSel = document.getElementById('agendaRepeatEndMode');
     const countWrap = document.getElementById('agendaRepeatCountWrap');
     const untilWrap = document.getElementById('agendaRepeatUntilWrap');
@@ -13306,9 +13502,15 @@ function updateAgendaRepeatPreviewUI() {
     }
 
     const mode = modeSel.value || 'none';
+    const isDaysSpanMode = mode === 'days_daily' || mode === 'days_weekdays';
+    const isLegacyCustomMode = mode === 'interval' || mode === 'weekdays' || mode === 'weekly' || mode === 'daily';
+
+    if (daysGroupEl) daysGroupEl.hidden = !isDaysSpanMode;
+    if (topRowEl) topRowEl.classList.toggle('is-single-col', !isDaysSpanMode);
     if (bodyEl) bodyEl.hidden = mode === 'none';
     if (intervalGroup) intervalGroup.hidden = mode !== 'interval';
     if (weekdaysGroup) weekdaysGroup.hidden = mode !== 'weekdays';
+    if (legacyRangeRow) legacyRangeRow.hidden = !isLegacyCustomMode;
 
     if (mode === 'interval' && intervalInput && (Number(intervalInput.value) || 0) < 1) {
         intervalInput.value = '2';
@@ -13328,6 +13530,13 @@ function updateAgendaRepeatPreviewUI() {
             summaryEl.textContent = tUi(
                 `📅 Scheduled once on ${formatShortHumanDateClient(cfg.startDate)}.`,
                 `📅 Se programará una sola vez el ${formatShortHumanDateClient(cfg.startDate)}.`
+            );
+        } else if (isDaysSpanMode) {
+            const firstLabel = formatShortHumanDateClient(dates[0]);
+            const lastLabel = formatShortHumanDateClient(dates[dates.length - 1]);
+            summaryEl.textContent = tUi(
+                `📅 Will be created across ${dates.length} days: ${firstLabel} – ${lastLabel}`,
+                `📅 Se creará en ${dates.length} días: del ${firstLabel} al ${lastLabel}`
             );
         } else {
             const firstLabel = formatShortHumanDateClient(dates[0]);
@@ -13545,12 +13754,14 @@ function abrirAgendaModal(prefill = {}) {
 
     const subcatEl = document.getElementById('agendaSubcategoria');
     const repeatModeEl = document.getElementById('agendaRepeatMode');
+    const repDaysEl = document.getElementById('agendaRepeatDays');
     const repDiasEl = document.getElementById('agendaRepetirCadaDias');
     const repVecesEl = document.getElementById('agendaRepetirVeces');
     const repEndModeEl = document.getElementById('agendaRepeatEndMode');
     const repUntilEl = document.getElementById('agendaRepeatUntilDate');
     if (subcatEl) subcatEl.value = 'normal';
     if (repeatModeEl) repeatModeEl.value = 'none';
+    if (repDaysEl) repDaysEl.value = '5';
     if (repDiasEl) repDiasEl.value = '0';
     if (repVecesEl) repVecesEl.value = '3';
     if (repEndModeEl) repEndModeEl.value = 'count';
@@ -13593,12 +13804,14 @@ function abrirAgendaModal(prefill = {}) {
         : null;
 
     agendaModal.hidden = false;
+    if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
     setTimeout(() => document.getElementById('agendaActividad').focus(), 40);
 }
 
 function cerrarAgendaModal() {
     agendaOriginalSnapshot = null;
     if (agendaModal) agendaModal.hidden = true;
+    if (typeof syncModalScrollLock === 'function') syncModalScrollLock();
 }
 
 if (agendaForm) {
@@ -13843,10 +14056,19 @@ if (agendaForm) {
 
     document.getElementById('agendaFecha')?.addEventListener('change', updateAgendaRepeatPreviewUI);
     document.getElementById('agendaRepeatMode')?.addEventListener('change', updateAgendaRepeatPreviewUI);
+    document.getElementById('agendaRepeatDays')?.addEventListener('input', updateAgendaRepeatPreviewUI);
+    document.getElementById('agendaRepeatDays')?.addEventListener('change', updateAgendaRepeatPreviewUI);
     document.getElementById('agendaRepetirCadaDias')?.addEventListener('input', updateAgendaRepeatPreviewUI);
     document.getElementById('agendaRepeatEndMode')?.addEventListener('change', updateAgendaRepeatPreviewUI);
     document.getElementById('agendaRepetirVeces')?.addEventListener('input', updateAgendaRepeatPreviewUI);
     document.getElementById('agendaRepeatUntilDate')?.addEventListener('change', updateAgendaRepeatPreviewUI);
+    if (window.DailyHubI18n && typeof window.DailyHubI18n.onChange === 'function') {
+        window.DailyHubI18n.onChange(() => {
+            if (agendaModal && !agendaModal.hidden) {
+                updateAgendaRepeatPreviewUI();
+            }
+        });
+    }
     document.querySelectorAll('#agendaRepeatWeekdaysGroup .agenda-weekday-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             btn.classList.toggle('active');
@@ -13991,13 +14213,14 @@ if (agendaForm) {
         const repeatDates = repeatMode === 'none'
             ? [repeatCfg.startDate]
             : computeAgendaRepeatDates(repeatCfg);
+        const isDaysSpanRepeat = repeatMode === 'days_daily' || repeatMode === 'days_weekdays';
         const repetirCadaDiasVal = repeatMode === 'none'
             ? 0
-            : (repeatMode === 'daily' ? 1 : repeatMode === 'weekly' ? 7 : Math.max(1, repeatCfg.intervalDays || 1));
+            : (repeatMode === 'daily' || isDaysSpanRepeat ? 1 : repeatMode === 'weekly' ? 7 : Math.max(1, repeatCfg.intervalDays || 1));
         const repetirVecesVal = repeatDates.length;
 
         const payload = {
-            fecha: document.getElementById('agendaFecha').value,
+            fecha: !editId && isDaysSpanRepeat && repeatDates[0] ? repeatDates[0] : document.getElementById('agendaFecha').value,
             bloque: bloqueVal,
             hora: horaClean,
             titulo: tituloRaw.replace(/\s+/g, ' ').trim(),
@@ -14006,6 +14229,8 @@ if (agendaForm) {
             tipo: tipoVal,
             categoria: catVal,
             subcategoria: subcategoriaVal,
+            repeatMode: !editId && repeatMode !== 'none' ? repeatMode : undefined,
+            repeatDays: !editId && isDaysSpanRepeat && repeatDates.length >= 2 ? repeatDates.length : undefined,
             repetir_cada_dias: repetirCadaDiasVal,
             repetir_veces: repetirVecesVal,
             fechas_repeticion: !editId && repeatDates.length > 1 ? repeatDates : undefined,
@@ -14972,6 +15197,372 @@ function wireAgendaCardDrag(cardEl, handleEl, item) {
         }, { loadingText: tUi('Saving...', 'Guardando...') });
     });
 })();
+
+// ==========================================
+// TOUCH-ONLY DAY SWIPE NAVIGATION (DAY VIEW ON PHONE/TABLET ONLY, NEVER ON PC)
+// ==========================================
+let agendaDaySwipeAnimTimer = null;
+
+function isAgendaDaySwipeAllowedEvent(ev, env = {}) {
+    if (!ev) return false;
+    const pointerType = typeof ev.pointerType === 'string' ? ev.pointerType.toLowerCase() : '';
+    if (pointerType === 'mouse') return false;
+    if (pointerType === 'touch') return true;
+    if (pointerType) return false;
+
+    const isTouchEvent = Boolean(ev.touches || ev.changedTouches);
+    if (!isTouchEvent) return false;
+    if (env.lastPointerType === 'mouse') return false;
+
+    const coarsePointer = env.coarsePointer !== undefined
+        ? Boolean(env.coarsePointer)
+        : Boolean(typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches);
+    const hasTouchSupport = env.hasTouchSupport !== undefined
+        ? Boolean(env.hasTouchSupport)
+        : Boolean(typeof window !== 'undefined' && (('ontouchstart' in window) || (typeof navigator !== 'undefined' && Number(navigator.maxTouchPoints) > 0)));
+    const viewportWidth = Number.isFinite(env.viewportWidth)
+        ? env.viewportWidth
+        : (typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 1920);
+
+    return Boolean(coarsePointer || (hasTouchSupport && viewportWidth <= 1024));
+}
+
+function isAgendaSwipeIgnoredTarget(target) {
+    if (!target) return true;
+
+    if (typeof document !== 'undefined') {
+        if (document.querySelector?.('.modal-overlay:not([hidden])')) return true;
+        const postponePop = document.getElementById?.('agendaPostponePopover');
+        if (postponePop && !postponePop.hidden) return true;
+        if (document.body?.classList?.contains('agenda-dragging-active')) return true;
+        if (document.querySelector?.('.agenda-item.is-dragging, .agenda-item.is-drag-armed')) return true;
+    }
+    if (typeof agendaDragRuntime !== 'undefined' && (agendaDragRuntime.started || agendaDragRuntime.longPressArmed)) {
+        return true;
+    }
+
+    const selector = '#agendaDayTabs, #agendaTableScroll, #agendaSchoolTableScroll, #agendaCalGrid, #agendaCalendarDropdown, .modal-overlay, #agendaPostponePopover, .agenda-drag-handle, select, input, textarea, button, a, [role="button"], [contenteditable="true"]';
+    const el = (target.nodeType === 1 || !target.parentElement) ? target : target.parentElement;
+    if (!el) return true;
+
+    if (typeof el.closest === 'function') {
+        return Boolean(el.closest(selector));
+    }
+
+    const ignoredTags = new Set(['SELECT', 'OPTION', 'INPUT', 'TEXTAREA', 'BUTTON', 'A']);
+    const ignoredIds = new Set(['agendaDayTabs', 'agendaTableScroll', 'agendaSchoolTableScroll', 'agendaCalGrid', 'agendaCalendarDropdown', 'agendaPostponePopover']);
+    let cur = el;
+    while (cur) {
+        const idStr = String(cur.id || '');
+        if (ignoredIds.has(idStr)) return true;
+        const clsStr = String(cur.className || '');
+        if (/\b(?:modal-overlay|agenda-drag-handle)\b/.test(clsStr)) return true;
+        const tag = String(cur.tagName || '').toUpperCase();
+        if (ignoredTags.has(tag)) return true;
+        if (typeof cur.getAttribute === 'function') {
+            if (cur.getAttribute('role') === 'button' || cur.getAttribute('contenteditable') === 'true') return true;
+        }
+        cur = cur.parentElement || null;
+    }
+    return false;
+}
+
+function evaluateAgendaDaySwipeGesture({ deltaX = 0, deltaY = 0, durationMs = 0 } = {}) {
+    const dx = Number(deltaX) || 0;
+    const dy = Number(deltaY) || 0;
+    const dur = Number(durationMs);
+    if (!Number.isFinite(dur) || dur < 0 || dur > 600) {
+        return { triggered: false, direction: null };
+    }
+    if (Math.abs(dx) < 60) {
+        return { triggered: false, direction: null };
+    }
+    if (Math.abs(dx) <= Math.abs(dy) * 1.6) {
+        return { triggered: false, direction: null };
+    }
+    return {
+        triggered: true,
+        direction: dx < 0 ? 'next' : 'prev'
+    };
+}
+
+function computeNextAgendaSwipeTarget({
+    direction = 'next',
+    visibleDays = [],
+    selectedDate = '',
+    weekOffset = 0,
+    showWeekend = true
+} = {}) {
+    const days = Array.isArray(visibleDays) ? visibleDays.filter(d => d && /^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha || ''))) : [];
+    const curWeekOffset = Number.isInteger(Number(weekOffset)) ? Number(weekOffset) : 0;
+    if (days.length === 0) {
+        return {
+            nextSelectedDate: selectedDate || formatLocalDate(new Date()),
+            nextWeekOffset: curWeekOffset,
+            crossedWeek: false
+        };
+    }
+
+    const curIdx = days.findIndex(d => d.fecha === selectedDate);
+    if (direction === 'next') {
+        if (curIdx >= 0 && curIdx < days.length - 1) {
+            return {
+                nextSelectedDate: days[curIdx + 1].fecha,
+                nextWeekOffset: curWeekOffset,
+                crossedWeek: false
+            };
+        }
+        const nextMondayYmd = shiftYmdDateClient(days[0].fecha, 7);
+        return {
+            nextSelectedDate: nextMondayYmd,
+            nextWeekOffset: curWeekOffset + 1,
+            crossedWeek: true
+        };
+    }
+
+    if (curIdx > 0) {
+        return {
+            nextSelectedDate: days[curIdx - 1].fecha,
+            nextWeekOffset: curWeekOffset,
+            crossedWeek: false
+        };
+    }
+    const prevMondayYmd = shiftYmdDateClient(days[0].fecha, -7);
+    const prevLastVisibleYmd = shiftYmdDateClient(prevMondayYmd, showWeekend ? 6 : 4);
+    return {
+        nextSelectedDate: prevLastVisibleYmd,
+        nextWeekOffset: curWeekOffset - 1,
+        crossedWeek: true
+    };
+}
+
+function scrollActiveAgendaDayTabIntoView({ smooth = true } = {}) {
+    if (typeof document === 'undefined') return;
+    const dayTabs = document.getElementById('agendaDayTabs');
+    if (!dayTabs || dayTabs.hidden) return;
+    const activeTab = dayTabs.querySelector('.agenda-day-tab.active');
+    if (!activeTab || typeof activeTab.scrollIntoView !== 'function') return;
+    const prefersReducedMotion = Boolean(
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+    try {
+        activeTab.scrollIntoView({
+            behavior: (!smooth || prefersReducedMotion) ? 'auto' : 'smooth',
+            inline: 'center',
+            block: 'nearest'
+        });
+    } catch (_) {
+        try { activeTab.scrollIntoView(); } catch (__) { /* ignore */ }
+    }
+}
+
+function animateAgendaDayBoardTransition(direction) {
+    if (typeof document === 'undefined') return;
+    const dayBoard = document.getElementById('agendaDayBoard');
+    if (!dayBoard || dayBoard.hidden) return;
+    if (agendaDaySwipeAnimTimer) {
+        clearTimeout(agendaDaySwipeAnimTimer);
+        agendaDaySwipeAnimTimer = null;
+    }
+    dayBoard.classList.remove('is-swipe-anim-next', 'is-swipe-anim-prev');
+
+    const prefersReducedMotion = Boolean(
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+    if (prefersReducedMotion) return;
+
+    void dayBoard.offsetWidth;
+    const cls = direction === 'prev' ? 'is-swipe-anim-prev' : 'is-swipe-anim-next';
+    dayBoard.classList.add(cls);
+    agendaDaySwipeAnimTimer = setTimeout(() => {
+        agendaDaySwipeAnimTimer = null;
+        dayBoard.classList.remove('is-swipe-anim-next', 'is-swipe-anim-prev');
+    }, 220);
+}
+
+function stepAgendaDayBySwipe(direction) {
+    if (typeof document === 'undefined') return false;
+    const agendaView = document.getElementById('view-agenda');
+    const dayBoard = document.getElementById('agendaDayBoard');
+    if (!agendaView || !agendaView.classList.contains('active')) return false;
+    if (agendaState.layoutMode !== 'day' || !dayBoard || dayBoard.hidden) return false;
+
+    const target = computeNextAgendaSwipeTarget({
+        direction,
+        visibleDays: getVisibleAgendaDays(),
+        selectedDate: agendaState.selectedDate,
+        weekOffset: agendaState.weekOffset,
+        showWeekend: agendaState.showWeekend
+    });
+
+    agendaState.weekOffset = target.nextWeekOffset;
+    agendaState.selectedDate = target.nextSelectedDate;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(target.nextSelectedDate || ''))) {
+        const [yy, mm] = String(target.nextSelectedDate).split('-').map(Number);
+        if (yy && mm) {
+            agendaCalendarUiState.headerYear = yy;
+            agendaCalendarUiState.headerMonth = mm - 1;
+        }
+    }
+
+    renderAgendaBoard();
+    scrollActiveAgendaDayTabIntoView({ smooth: true });
+    animateAgendaDayBoardTransition(direction);
+
+    if (target.crossedWeek) {
+        cargarAgendaSemana();
+        if (typeof refreshOpenAgendaHeaderCalendar === 'function') {
+            refreshOpenAgendaHeaderCalendar();
+        }
+    }
+    return true;
+}
+
+function initAgendaDaySwipeNavigation() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const dayBoard = document.getElementById('agendaDayBoard');
+    if (!dayBoard || dayBoard.dataset.daySwipeWired === '1') return;
+    dayBoard.dataset.daySwipeWired = '1';
+
+    let swipeSession = null;
+    let lastPointerType = '';
+
+    const resetSession = () => {
+        swipeSession = null;
+    };
+
+    const isDayViewSwipeActive = () => {
+        const agendaView = document.getElementById('view-agenda');
+        return Boolean(agendaView && agendaView.classList.contains('active') && agendaState.layoutMode === 'day' && !dayBoard.hidden);
+    };
+
+    const hasDraggingCard = () => Boolean(
+        agendaDragRuntime.started ||
+        agendaDragRuntime.longPressArmed ||
+        document.body?.classList?.contains('agenda-dragging-active') ||
+        document.querySelector('.agenda-item.is-dragging, .agenda-item.is-drag-armed')
+    );
+
+    const startSwipe = (ev, x, y, sourceKind) => {
+        if (!isDayViewSwipeActive()) return;
+        if (!isAgendaDaySwipeAllowedEvent(ev, { lastPointerType })) return;
+        if (isAgendaSwipeIgnoredTarget(ev.target)) return;
+        swipeSession = {
+            sourceKind,
+            pointerId: ev.pointerId ?? null,
+            startX: x,
+            startY: y,
+            lastX: x,
+            lastY: y,
+            startTime: Date.now(),
+            aborted: false
+        };
+    };
+
+    const moveSwipe = (x, y, multiTouch = false) => {
+        if (!swipeSession || swipeSession.aborted) return;
+        if (multiTouch || !isDayViewSwipeActive() || hasDraggingCard()) {
+            swipeSession.aborted = true;
+            return;
+        }
+        swipeSession.lastX = x;
+        swipeSession.lastY = y;
+    };
+
+    const endSwipe = (endX, endY) => {
+        if (!swipeSession) return;
+        const sess = swipeSession;
+        swipeSession = null;
+        if (sess.aborted || !isDayViewSwipeActive() || hasDraggingCard()) return;
+        if (document.querySelector('.modal-overlay:not([hidden])')) return;
+
+        const res = evaluateAgendaDaySwipeGesture({
+            deltaX: endX - sess.startX,
+            deltaY: endY - sess.startY,
+            durationMs: Date.now() - sess.startTime
+        });
+        if (res.triggered && res.direction) {
+            stepAgendaDayBySwipe(res.direction);
+        }
+    };
+
+    dayBoard.addEventListener('pointerdown', (ev) => {
+        lastPointerType = typeof ev.pointerType === 'string' ? ev.pointerType.toLowerCase() : '';
+        if (lastPointerType === 'mouse') {
+            resetSession();
+            return;
+        }
+        if (lastPointerType === 'touch' && !swipeSession) {
+            startSwipe(ev, ev.clientX, ev.clientY, 'pointer');
+        }
+    }, { passive: true });
+
+    dayBoard.addEventListener('pointermove', (ev) => {
+        if (!swipeSession || swipeSession.sourceKind !== 'pointer' || ev.pointerId !== swipeSession.pointerId) return;
+        moveSwipe(ev.clientX, ev.clientY, false);
+    }, { passive: true });
+
+    dayBoard.addEventListener('pointerup', (ev) => {
+        if (!swipeSession || swipeSession.sourceKind !== 'pointer' || ev.pointerId !== swipeSession.pointerId) return;
+        endSwipe(ev.clientX, ev.clientY);
+    }, { passive: true });
+
+    dayBoard.addEventListener('pointercancel', (ev) => {
+        if (swipeSession && swipeSession.sourceKind === 'pointer' && ev.pointerId === swipeSession.pointerId) {
+            resetSession();
+        }
+    }, { passive: true });
+
+    dayBoard.addEventListener('touchstart', (ev) => {
+        if (!ev.touches || ev.touches.length !== 1) {
+            resetSession();
+            return;
+        }
+        if (lastPointerType === 'mouse') return;
+        const touch = ev.touches[0];
+        if (swipeSession && swipeSession.sourceKind === 'pointer') {
+            swipeSession.sourceKind = 'touch';
+            swipeSession.startX = touch.clientX;
+            swipeSession.startY = touch.clientY;
+            swipeSession.lastX = touch.clientX;
+            swipeSession.lastY = touch.clientY;
+            return;
+        }
+        startSwipe(ev, touch.clientX, touch.clientY, 'touch');
+    }, { passive: true });
+
+    dayBoard.addEventListener('touchmove', (ev) => {
+        if (!swipeSession || swipeSession.sourceKind !== 'touch') return;
+        const multi = !ev.touches || ev.touches.length !== 1;
+        const touch = ev.touches && ev.touches[0];
+        moveSwipe(touch ? touch.clientX : swipeSession.lastX, touch ? touch.clientY : swipeSession.lastY, multi);
+    }, { passive: true });
+
+    dayBoard.addEventListener('touchend', (ev) => {
+        if (!swipeSession || swipeSession.sourceKind !== 'touch') return;
+        const changed = ev.changedTouches && ev.changedTouches[0];
+        endSwipe(changed ? changed.clientX : swipeSession.lastX, changed ? changed.clientY : swipeSession.lastY);
+    }, { passive: true });
+
+    dayBoard.addEventListener('touchcancel', () => {
+        resetSession();
+    }, { passive: true });
+
+    window.addEventListener('blur', resetSession);
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            resetSession();
+            dayBoard.classList.remove('is-swipe-anim-next', 'is-swipe-anim-prev');
+        }
+    });
+}
+
+initAgendaDaySwipeNavigation();
 
 // ==========================================
 // AUTHENTICATION, ROLES, SESSION & PSYCHIATRIST ACCESS

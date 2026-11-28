@@ -48,10 +48,12 @@ CREATE TABLE IF NOT EXISTS RegistrosAgenda (
     completada TINYINT(1) NOT NULL DEFAULT 0,
     recordatorio_min SMALLINT NULL DEFAULT NULL,
     en_progreso_desde DATETIME NULL DEFAULT NULL,
+    serie_id VARCHAR(64) NULL DEFAULT NULL,
     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_agenda_fecha (fecha),
     INDEX idx_agenda_categoria_estado (categoria, estado),
-    INDEX idx_agenda_materia (materia_id)
+    INDEX idx_agenda_materia (materia_id),
+    INDEX idx_agenda_serie_fecha (serie_id, fecha)
 );
 
 CREATE TABLE IF NOT EXISTS Usuarios (

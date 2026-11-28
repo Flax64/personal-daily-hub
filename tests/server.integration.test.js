@@ -163,8 +163,13 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                         { Field: 'materia_nombre' },
                         { Field: 'estado' },
                         { Field: 'recordatorio_min' },
-                        { Field: 'en_progreso_desde' }
+                        { Field: 'en_progreso_desde' },
+                        { Field: 'serie_id' }
                     ]);
+                }
+
+                if (normalized.startsWith('SHOW INDEX FROM RegistrosAgenda')) {
+                    return finish(null, [{ Key_name: 'idx_agenda_serie_fecha' }]);
                 }
 
                 if (normalized.startsWith("SHOW COLUMNS FROM MusicaCanciones LIKE 'anio'")) {
@@ -314,6 +319,9 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                 }
 
                 if (normalized.startsWith('INSERT INTO RegistrosAgenda')) {
+                    const hasEnProgresoCol = normalized.includes('en_progreso_desde');
+                    const hasSerieCol = normalized.includes('serie_id');
+                    const matOffset = hasEnProgresoCol ? 10 : 9;
                     const newItem = {
                         id: agendaInserts.length + 1,
                         fecha: params[0],
@@ -325,24 +333,38 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                         estado: params[6] || 'todo',
                         completada: params[7] ?? 0,
                         recordatorio_min: params[8] ?? null,
-                        en_progreso_desde: params[9] ?? null,
-                        materia_id: params[10] ?? null,
-                        materia_nombre: params[11] ?? null
+                        en_progreso_desde: hasEnProgresoCol ? (params[9] ?? null) : null,
+                        materia_id: params[matOffset] ?? null,
+                        materia_nombre: params[matOffset + 1] ?? null,
+                        serie_id: hasSerieCol ? (params[matOffset + 2] ?? null) : null
                     };
                     agendaInserts.push(newItem);
                     return finish(null, { insertId: newItem.id });
                 }
 
-                if (normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE fecha BETWEEN ? AND ?')) {
+                if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE serie_id IN')) {
+                    const wanted = new Set(params.map(p => String(p || '').trim()));
+                    return finish(null, agendaInserts.filter(a => a.serie_id && wanted.has(String(a.serie_id).trim())));
+                }
+
+                if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE serie_id = ?')) {
+                    const [sid, tid, tFecha, , tHora] = params;
+                    return finish(null, agendaInserts.filter(a =>
+                        String(a.serie_id || '').trim() === String(sid || '').trim() &&
+                        (a.id === Number(tid) || a.fecha > tFecha || (a.fecha === tFecha && String(a.hora || '').slice(0, 5) > String(tHora || '').slice(0, 5)))
+                    ));
+                }
+
+                if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE fecha BETWEEN ? AND ?')) {
                     const [begin, end] = params;
                     return finish(null, agendaInserts.filter((a) => a.fecha >= begin && a.fecha <= end));
                 }
 
-                if (normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE fecha = ?')) {
+                if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE fecha = ?')) {
                     return finish(null, agendaInserts.filter((a) => a.fecha === params[0]));
                 }
 
-                if (normalized.includes('FROM RegistrosAgenda') && normalized.includes("WHERE estado = 'in_progress'")) {
+                if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes("WHERE estado = 'in_progress'")) {
                     return finish(null, agendaInserts.filter((a) => a.estado === 'in_progress' && Number(a.completada) === 0));
                 }
 
@@ -429,11 +451,27 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                     return finish(null, { affectedRows: 1 });
                 }
 
-                if (normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE id = ?')) {
+                if (normalized.startsWith('SELECT') && normalized.includes('FROM RegistrosAgenda') && normalized.includes('WHERE id = ?')) {
                     const id = Number(params[0]);
                     const item = agendaInserts.find((a) => a.id === id);
                     if (!item) return finish(null, []);
                     return finish(null, [{ ...item }]);
+                }
+
+                if (normalized.startsWith('DELETE FROM RegistrosAgenda WHERE serie_id = ?')) {
+                    const [sid, tid, tFecha, , tHora] = params;
+                    let deleted = 0;
+                    for (let i = agendaInserts.length - 1; i >= 0; i--) {
+                        const a = agendaInserts[i];
+                        if (
+                            String(a.serie_id || '').trim() === String(sid || '').trim() &&
+                            (a.id === Number(tid) || a.fecha > tFecha || (a.fecha === tFecha && String(a.hora || '').slice(0, 5) > String(tHora || '').slice(0, 5)))
+                        ) {
+                            agendaInserts.splice(i, 1);
+                            deleted += 1;
+                        }
+                    }
+                    return finish(null, { affectedRows: deleted });
                 }
 
                 if (normalized.startsWith('DELETE FROM RegistrosAgenda WHERE id = ?')) {
@@ -7914,6 +7952,144 @@ describe('API y seguridad de server.js (pruebas de integración)', () => {
                 }
             });
         }
+    });
+
+    it('crea series repetitivas estilo Google Calendar con serie_id, elimina solo esta o las siguientes y bloquea borrar anteriores', async () => {
+        // 1. Crear actividad repetitiva de 4 días con repeatDays: 4
+        const createSeriesRes = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-gcal-series-4days' },
+            body: {
+                fecha: '2026-12-01',
+                bloque: 'manana',
+                hora: '09:30',
+                titulo: 'Lectura matutina',
+                descripcion: '20 minutos diarios',
+                tipo: 'tarea',
+                categoria: 'personal',
+                estado: 'todo',
+                repeatDays: 4
+            }
+        });
+        assert.strictEqual(createSeriesRes.status, 201);
+        const createdSeries = JSON.parse(createSeriesRes.body);
+        assert.strictEqual(createdSeries.ok, true);
+        assert.strictEqual(createdSeries.createdCount, 4);
+        assert.strictEqual(createdSeries.repeatedCount, 4);
+        assert.ok(createdSeries.serie_id && typeof createdSeries.serie_id === 'string');
+        assert.deepStrictEqual(createdSeries.createdDates, ['2026-12-01', '2026-12-02', '2026-12-03', '2026-12-04']);
+
+        const seriesRows = agendaInserts.filter((a) => a.serie_id === createdSeries.serie_id);
+        assert.strictEqual(seriesRows.length, 4, 'Deben existir 4 filas en RegistrosAgenda compartiendo el mismo serie_id');
+        assert.deepStrictEqual(
+            seriesRows.map((r) => r.fecha).sort(),
+            ['2026-12-01', '2026-12-02', '2026-12-03', '2026-12-04']
+        );
+
+        // GET /api/get-agenda debe incluir serie_id y followingCount exactos
+        const listRes = await request({
+            port,
+            reqPath: '/api/get-agenda?begin=2026-12-01&end=2026-12-07',
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(listRes.status, 200);
+        const listed = JSON.parse(listRes.body)
+            .filter((r) => r.serie_id === createdSeries.serie_id)
+            .sort((a, b) => a.fecha.localeCompare(b.fecha));
+        assert.strictEqual(listed.length, 4);
+        assert.deepStrictEqual(listed.map((r) => r.followingCount), [3, 2, 1, 0]);
+
+        const day1 = listed[0];
+        const day2 = listed[1];
+
+        // 2. Eliminar ocurrencia del día 2 con scope=following: borra días 2, 3 y 4; día 1 queda 100% intacto
+        const delFollowingRes = await request({
+            port,
+            method: 'DELETE',
+            reqPath: `/api/delete-agenda/${day2.id}?scope=following`,
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(delFollowingRes.status, 200);
+        const delFollowingJson = JSON.parse(delFollowingRes.body);
+        assert.strictEqual(delFollowingJson.ok, true);
+        assert.strictEqual(delFollowingJson.scope, 'following');
+        assert.strictEqual(delFollowingJson.deletedCount, 3);
+        assert.strictEqual(delFollowingJson.deletedIds.length, 3);
+
+        const remainingAfterFollowing = agendaInserts.filter((a) => a.serie_id === createdSeries.serie_id);
+        assert.strictEqual(remainingAfterFollowing.length, 1);
+        assert.strictEqual(remainingAfterFollowing[0].id, day1.id);
+        assert.strictEqual(remainingAfterFollowing[0].fecha, '2026-12-01');
+
+        // 3. Intentar borrar con scope=previous o scope=all devuelve HTTP 400 y no borra nada
+        for (const forbiddenScope of ['previous', 'all']) {
+            const badScopeRes = await request({
+                port,
+                method: 'DELETE',
+                reqPath: `/api/delete-agenda/${day1.id}?scope=${forbiddenScope}`,
+                headers: { Cookie: adminCookie }
+            });
+            assert.strictEqual(badScopeRes.status, 400);
+            assert.match(badScopeRes.body, /Past recurring occurrences cannot be deleted/i);
+        }
+        const badBodyScopeRes = await request({
+            port,
+            method: 'DELETE',
+            reqPath: `/api/delete-agenda/${day1.id}`,
+            headers: { Cookie: adminCookie },
+            body: { scope: 'previous' }
+        });
+        assert.strictEqual(badBodyScopeRes.status, 400);
+        assert.strictEqual(
+            agendaInserts.some((a) => a.id === day1.id),
+            true,
+            'El día 1 debe permanecer intacto tras rechazar scope=previous/all'
+        );
+
+        // 4. Crear otra serie de 3 días y borrar el día 2 con scope=single: solo borra día 2
+        const createSeries2Res = await request({
+            port,
+            method: 'POST',
+            reqPath: '/api/insert-agenda',
+            headers: { Cookie: adminCookie, 'X-Idempotency-Key': 'agenda-gcal-series-single-3days' },
+            body: {
+                fecha: '2026-12-10',
+                bloque: 'tarde',
+                hora: '16:00',
+                titulo: 'Práctica de Inglés',
+                tipo: 'tarea',
+                categoria: 'personal',
+                repeatDays: 3
+            }
+        });
+        assert.strictEqual(createSeries2Res.status, 201);
+        const series2 = JSON.parse(createSeries2Res.body);
+        const series2Rows = agendaInserts
+            .filter((a) => a.serie_id === series2.serie_id)
+            .sort((a, b) => a.fecha.localeCompare(b.fecha));
+        assert.strictEqual(series2Rows.length, 3);
+
+        const delSingleRes = await request({
+            port,
+            method: 'DELETE',
+            reqPath: `/api/delete-agenda/${series2Rows[1].id}?scope=single`,
+            headers: { Cookie: adminCookie }
+        });
+        assert.strictEqual(delSingleRes.status, 200);
+        const delSingleJson = JSON.parse(delSingleRes.body);
+        assert.strictEqual(delSingleJson.ok, true);
+        assert.strictEqual(delSingleJson.scope, 'single');
+        assert.strictEqual(delSingleJson.deletedCount, 1);
+
+        const remainingSeries2 = agendaInserts
+            .filter((a) => a.serie_id === series2.serie_id)
+            .sort((a, b) => a.fecha.localeCompare(b.fecha));
+        assert.deepStrictEqual(
+            remainingSeries2.map((r) => r.fecha),
+            ['2026-12-10', '2026-12-12']
+        );
     });
 
     it('aplica rate limit contra fuerza bruta en login y saturación DoS en endpoints API', async () => {

@@ -2610,3 +2610,184 @@ describe('Mejoras de Materias (Pausa/Promedio), En Progreso 1h y Smart Commute e
         }
     });
 });
+
+describe('Agenda V4: Swipe Táctil en Vista Día, Repetición Google Calendar y Alineación de #agendaModal', () => {
+    it('implementa swipe táctil exclusivo de móvil/tablet (sin PC), modal #agendaDeleteSeriesModal, hints debajo de combos y alineación en #agendaModal', () => {
+        const initSql = readText('init.sql');
+        const serverJs = readText('server.js');
+        const indexHtml = readText('public/index.html');
+        const frontendJs = readText('public/frontend.js');
+        const styleCss = readText('public/style.css');
+        const i18nJs = readText('public/i18n.js');
+
+        // 1. Esquema y migración de serie_id
+        assert.match(initSql, /serie_id\s+VARCHAR\(64\)\s+NULL/i);
+        assert.match(initSql, /idx_agenda_serie_fecha\s*\(serie_id,\s*fecha\)/i);
+        assert.match(serverJs, /serie_id\s+VARCHAR\(64\)\s+NULL/i);
+        assert.match(serverJs, /idx_agenda_serie_fecha/);
+
+        // 2. HTML de #agendaModal y #agendaDeleteSeriesModal + orden del hint de Bloque del día
+        for (const requiredToken of [
+            'id="agendaRepeatDays"',
+            'min="2"',
+            'max="90"',
+            'value="days_daily"',
+            'value="days_weekdays"',
+            'id="agendaDeleteSeriesModal"',
+            'id="btnDeleteAgendaSeriesSingle"',
+            'id="btnDeleteAgendaSeriesFollowing"',
+            'id="btnCancelAgendaDeleteSeries"'
+        ]) {
+            assert.ok(indexHtml.includes(requiredToken), `public/index.html debe incluir ${requiredToken}`);
+        }
+
+        const agendaModalStart = indexHtml.indexOf('id="agendaModal"');
+        const agendaModalEnd = indexHtml.indexOf('id="e2eeKeyModal"', agendaModalStart);
+        assert.ok(agendaModalStart > 0 && agendaModalEnd > agendaModalStart);
+        const agendaModalHtml = indexHtml.slice(agendaModalStart, agendaModalEnd);
+
+        const bloqueSelectPos = agendaModalHtml.indexOf('<select id="agendaBloque"');
+        const bloqueSelectClosePos = agendaModalHtml.indexOf('</select>', bloqueSelectPos);
+        const bloqueHintPos = agendaModalHtml.indexOf('id="agendaBloqueAutoHint"');
+        assert.ok(bloqueSelectPos > 0 && bloqueSelectClosePos > bloqueSelectPos, 'Debe existir <select id="agendaBloque"> en #agendaModal');
+        assert.ok(bloqueHintPos > bloqueSelectClosePos, 'El hint #agendaBloqueAutoHint debe colocarse DESPUÉS de </select> de #agendaBloque y nunca antes');
+
+        // Ninguna fila .form-row-2 dentro de #agendaModal debe colocar <small> antes de <select> o <input>
+        const row2Matches = [...agendaModalHtml.matchAll(/<div class="form-row-2[^"]*">([\s\S]*?)<\/div>\s*<\/div>/g)];
+        assert.ok(row2Matches.length >= 4, 'Deben existir las filas de 2 columnas dentro de #agendaModal');
+        for (const m of row2Matches) {
+            const firstCtrlIdx = m[1].search(/<(?:select|input)\b/i);
+            const firstSmallIdx = m[1].search(/<small\b/i);
+            if (firstSmallIdx !== -1) {
+                assert.ok(firstCtrlIdx !== -1 && firstSmallIdx > firstCtrlIdx, 'Los textos auxiliares <small> dentro de .form-row-2 deben ir después del control');
+            }
+        }
+
+        // 3. CSS de alineación uniforme de combo boxes en #agendaModal y animación GPU del swipe
+        assert.match(styleCss, /#agendaModal\s+\.form-row-2,\s*#agendaModal\s+\.agenda-form-row\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);[\s\S]*?align-items:\s*start;/);
+        assert.match(styleCss, /#agendaModal\s+select,[\s\S]*?height:\s*44px;[\s\S]*?min-height:\s*44px;[\s\S]*?box-sizing:\s*border-box;/);
+        assert.match(styleCss, /@media\s*\(\s*max-width:\s*640px\s*\)\s*\{[\s\S]*?#agendaModal\s+\.form-row-2,\s*#agendaModal\s+\.agenda-form-row\s*\{\s*grid-template-columns:\s*1fr;/);
+        assert.ok(styleCss.includes('#agendaDayBoard') && styleCss.includes('is-swipe-anim-next') && styleCss.includes('is-swipe-anim-prev'));
+
+        // 4. Traducciones bilingües EN/ES
+        assert.ok(i18nJs.includes("['Delete recurring activity', 'Eliminar actividad repetitiva']"));
+        assert.ok(i18nJs.includes("['Only this activity', 'Solo esta actividad']"));
+
+        // 5. Lógica en frontend.js: swipe táctil exclusivo móvil/tablet, #agendaDeleteSeriesModal y repetición por X días
+        for (const fnToken of [
+            'function isAgendaDaySwipeAllowedEvent(',
+            'function isAgendaSwipeIgnoredTarget(',
+            'function evaluateAgendaDaySwipeGesture(',
+            'function computeNextAgendaSwipeTarget(',
+            'function initAgendaDaySwipeNavigation(',
+            'function openAgendaDeleteSeriesDialog('
+        ]) {
+            assert.ok(frontendJs.includes(fnToken), `public/frontend.js debe definir ${fnToken}`);
+        }
+        assert.ok(frontendJs.includes('initAgendaDaySwipeNavigation();'), 'public/frontend.js debe inicializar initAgendaDaySwipeNavigation()');
+        assert.ok(frontendJs.includes('agendaDeleteSeriesModal'), 'public/frontend.js debe integrar #agendaDeleteSeriesModal');
+
+        // Evaluación aislada en sandbox VM de las funciones puras de swipe y repetición por X días
+        const shiftIdx = frontendJs.indexOf('function shiftYmdDateClient(');
+        const computeEndIdx = frontendJs.indexOf('function canMoveAgendaItemToDate(');
+        const swipeStartIdx = frontendJs.indexOf('function isAgendaDaySwipeAllowedEvent(');
+        const swipeEndIdx = frontendJs.indexOf('function scrollActiveAgendaDayTabIntoView(');
+        assert.ok(shiftIdx > 0 && computeEndIdx > shiftIdx && swipeStartIdx > 0 && swipeEndIdx > swipeStartIdx);
+
+        const sandbox = { agendaDragRuntime: { started: false, longPressArmed: false } };
+        vm.runInNewContext(
+            `${frontendJs.slice(shiftIdx, computeEndIdx)}\n${frontendJs.slice(swipeStartIdx, swipeEndIdx)}`,
+            sandbox
+        );
+
+        // Regla estricta de dispositivo: ratón/PC bloqueado, táctil permitido
+        assert.strictEqual(sandbox.isAgendaDaySwipeAllowedEvent({ pointerType: 'mouse' }), false);
+        assert.strictEqual(sandbox.isAgendaDaySwipeAllowedEvent({ pointerType: 'touch' }), true);
+        assert.strictEqual(
+            sandbox.isAgendaDaySwipeAllowedEvent({ touches: [{}] }, { coarsePointer: true, hasTouchSupport: true, viewportWidth: 412 }),
+            true
+        );
+        assert.strictEqual(
+            sandbox.isAgendaDaySwipeAllowedEvent({ touches: [{}] }, { coarsePointer: false, hasTouchSupport: false, viewportWidth: 1440 }),
+            false
+        );
+        assert.strictEqual(
+            sandbox.isAgendaDaySwipeAllowedEvent({ touches: [{}] }, { coarsePointer: false, hasTouchSupport: true, viewportWidth: 1440 }),
+            false
+        );
+        assert.strictEqual(
+            sandbox.isAgendaDaySwipeAllowedEvent({ touches: [{}] }, { coarsePointer: false, hasTouchSupport: true, viewportWidth: 768 }),
+            true
+        );
+
+        // Umbrales limpios: >= 60px, |deltaX| > |deltaY| * 1.6, <= 600ms
+        assert.deepEqual(
+            JSON.parse(JSON.stringify(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -85, deltaY: 12, durationMs: 240 }))),
+            { triggered: true, direction: 'next' }
+        );
+        assert.deepEqual(
+            JSON.parse(JSON.stringify(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: 90, deltaY: -10, durationMs: 220 }))),
+            { triggered: true, direction: 'prev' }
+        );
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -45, deltaY: 0, durationMs: 180 }).triggered, false);
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -80, deltaY: 70, durationMs: 200 }).triggered, false);
+        assert.strictEqual(sandbox.evaluateAgendaDaySwipeGesture({ deltaX: -90, deltaY: 0, durationMs: 750 }).triggered, false);
+
+        // Ignorar objetivos interactivos, pestañas, rejilla y Drag & Drop activo
+        const mkEl = (id = '', tagName = 'DIV', className = '', parentElement = null) => ({
+            nodeType: 1,
+            id,
+            tagName,
+            className,
+            parentElement,
+            getAttribute: () => null
+        });
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('agendaDayTabs', 'DIV')), true);
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('agendaTableScroll', 'DIV')), true);
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('', 'SELECT')), true);
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('', 'BUTTON')), true);
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('', 'DIV', 'agenda-mobile-block-body')), false);
+        sandbox.agendaDragRuntime.started = true;
+        assert.strictEqual(sandbox.isAgendaSwipeIgnoredTarget(mkEl('', 'DIV', 'agenda-mobile-block-body')), true);
+        sandbox.agendaDragRuntime.started = false;
+
+        // Salto de semanas respetando Solo Lun-Vie y Lun-Dom
+        const monFriDays = [
+            { fecha: '2026-11-30' },
+            { fecha: '2026-12-01' },
+            { fecha: '2026-12-02' },
+            { fecha: '2026-12-03' },
+            { fecha: '2026-12-04' }
+        ];
+        assert.deepEqual(
+            JSON.parse(JSON.stringify(sandbox.computeNextAgendaSwipeTarget({
+                direction: 'next',
+                visibleDays: monFriDays,
+                selectedDate: '2026-12-04',
+                weekOffset: 0,
+                showWeekend: false
+            }))),
+            { nextSelectedDate: '2026-12-07', nextWeekOffset: 1, crossedWeek: true }
+        );
+        assert.deepEqual(
+            JSON.parse(JSON.stringify(sandbox.computeNextAgendaSwipeTarget({
+                direction: 'prev',
+                visibleDays: monFriDays,
+                selectedDate: '2026-11-30',
+                weekOffset: 0,
+                showWeekend: false
+            }))),
+            { nextSelectedDate: '2026-11-27', nextWeekOffset: -1, crossedWeek: true }
+        );
+
+        // Repetición por X días (todos los días vs Lun-Vie)
+        assert.deepEqual(
+            Array.from(sandbox.computeAgendaRepeatDates({ startDate: '2026-11-27', mode: 'days_daily', repeatDays: 4 })),
+            ['2026-11-27', '2026-11-28', '2026-11-29', '2026-11-30']
+        );
+        assert.deepEqual(
+            Array.from(sandbox.computeAgendaRepeatDates({ startDate: '2026-11-27', mode: 'days_weekdays', repeatDays: 4 })),
+            ['2026-11-27', '2026-11-30', '2026-12-01', '2026-12-02']
+        );
+    });
+});
